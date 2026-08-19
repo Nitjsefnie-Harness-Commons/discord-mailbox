@@ -1,0 +1,86 @@
+name: tests
+
+# Modelled on the house tests.yml, with one deliberate difference: a matrix.
+# gh-widgets is single-runner because it is pure stdlib with no OS surface.
+# This code has plenty -- msvcrt vs fcntl byte-range locking, 8.3 short paths,
+# reparse points -- and the recent connector and installer bugs were all
+# Windows-only and invisible to a Linux-only run. Running the suites free on
+# public runners across three OSes is the reason this repo is public.
+#
+# The suites are stdlib-only and offline (no gateway, no network), so the only
+# install step is the two runtime dependencies.
+
+on:
+  push:
+    # Deny-list rather than an allow-list: a new top-level code directory
+    # would silently stop being tested under an allow-list, whereas an
+    # unlisted path here just runs CI needlessly.
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A push that supersedes an in-flight run for the same ref cancels it --
+  # nothing is learned from CI for a commit that is already history.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip discord.py psutil
+
+      - name: Run every mailbox suite
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python run_tests.py
+
+  wheel:
+    # Proves the published artifact, not just the checkout: an import that
+    # resolves only because the source tree is on sys.path would pass the
+    # suites above and still ship a wheel that cannot start.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Install it with no checkout in reach and run it
+        run: |
+          python -m venv "$RUNNER_TEMP/probe"
+          "$RUNNER_TEMP/probe/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/probe/bin/discord-mb" --version
+          "$RUNNER_TEMP/probe/bin/python" -c "from discord_mb_lib.cli import _cli"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl

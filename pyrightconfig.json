@@ -1,0 +1,6 @@
+{
+    "typeCheckingMode": "basic",
+    "pythonVersion": "3.13",
+    "include": ["."],
+    "exclude": ["**/__pycache__", "docs", "examples", ".venv", "node_modules"]
+}
