@@ -1603,8 +1603,8 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
     """A failing pop cannot leave a partial private package tree behind."""
     script = (
-        "import contextvars, functools, importlib.util, inspect, pathlib, "
-        "sys, types, uuid\n"
+        "import contextvars, functools, importlib, importlib.util, inspect, "
+        "pathlib, sys, types, uuid\n"
         f"mailbox = pathlib.Path({MB!r})\n"
         "original_modules = sys.modules\n"
         "class FailingModules(dict):\n"
@@ -1624,6 +1624,11 @@ def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
         "sys.modules = replacement\n"
         "mark('swapped-sys-modules')\n"
         "try:\n"
+        # Is a plain import survivable with sys.modules replaced at all? If
+        # this marker never prints, the crash is CPython's import machinery
+        # against a substituted modules mapping, not anything in the facade.
+        "    importlib.import_module('http.client')\n"
+        "    mark('plain-import-ok')\n"
         "    before = {n for n in replacement if n.startswith('_discord_mb_lib_')}\n"
         "    spec = importlib.util.spec_from_file_location('discord_alias', mailbox)\n"
         "    module = importlib.util.module_from_spec(spec)\n"
