@@ -1603,8 +1603,11 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
     """A failing pop cannot leave a partial private package tree behind."""
     script = (
-        "import contextvars, functools, importlib, importlib.util, inspect, "
-        "pathlib, sys, types, uuid\n"
+        "import contextvars, faulthandler, functools, importlib, "
+        "importlib.util, inspect, pathlib, sys, types, uuid\n"
+        # A segfault here leaves no Python traceback of its own; faulthandler
+        # is what turns it into a named frame on stderr.
+        "faulthandler.enable()\n"
         f"mailbox = pathlib.Path({MB!r})\n"
         "original_modules = sys.modules\n"
         "class FailingModules(dict):\n"
