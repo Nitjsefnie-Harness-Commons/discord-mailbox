@@ -1876,6 +1876,9 @@ def test_connector_log_failed_staging_key_cleanup_preserves_rebound_path(tmp):
 
 def test_connector_log_failed_staging_temp_cleanup_preserves_rebound_path(tmp):
     """A failed temp write cannot remove a replacement at the temp pathname."""
+    if os.name == "nt":
+        _util.skip("the rebinding this checks is a rename over a file the "
+                   "writer holds open, which Windows refuses")
     m = _mod()
     path = Path(tmp) / "failed-staging-temp.log"
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
@@ -2080,6 +2083,13 @@ def test_connector_log_sidecar_rejects_windows_link_and_replacement_targets(tmp)
             raise AssertionError("Windows hard-linked sidecar was adopted")
         assert external.read_bytes() == b"EXTERNAL-SIDECAR\n"
 
+        if os.name == "nt":
+            # The arms above all hold on Windows. This one does not: it swaps
+            # the entry while the code has it open, and Windows refuses that
+            # rename outright, so the swap the assertion checks for never
+            # happens. Everything after it here models the same open-file
+            # rebinding.
+            return
         replacement = Path(tmp) / "replacement.lock"
         replacement.write_bytes(b"")
         foreign = Path(tmp) / "replacement-foreign.bin"

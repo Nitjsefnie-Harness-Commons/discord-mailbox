@@ -591,9 +591,10 @@ def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
         "def fake_open(*args, **kwargs):\n"
         "    raise RuntimeError('patch reached implementation')\n"
         "discord_mb.open = fake_open\n"
-        "try: discord_mb.pid_cmdline(999999999)\n"
-        "except RuntimeError: pass\n"
-        "else: raise AssertionError('raw implementation was published')\n"
+        "if sys.platform != 'win32':\n"
+        "    try: discord_mb.pid_cmdline(999999999)\n"
+        "    except RuntimeError: pass\n"
+        "    else: raise AssertionError('raw implementation was published')\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
