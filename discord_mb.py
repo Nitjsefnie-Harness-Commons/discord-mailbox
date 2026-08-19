@@ -198,12 +198,6 @@ try:
     _connector_module = _compat_importlib.import_module(
         f'{_package_name}.connector')
     _cli_module = _compat_importlib.import_module(f'{_package_name}.cli')
-    _legacy_locations_module = _compat_importlib.import_module(
-        f'{_package_name}.legacy_lines')
-    _legacy_lines = _legacy_locations_module.LEGACY_LINES
-    _legacy_class_lines = _legacy_locations_module.LEGACY_CLASS_LINES
-    _legacy_source = _compat_importlib.import_module(
-        f'{_package_name}.legacy_source').LEGACY_SOURCE
 except _compat_builtins.BaseException:
     if _private_package:
         for _loaded_name in _compat_builtins.tuple(sys.modules):
@@ -327,28 +321,21 @@ except _compat_builtins.BaseException:
 
 def _legacy_code(code, module_name, inherited_delta=None,
                  qualname_override=None):
-    """Project split code objects onto their former monolith locations."""
-    module_leaf = module_name.rsplit('.', 1)[-1]
-    legacy_line = _legacy_lines.get((module_leaf, code.co_qualname))
-    delta = (legacy_line - code.co_firstlineno
-             if legacy_line is not None else inherited_delta)
+    """Rebuild a code object, optionally under a different qualified name."""
+    del module_name, inherited_delta          # legacy projection retired
+    if qualname_override is None:
+        return code
     constants = _compat_builtins.tuple(
         _legacy_code(
-            value, module_name, delta,
-            (qualname_override + value.co_qualname[len(code.co_qualname):]
-             if (qualname_override is not None
-                 and value.co_qualname.startswith(code.co_qualname + '.'))
-             else None))
-        if _compat_builtins.isinstance(value, _compat_types.CodeType)
+            value, None, None,
+            qualname_override + value.co_qualname[len(code.co_qualname):])
+        if (_compat_builtins.isinstance(value, _compat_types.CodeType)
+            and value.co_qualname.startswith(code.co_qualname + '.'))
         else value
         for value in code.co_consts)
-    updates = {'co_filename': __file__, 'co_consts': constants}
-    if qualname_override is not None:
-        updates['co_qualname'] = qualname_override
-        updates['co_name'] = qualname_override.rsplit('.', 1)[-1]
-    if delta is not None:
-        updates['co_firstlineno'] = code.co_firstlineno + delta
-    return code.replace(**updates)
+    return code.replace(
+        co_consts=constants, co_qualname=qualname_override,
+        co_name=qualname_override.rsplit('.', 1)[-1])
 
 
 def _clone_declaration_function(function):
@@ -1044,14 +1031,6 @@ try:
         if _name == 'ConnectorApp':
             _facade_exports[_name] = _value
             continue
-        if _value.__module__ != __name__:
-            _changed_class_modules.append((
-                _value, _value.__module__,
-                _value.__dict__.get(
-                    '__firstlineno__', _COMPATIBILITY_MISSING)))
-            _value.__module__ = __name__
-        if _name in _legacy_class_lines:
-            _value.__firstlineno__ = _legacy_class_lines[_name]
         _facade_exports[_name] = _value
 except _compat_builtins.BaseException:
     for (_value, _original_module,
@@ -1218,8 +1197,6 @@ for _name, _value in _facade_exports.items():
 __doc__ = _core_module.__doc__
 __version__ = _core_module.__version__
 _facade_build_complete = True
-_compat_linecache.cache[__file__] = (
-    len(_legacy_source), None, _legacy_source.splitlines(True), __file__)
 _facade_reload_active = False
 _facade_mutation_versions.clear()
 _facade_mutation_depths.clear()

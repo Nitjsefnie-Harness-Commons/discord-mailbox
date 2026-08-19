@@ -1504,29 +1504,36 @@ def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
     assert result.returncode == 0, result.stderr
 
 
-def test_facade_code_objects_keep_legacy_source_provenance(tmp):
-    """Tracebacks and debugger locations stay on the canonical legacy script."""
+def test_facade_code_objects_name_the_installed_module(tmp):
+    """A traceback must point at source the consumer actually has.
+
+    Code objects used to be projected onto the pre-package monolith's file and
+    line numbers, which required shipping a compressed copy of that deleted
+    file so linecache could agree. Installed as a wheel that names a location
+    the consumer cannot open, so provenance stays on the real module now.
+    """
     script = (
-        "import pathlib, sys, traceback\n"
+        "import inspect, pathlib, sys, traceback\n"
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
         "import discord_mb\n"
         "code = discord_mb.moved_body.__code__\n"
-        "assert pathlib.Path(code.co_filename) == pathlib.Path(discord_mb.__file__)\n"
-        "assert code.co_firstlineno == 959\n"
+        "origin = pathlib.Path(code.co_filename)\n"
+        "assert origin.name == 'core.py', origin\n"
+        "assert origin.is_file(), origin\n"
+        "assert inspect.getsource(discord_mb.moved_body).startswith("
+        "'def moved_body(')\n"
         "try: discord_mb.moved_body('a', 'b', 'c', extra_urls=1)\n"
         "except TypeError as exc:\n"
         "    frame = traceback.extract_tb(exc.__traceback__)[-1]\n"
         "    assert frame.name == 'moved_body'\n"
-        "    assert frame.lineno == 974\n"
-        "    assert pathlib.Path(frame.filename) == pathlib.Path(discord_mb.__file__)\n"
+        "    assert pathlib.Path(frame.filename).is_file(), frame.filename\n"
+        "    assert frame.line, 'traceback showed no source text'\n"
         "else: raise AssertionError('invalid extra_urls was accepted')\n"
-        "assert discord_mb._EventStreamReader.read.__code__.co_firstlineno == 6722\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
     assert result.returncode == 0, result.stderr
-
 
 def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
     """Deleting an original facade global removes the split global too."""
@@ -1824,15 +1831,17 @@ def test_facade_connector_main_keeps_the_legacy_call_shape(tmp):
     ]
 
 
-def test_facade_connector_main_retains_legacy_source_introspection(tmp):
-    """Inspection resolves the monolith source attached to legacy locations."""
+def test_facade_connector_main_source_is_the_real_implementation(tmp):
+    """Inspection returns the code that runs, not a copy of a deleted file."""
     m = _util.load(MB, "discord_connector_source_shape")
     source = inspect.getsource(m.connector_main)
 
-    assert source.startswith("def connector_main(")
-    assert "import discord" in source
-    assert "ConnectorApp" not in source
-
+    # connector_main is the exported alias of _run_connector, so the real
+    # source carries the implementation's own name -- which is the point: it
+    # is the code that runs, not a copy of a file the consumer does not have.
+    assert source.startswith("def _run_connector("), source.splitlines()[0]
+    origin = Path(inspect.getsourcefile(m.connector_main))
+    assert origin.is_file() and origin.name == "connector.py", origin
 
 def test_fetch_usage_resolves_helper_from_current_facade_file(tmp):
     """The public facade's current location selects its usage helper."""
@@ -1940,26 +1949,32 @@ def test_star_import_does_not_leak_facade_build_temporaries(tmp):
     assert result.returncode == 0, result.stderr
 
 
-def test_legacy_classes_keep_python_313_source_locations(tmp):
-    """Changing projected class modules must retain ``__firstlineno__``."""
+def test_projected_classes_keep_working_source_locations(tmp):
+    """Class introspection must resolve against the module that defines them.
+
+    The facade used to reassign __module__ onto itself, and inspect resolves a
+    class's source THROUGH __module__ -- which is why a copy of the monolith
+    had to ship. Classes now keep their real module, so getsourcelines works
+    against the installed file with no blob at all.
+    """
     script = (
-        "import inspect, sys\n"
+        "import inspect, pathlib, sys\n"
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
         "import discord_mb\n"
-        "cases = ((discord_mb.SendRetry, 926, 'class SendRetry'), "
-        "(discord_mb._ConnectorLogWriter, 2894, "
-        "'class _ConnectorLogWriter'))\n"
-        "for cls, expected_line, declaration in cases:\n"
-        "    assert cls.__firstlineno__ == expected_line\n"
+        "cases = ((discord_mb.SendRetry, 'class SendRetry'), "
+        "(discord_mb._ConnectorLogWriter, 'class _ConnectorLogWriter'))\n"
+        "for cls, declaration in cases:\n"
+        "    assert cls.__module__.startswith('discord_mb_lib.'), cls.__module__\n"
         "    lines, first_line = inspect.getsourcelines(cls)\n"
-        "    assert first_line == expected_line\n"
+        "    assert first_line > 0\n"
         "    assert lines[0].startswith(declaration), lines[0]\n"
+        "    origin = pathlib.Path(inspect.getsourcefile(cls))\n"
+        "    assert origin.is_file(), origin\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
     assert result.returncode == 0, result.stderr
-
 
 def test_cli_reads_the_live_facade_docstring(tmp):
     """The importable CLI retains the monolith's dynamic ``__doc__`` lookup."""
