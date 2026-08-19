@@ -1615,19 +1615,28 @@ def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
         "            self.failed = True\n"
         "            raise RuntimeError('injected cleanup failure')\n"
         "        return value\n"
+        # Breadcrumbs, because this child has died by signal on some macOS
+        # runners: a bare exit status says nothing about how far it got, and
+        # the interpreter cannot report its own segfault.
+        "def mark(step): print(step, file=sys.stderr, flush=True)\n"
         "replacement = FailingModules(original_modules)\n"
+        "mark('built-replacement')\n"
         "sys.modules = replacement\n"
+        "mark('swapped-sys-modules')\n"
         "try:\n"
         "    before = {n for n in replacement if n.startswith('_discord_mb_lib_')}\n"
         "    spec = importlib.util.spec_from_file_location('discord_alias', mailbox)\n"
         "    module = importlib.util.module_from_spec(spec)\n"
+        "    mark('about-to-exec')\n"
         "    try: spec.loader.exec_module(module)\n"
-        "    except RuntimeError: pass\n"
+        "    except RuntimeError: mark('raised-as-expected')\n"
         "    else: raise AssertionError('cleanup failure was swallowed')\n"
         "    after = {n for n in replacement if n.startswith('_discord_mb_lib_')}\n"
         "    assert after == before, sorted(after - before)\n"
+        "    mark('assertions-passed')\n"
         "finally:\n"
         "    sys.modules = original_modules\n"
+        "    mark('restored-sys-modules')\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
