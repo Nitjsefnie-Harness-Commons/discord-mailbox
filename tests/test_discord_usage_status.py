@@ -8,6 +8,9 @@ so the suite is offline and safe to run anywhere. The live end of the feature
 
 Stdlib only, OS-agnostic (SETUP.md edit discipline).
 """
+# pylint: disable=subprocess-run-check
+# Every subprocess.run below is a probe whose exit status is the
+# assertion; check=True would raise before the test could read it.
 import json
 import os
 import sys

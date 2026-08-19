@@ -2,6 +2,15 @@
 
 from .core import *
 from .storage import *
+# Named explicitly as well as through the wildcard above: `import *`
+# does bind these at runtime, because __all__ lists them, but a linter
+# reading the source applies the plain no-underscore rule and reports
+# every use as undefined. Spelling them out also says which module
+# each one comes from.
+from .core import _ExtensionContext
+from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
+                      _ConnectorOwnershipError, _EventStreamReader,
+                      _EventStreamWriter, _LeechLogWriter)
 
 
 def leech_main(identity, claude_pid=None, log_path=None, flavor=None):
@@ -245,7 +254,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # Human logs go to stderr + log file. stdout is reserved for JSON event
         # stream consumed by Monitor (v0.6+).
         line = f'[{time.strftime("%Y-%m-%dT%H:%M:%S")}] {msg}'
-        log_fh.write(line)
+        # Callable before the log file is opened -- the token resolution below
+        # logs its own failure. stderr still carries the line either way.
+        if log_fh is not None:
+            log_fh.write(line)
         print(line, file=sys.stderr, flush=True)
 
     def emit_event(event):
@@ -599,10 +611,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         channel = ch('attachments')
         if channel is None:
             raise RuntimeError(f'attachments channel #{ATTACHMENTS_CHANNEL_NAME} not resolved')
-        if limit < 1:
-            limit = 1
-        if limit > 200:
-            limit = 200
+        limit = min(max(limit, 1), 200)
         entries = []
         async for m in channel.history(limit=limit):
             if not m.attachments:
@@ -657,7 +666,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     try:
                         channel = await client.fetch_channel(cid)
                     except Exception as e:
-                        raise RuntimeError(f'fetch_channel({cid}) failed: {e}')
+                        raise RuntimeError(f'fetch_channel({cid}) failed: {e}') from e
             else:
                 channel = ch(cref)
                 if channel is None:
@@ -673,7 +682,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except discord.HTTPException as e:
             if getattr(e, 'status', None) == 413:
                 raise RuntimeError(f'payload too large ({total} bytes across {len(ps)} '
-                                   f'file(s)) — Discord upload limit exceeded')
+                                   f'file(s)) — Discord upload limit exceeded') from e
             raise
         finally:
             for fh in fhs:
@@ -715,7 +724,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     try:
                         channel = await client.fetch_channel(cid)
                     except Exception as e:
-                        raise RuntimeError(f'fetch_channel({cid}) failed: {e}')
+                        raise RuntimeError(f'fetch_channel({cid}) failed: {e}') from e
             else:
                 channel = ch(cref)
                 if channel is None:
@@ -723,13 +732,13 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         if not msg.attachments:
             return {'saved': [], 'reason': 'message has no attachments'}
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
         saved = []
-        for i, a in enumerate(msg.attachments):
+        for a in msg.attachments:
             target_name = rename if (rename and len(msg.attachments) == 1) else a.filename
             out = dest / target_name
             await a.save(out)
@@ -815,15 +824,12 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 try:
                     channel = await client.fetch_channel(cid)
                 except Exception as e:
-                    raise RuntimeError(f'channel {cid} unavailable: {e}')
+                    raise RuntimeError(f'channel {cid} unavailable: {e}') from e
         else:
             channel = ch('bridge')
             if channel is None:
                 raise RuntimeError(f'bridge channel #{BRIDGE_CHANNEL_NAME} not resolved')
-        if limit < 1:
-            limit = 1
-        if limit > 100:
-            limit = 100
+        limit = min(max(limit, 1), 100)
         if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.DMChannel, discord.GroupChannel, discord.VoiceChannel)):
             raise RuntimeError(f'channel {channel!r} does not support .history()')
         kwargs: dict[str, Any] = {'limit': limit}
@@ -894,7 +900,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         return {'action': 'created', 'msg_id': str(new.id)}
 
     async def op_list_agents():
-        import re
         channel = ch('directory')
         if channel is None:
             raise RuntimeError(f'directory channel #{DIRECTORY_CHANNEL_NAME} not resolved')
@@ -999,7 +1004,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         await msg.pin(reason=f'pinned via discord_mb by {identity}')
         return {'msg_id': str(msg.id), 'channel_id': str(channel.id), 'pinned': True}
 
@@ -1010,7 +1015,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         await msg.unpin(reason=f'unpinned via discord_mb by {identity}')
         return {'msg_id': str(msg.id), 'channel_id': str(channel.id), 'pinned': False}
 
@@ -1137,7 +1142,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         if client.user is None or msg.author.id != client.user.id:
             raise RuntimeError('can only edit messages authored by this bot')
         await msg.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
@@ -1151,7 +1156,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         await msg.delete()
         return {'msg_id': str(msg_id), 'channel_id': str(channel.id), 'deleted': True}
 
@@ -1490,7 +1495,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             msg = await channel.fetch_message(int(msg_id))
         except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}')
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         if remove:
             if client.user is None:
                 raise RuntimeError('client.user is None')
@@ -1644,6 +1649,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                                 installed=state['ext_installed'],
                                 tasks=state['ext_tasks'],
                                 deliver=write_inbox)
+        # Resolved off the loaded extension module, so its type is not
+        # knowable from this source.
+        # pylint: disable-next=not-callable
         await setup(ctx)
         state['extension'] = {'path': str(path), 'command': command, 'module': module}
         state['extension_ctx'] = ctx
@@ -1691,7 +1699,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if not ext.get('command'):
             return {'error': 'extension defines no command(ctx, argv)'}
         try:
-            result = await ext['command'](state['extension_ctx'], list(argv or []))
+            # ext is the extension state dict, checked for 'command' just
+            # above.
+            # pylint: disable-next=unsubscriptable-object
+            result = await ext['command'](state['extension_ctx'],
+                                          list(argv or []))
         except Exception as e:
             return {'error': f'{type(e).__name__}: {e}'}
         return {'ok': True, 'result': result}
@@ -1809,7 +1821,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 user = client.get_user(uid) or await client.fetch_user(uid)
                 channel = user.dm_channel or await user.create_dm()
             except Exception as e:
-                raise SendRetry(f'DM channel for {to!r} unavailable: {e}')
+                raise SendRetry(f'DM channel for {to!r} unavailable: {e}') from e
         elif reply_to:
             if not reply_channel_id:
                 reply_channel_id, _ = await resolve_reply_target(reply_to)
@@ -1817,12 +1829,12 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 channel = (client.get_channel(int(reply_channel_id))
                            or await client.fetch_channel(int(reply_channel_id)))
             except Exception as e:
-                raise SendRetry(f'fetch reply channel {reply_channel_id} failed: {e}')
+                raise SendRetry(f'fetch reply channel {reply_channel_id} failed: {e}') from e
         elif data.get('channel'):
             try:
                 channel = await resolve_channel_ref(data['channel'])
             except Exception as e:
-                raise SendError(f'send target channel {data["channel"]!r} unresolved: {e}')
+                raise SendError(f'send target channel {data["channel"]!r} unresolved: {e}') from e
         else:
             channel = ch('bridge')
             if channel is None:
@@ -1928,20 +1940,20 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     except Exception as e2:
                         if sent_ids:
                             raise SendError(f'chunk {i + 1}/{n} failed after rate-limit '
-                                            f'retry: {e2} (already sent: {sent_ids})')
-                        raise SendRetry(f'rate limited twice: {e2}')
+                                            f'retry: {e2} (already sent: {sent_ids})') from e2
+                        raise SendRetry(f'rate limited twice: {e2}') from e2
                 elif sent_ids:
-                    raise SendError(f'chunk {i + 1}/{n} failed: {e} (already sent: {sent_ids})')
+                    raise SendError(f'chunk {i + 1}/{n} failed: {e} (already sent: {sent_ids})') from e
                 elif isinstance(e, discord.Forbidden):
-                    raise SendError(f'forbidden: {e}')
+                    raise SendError(f'forbidden: {e}') from e
                 else:
-                    raise SendRetry(f'send failed: {e}')
+                    raise SendRetry(f'send failed: {e}') from e
             except (SendError, SendRetry):
                 raise
             except Exception as e:
                 if sent_ids:
-                    raise SendError(f'chunk {i + 1}/{n} failed: {e} (already sent: {sent_ids})')
-                raise SendRetry(f'send error: {e}')
+                    raise SendError(f'chunk {i + 1}/{n} failed: {e} (already sent: {sent_ids})') from e
+                raise SendRetry(f'send error: {e}') from e
             sent_ids.append(str(sent.id))
             # Cache our OWN sends, so a later --reply-to on one of them resolves
             # without a `conversation` round-trip first. resolve_reply_target()
@@ -2353,7 +2365,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             log(f'on_message error: {e}')
 
     async def refresh_directory():
-        import re
         channel = ch('directory')
         if channel is None:
             return
@@ -2618,6 +2629,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
     primary = None
     primary_tb = None
+    if not token:
+        raise SystemExit('connector reached the gateway with no token')
     try:
         client.run(token, log_handler=None)
     except BaseException as exc:
@@ -2688,4 +2701,9 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
     ).run()
 
 
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [
+    'ConnectorApp',
+    '_run_connector',
+    'connector_main',
+    'leech_main',
+]

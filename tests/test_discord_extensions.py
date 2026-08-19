@@ -5,6 +5,9 @@ An extension is NOT a status plugin: its registration is durable (it lives
 beside the identity's token, not under the temp state root) so a binding
 survives a connector restart and a reboot.
 """
+# pylint: disable=attribute-defined-outside-init, no-member
+# _FakeClient stands in for discord.py's client, whose event handlers
+# are attached by decorator at registration time rather than declared.
 import os
 import sys
 from pathlib import Path

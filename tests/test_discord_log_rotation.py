@@ -5,6 +5,9 @@ These tests exercise the writer without importing Discord's network client or
 starting a connector.  The connector's stdout event stream and the leech log
 are intentionally separate concerns and are covered by their existing code.
 """
+# pylint: disable=subprocess-run-check
+# Every subprocess.run below is a probe whose exit status is the
+# assertion; check=True would raise before the test could read it.
 import os
 import sys
 import contextlib
@@ -849,6 +852,9 @@ def test_connector_log_migration_refuses_live_in_place_destination_swap(tmp):
     real_open = __import__("builtins").open
     swapped = {"done": False}
 
+    # Mirrors open(file, mode='r', ...), which is the signature it stands
+    # in for.
+    # pylint: disable-next=keyword-arg-before-vararg
     def open_then_swap(file, mode="r", *args, **kwargs):
         if (not swapped["done"] and Path(file) == path and
                 mode in ("r+b", "w+b")):
@@ -963,6 +969,9 @@ def test_connector_log_rotation_refuses_live_in_place_destination_swap(tmp):
     real_open = __import__("builtins").open
     swapped = {"done": False}
 
+    # Mirrors open(file, mode='r', ...), which is the signature it stands
+    # in for.
+    # pylint: disable-next=keyword-arg-before-vararg
     def open_then_swap(file, mode="r", *args, **kwargs):
         if (not swapped["done"] and Path(file) == path and
                 mode in ("r+b", "w+b")):
@@ -1407,7 +1416,7 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
             raise ValueError("primary startup failure")
 
     fake_discord = types.SimpleNamespace(
-        Intents=types.SimpleNamespace(default=lambda: types.SimpleNamespace()),
+        Intents=types.SimpleNamespace(default=types.SimpleNamespace),
         Client=ExplodingClient,
     )
     old_discord = sys.modules.get("discord")
@@ -1465,7 +1474,7 @@ def test_connector_shutdown_sweep_baseexception_does_not_skip_cleanup(tmp):
             raise ValueError("primary connector failure")
 
     fake_discord = types.SimpleNamespace(
-        Intents=types.SimpleNamespace(default=lambda: types.SimpleNamespace()),
+        Intents=types.SimpleNamespace(default=types.SimpleNamespace),
         Client=FakeClient,
     )
     old_discord = sys.modules.get("discord")
@@ -2297,10 +2306,12 @@ def test_connector_log_exact_temp_collision_is_never_adopted_or_deleted(tmp):
 
         original_owned_temp_path = m._ConnectorLogWriter._owned_temp_path
 
-        def collide(owner, requested_kind, index, directory=None):
+        def collide(owner, requested_kind, index, directory=None,
+                    kind=kind, collision=collision,
+                    original=original_owned_temp_path):
             if requested_kind == kind:
                 return collision
-            return original_owned_temp_path(owner, requested_kind, index, directory)
+            return original(owner, requested_kind, index, directory)
         m._ConnectorLogWriter._owned_temp_path = collide
         writer = None
         try:
@@ -2515,7 +2526,7 @@ def test_connector_named_fallback_reconciles_interrupted_fixed_claim_cleanup(tmp
                 destination.unlink()
             claim_bytes = m._ConnectorLogWriter._named_claim_record(
                 destination, payload, 0o600, auth_key=auth_key)
-            proof_info = m._ConnectorLogWriter._create_named_claim_proof(
+            m._ConnectorLogWriter._create_named_claim_proof(
                 proof, claim_bytes)
             os.link(proof, stage)
             stage.unlink()
@@ -2526,7 +2537,7 @@ def test_connector_named_fallback_reconciles_interrupted_fixed_claim_cleanup(tmp
             assert not proof.exists() and not stage.exists()
 
             destination.unlink()
-            proof_info = m._ConnectorLogWriter._create_named_claim_proof(
+            m._ConnectorLogWriter._create_named_claim_proof(
                 proof, claim_bytes)
             os.link(proof, stage)
             proof.unlink()
@@ -2539,7 +2550,7 @@ def test_connector_named_fallback_reconciles_interrupted_fixed_claim_cleanup(tmp
             # A third hard link invalidates the proof; recovery must leave all
             # exact names untouched instead of deleting an unrelated alias.
             destination.unlink()
-            proof_info = m._ConnectorLogWriter._create_named_claim_proof(
+            m._ConnectorLogWriter._create_named_claim_proof(
                 proof, claim_bytes)
             os.link(proof, stage)
             extra = proof.with_name(proof.name + ".extra")
@@ -2622,7 +2633,7 @@ def test_connector_named_claim_direct_helper_rejects_forged_proof_shapes(tmp):
                     f"forged-proof-{kind}-{int(with_stage)}-"
                     f"{int(canonical_present)}")
                 case.mkdir()
-                _path, _root, destination, proof, stage, payload = \
+                _path, _root, destination, proof, stage, _payload = \
                     _foreign_named_claim_residue(
                         m, case, kind, with_stage, canonical_present)
                 proof_before = proof.read_bytes()
@@ -3683,7 +3694,7 @@ def test_connector_startup_exception_releases_ownership_and_pidfile(tmp):
             raise RuntimeError("injected connector startup failure")
 
     fake_discord = types.SimpleNamespace(
-        Intents=types.SimpleNamespace(default=lambda: types.SimpleNamespace()),
+        Intents=types.SimpleNamespace(default=types.SimpleNamespace),
         Client=ExplodingClient,
     )
     old_discord = sys.modules.get("discord")

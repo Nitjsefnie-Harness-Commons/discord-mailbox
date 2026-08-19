@@ -140,13 +140,14 @@ def ensure_owned_temp_dir(path: str | os.PathLike[str], scope: str) -> bool:
     candidate = Path(path)
     try:
         candidate.mkdir(mode=0o700, parents=False, exist_ok=False)
-    except FileExistsError:
+    except FileExistsError as exc:
         if owned_temp_scope(candidate) == scope:
             return True
         # The mailbox caller historically ignored a false return and then
         # wrote below the unsafe root anyway.  Refuse by exception so failure
         # cannot be accidentally converted into adoption.
-        raise RuntimeError(f"unsafe pre-existing temporary directory: {candidate}")
+        raise RuntimeError(
+            f"unsafe pre-existing temporary directory: {candidate}") from exc
     except OSError as exc:
         raise RuntimeError(
             f"could not create private temporary directory {candidate}: {exc}") from exc

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Behavioral contract for the Discord mailbox executable facade."""
+# pylint: disable=subprocess-run-check
+# Every subprocess.run below is a probe whose exit status is the
+# assertion; check=True would raise before the test could read it.
 
 import os
 import asyncio
@@ -26,10 +29,23 @@ EXPECTED_COMMANDS = {
 }
 
 
+def _assert_child_ok(result):
+    """Fail with the exit status too, not just whatever reached stderr.
+
+    A child that dies during interpreter finalization, or is killed by a
+    signal, exits non-zero with nothing on stderr at all -- which used to
+    surface as an assertion carrying an empty message.
+    """
+    assert result.returncode == 0, (
+        f"child exited {result.returncode}\n"
+        f"stderr: {result.stderr!r}\n"
+        f"stdout: {result.stdout!r}")
+
+
 def _help(*args):
     result = subprocess.run(
         [sys.executable, MB, *args], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
     return result.stdout
 
 
@@ -57,7 +73,7 @@ def test_package_modules_are_importable_from_the_script_directory(tmp):
     )
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_canonical_facade_remains_an_exact_module_type(tmp):
@@ -71,7 +87,7 @@ def test_canonical_facade_remains_an_exact_module_type(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facades_loaded_from_distinct_deployments_are_isolated(tmp):
@@ -127,7 +143,7 @@ def test_facade_functions_are_pickleable_when_imported_normally(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_and_package_share_public_type_identity(tmp):
@@ -146,7 +162,7 @@ def test_facade_and_package_share_public_type_identity(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_preimported_local_package_keeps_identity_and_pickleability(tmp):
@@ -166,7 +182,7 @@ def test_preimported_local_package_keeps_identity_and_pickleability(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reimported_facade_keeps_new_package_api_deployments_isolated(tmp):
@@ -189,7 +205,7 @@ def test_reimported_facade_keeps_new_package_api_deployments_isolated(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_reload_does_not_recurse_through_old_wrappers(tmp):
@@ -205,7 +221,7 @@ def test_facade_reload_does_not_recurse_through_old_wrappers(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_preserves_canonical_package_type_identity(tmp):
@@ -226,7 +242,7 @@ def test_reload_preserves_canonical_package_type_identity(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_private_facade_methods_remain_pickleable_after_reload(tmp):
@@ -243,7 +259,7 @@ def test_private_facade_methods_remain_pickleable_after_reload(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_exported_method_pickle_uses_legacy_facade_module(tmp):
@@ -263,7 +279,7 @@ def test_exported_method_pickle_uses_legacy_facade_module(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_registered_alias_cannot_claim_the_canonical_package(tmp):
@@ -286,7 +302,7 @@ def test_registered_alias_cannot_claim_the_canonical_package(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_class_methods_do_not_add_compatibility_traceback_frames(tmp):
@@ -309,7 +325,7 @@ def test_class_methods_do_not_add_compatibility_traceback_frames(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_descriptor_rollback_handles_set_then_raise(tmp):
@@ -341,7 +357,7 @@ def test_descriptor_rollback_handles_set_then_raise(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_binding_marker_failure_precedes_descriptor_mutation(tmp):
@@ -370,7 +386,7 @@ def test_binding_marker_failure_precedes_descriptor_mutation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_deleted_facade_monkeypatch_restores_implementation_global(tmp):
@@ -399,7 +415,7 @@ def test_deleted_facade_monkeypatch_restores_implementation_global(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_suspended_coroutine_observes_late_facade_monkeypatch(tmp):
@@ -430,7 +446,7 @@ def test_suspended_coroutine_observes_late_facade_monkeypatch(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_private_wrapper_build_removes_package_tree(tmp):
@@ -462,7 +478,7 @@ def test_failed_private_wrapper_build_removes_package_tree(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_reload_preserves_override_assigned_while_staged(tmp):
@@ -507,7 +523,7 @@ def test_failed_reload_preserves_override_assigned_while_staged(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_reload_preserves_concurrent_override_deletion(tmp):
@@ -553,7 +569,7 @@ def test_failed_reload_preserves_concurrent_override_deletion(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
@@ -599,7 +615,7 @@ def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_old_call_cannot_repropagate_patch_into_staged_reload(tmp):
@@ -645,7 +661,7 @@ def test_old_call_cannot_repropagate_patch_into_staged_reload(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_async_generator_wrapper_delegates_full_protocol(tmp):
@@ -696,7 +712,7 @@ def test_async_generator_wrapper_delegates_full_protocol(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_absent_builtin_facade_override_reaches_implementation(tmp):
@@ -719,7 +735,7 @@ def test_absent_builtin_facade_override_reaches_implementation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_builtin_setattr_override_is_not_used_by_facade_machinery(tmp):
@@ -743,7 +759,7 @@ def test_builtin_setattr_override_is_not_used_by_facade_machinery(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_builtin_set_override_is_not_used_by_facade_machinery(tmp):
@@ -764,7 +780,7 @@ def test_builtin_set_override_is_not_used_by_facade_machinery(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_refreshes_environment_backed_configuration(tmp):
@@ -790,7 +806,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_refreshes_home_derived_paths(tmp):
@@ -830,7 +846,7 @@ def test_reload_refreshes_home_derived_paths(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_rebuilds_mutated_import_time_lookup_tables(tmp):
@@ -852,7 +868,7 @@ def test_reload_rebuilds_mutated_import_time_lookup_tables(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_rebinds_from_import_dependencies(tmp):
@@ -899,7 +915,7 @@ def test_reload_rebinds_from_import_dependencies(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_preserves_user_attributes_named_like_facade_internals(tmp):
@@ -919,7 +935,7 @@ def test_reload_preserves_user_attributes_named_like_facade_internals(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_declaration_overwrites_an_earlier_concurrent_assignment(tmp):
@@ -950,7 +966,7 @@ def test_reload_declaration_overwrites_an_earlier_concurrent_assignment(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_preserves_an_assignment_after_declaration_staging(tmp):
@@ -963,7 +979,7 @@ def test_reload_preserves_an_assignment_after_declaration_staging(tmp):
         "source = path.read_text(encoding='utf-8').splitlines()\n"
         "pause_line = next(i for i, text in enumerate(source, 1) "
         "if text.strip() == "
-        "'_old_globals = _previous_implementation_globals.get(_module, {})')\n"
+        "'_old_globals = _previous_globals_by_module.get(_module, {})')\n"
         "entered = threading.Event(); release = threading.Event()\n"
         "paused = False; errors = []\n"
         "def trace(frame, event, arg):\n"
@@ -989,7 +1005,7 @@ def test_reload_preserves_an_assignment_after_declaration_staging(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_transient_attribute_versions_remain_bounded(tmp):
@@ -1010,7 +1026,7 @@ def test_transient_attribute_versions_remain_bounded(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_recreates_classes_without_mutating_retained_generation(tmp):
@@ -1039,7 +1055,7 @@ def test_reload_recreates_classes_without_mutating_retained_generation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_concurrent_class_assignment_stays_on_retained_generation(tmp):
@@ -1080,7 +1096,7 @@ def test_concurrent_class_assignment_stays_on_retained_generation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_reload_preserves_concurrent_class_assignment(tmp):
@@ -1120,7 +1136,7 @@ def test_failed_reload_preserves_concurrent_class_assignment(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_reload_preserves_exception_class_delete_aba(tmp):
@@ -1156,7 +1172,7 @@ def test_failed_reload_preserves_exception_class_delete_aba(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_public_exceptions_accept_independent_subclass_metaclass(tmp):
@@ -1172,7 +1188,7 @@ def test_public_exceptions_accept_independent_subclass_metaclass(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_exception_reload_uses_immutable_declaration_metadata(tmp):
@@ -1198,7 +1214,7 @@ def test_exception_reload_uses_immutable_declaration_metadata(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_recreates_internal_classes_and_preserves_old_generation(tmp):
@@ -1224,7 +1240,7 @@ def test_reload_recreates_internal_classes_and_preserves_old_generation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_reexecutes_dynamic_class_declarations(tmp):
@@ -1242,7 +1258,7 @@ def test_reload_reexecutes_dynamic_class_declarations(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_reload_recreates_method_descriptors_from_frozen_declaration(tmp):
@@ -1263,7 +1279,7 @@ def test_reload_recreates_method_descriptors_from_frozen_declaration(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_direct_facade_dictionary_version_reaches_cli(tmp):
@@ -1284,7 +1300,7 @@ def test_direct_facade_dictionary_version_reaches_cli(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_direct_facade_dictionary_version_deletion_reaches_cli(tmp):
@@ -1302,7 +1318,7 @@ def test_direct_facade_dictionary_version_deletion_reaches_cli(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_direct_facade_dictionary_deletion_reaches_function_globals(tmp):
@@ -1319,7 +1335,7 @@ def test_direct_facade_dictionary_deletion_reaches_function_globals(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_successive_reloads_prune_obsolete_function_helpers(tmp):
@@ -1337,7 +1353,7 @@ def test_successive_reloads_prune_obsolete_function_helpers(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_retained_top_level_wrapper_survives_reload(tmp):
@@ -1354,7 +1370,7 @@ def test_retained_top_level_wrapper_survives_reload(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_missing_nonbuiltin_global_can_be_restored_from_facade(tmp):
@@ -1374,7 +1390,7 @@ def test_missing_nonbuiltin_global_can_be_restored_from_facade(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_running_sync_call_observes_concurrent_facade_assignment(tmp):
@@ -1423,7 +1439,7 @@ def test_running_sync_call_observes_concurrent_facade_assignment(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_failed_sync_target_rotation_cannot_poison_old_wrappers(tmp):
@@ -1451,7 +1467,7 @@ def test_failed_sync_target_rotation_cannot_poison_old_wrappers(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_inflight_call_observes_late_raw_dictionary_mutation(tmp):
@@ -1488,7 +1504,7 @@ def test_inflight_call_observes_late_raw_dictionary_mutation(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
@@ -1509,7 +1525,7 @@ def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_code_objects_name_the_installed_module(tmp):
@@ -1541,7 +1557,7 @@ def test_facade_code_objects_name_the_installed_module(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
@@ -1560,7 +1576,7 @@ def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_version_assignment_reaches_cli_module_reference(tmp):
@@ -1581,7 +1597,7 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
@@ -1616,7 +1632,7 @@ def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_facade_wrappers_preserve_raw_signatures_and_defaults(tmp):
@@ -1957,7 +1973,7 @@ def test_star_import_does_not_leak_facade_build_temporaries(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_projected_classes_keep_working_source_locations(tmp):
@@ -1985,7 +2001,7 @@ def test_projected_classes_keep_working_source_locations(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_cli_reads_the_live_facade_docstring(tmp):
@@ -2004,7 +2020,7 @@ def test_cli_reads_the_live_facade_docstring(tmp):
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
-    assert result.returncode == 0, result.stderr
+    _assert_child_ok(result)
 
 
 def test_core_exports_match_the_module_namespace(tmp):
@@ -2033,6 +2049,34 @@ def test_core_exports_match_the_module_namespace(tmp):
         "core.__all__ has drifted from the module namespace.\n"
         f"missing from __all__: {sorted(set(expected) - set(declared))}\n"
         f"stale in __all__:     {sorted(set(declared) - set(expected))}")
+
+
+def test_module_exports_cover_the_package(tmp):
+    """storage, connector and cli list only their own names now.
+
+    Each used to re-list everything its wildcard imports had pulled in. The
+    facade unions the four __all__ lists, so trimming them to what each module
+    defines leaves the exported set identical -- but only while every public
+    name is actually reachable from one of the four. This recomputes the old
+    per-module expression and requires the union to match.
+    """
+    facade = _util.load(MB, "mb_module_exports")
+    modules = (facade._core_module, facade._storage_module,
+               facade._connector_module, facade._cli_module)
+    declared = set()
+    for module in modules:
+        declared.update(module.__all__)
+    reachable = set()
+    for module in modules:
+        reachable.update(
+            name for name in vars(module)
+            if (not name.startswith('__')
+                and not name.startswith('_discord_mb_class_')
+                and name != 'SCRIPT_ROOT'))
+    assert declared == reachable, (
+        "the package's exported set has drifted.\n"
+        f"reachable but unexported: {sorted(reachable - declared)}\n"
+        f"exported but unreachable: {sorted(declared - reachable)}")
 
 
 def _functions_calling_os_open(path):

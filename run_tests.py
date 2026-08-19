@@ -16,7 +16,7 @@ def main() -> int:
     for suite in suites:
         print(f"=== {suite.name} ===", flush=True)
         result = subprocess.run([sys.executable, str(suite)], cwd=ROOT,
-                                stdin=subprocess.DEVNULL)
+                                stdin=subprocess.DEVNULL, check=False)
         if result.returncode != 0:
             failed.append(suite.name)
     print()

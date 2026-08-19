@@ -1,6 +1,13 @@
 """Hardened connector ownership, logs, locks, and event streams."""
 
 from .core import *
+# Named explicitly as well as through the wildcard above: `import *`
+# does bind these at runtime, because __all__ lists them, but a linter
+# reading the source applies the plain no-underscore rule and reports
+# every use as undefined. Spelling them out also says which module
+# each one comes from.
+from .core import (_DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV,
+                   _linklike)
 
 
 def _posix_mode_exposed(mode):
@@ -134,7 +141,9 @@ class _ConnectorOwnership:
 
     def _sidecar_keys(self, lock_path, handle):
         """Names under which this attempt already holds one sidecar."""
-        keys = {self._sidecar_alias_key(lock_path)}
+        # Two shapes share this set on purpose -- a normalized pathname and an
+        # (kind, device, inode) identity -- so it cannot be a set of one type.
+        keys: set = {self._sidecar_alias_key(lock_path)}
         try:
             opened = os.fstat(handle.fileno())
         except (OSError, ValueError):
@@ -285,6 +294,8 @@ class _ConnectorOwnership:
 
             fh = os.fdopen(fd, 'r+b', buffering=0)
             fd = None
+            # Rebound through `nonlocal` by the closures defined below.
+            # pylint: disable-next=possibly-unused-variable
             locked = False
 
             def revalidate():
@@ -713,6 +724,15 @@ class _ConnectorLogWriter:
             self._identity_token.encode('utf-8')).hexdigest()[:32]
         self._staging_key_bytes = None
         self._staging_key_authority_seeded = False
+        # Per-transaction staging state, rebound by each migration/rotation.
+        # Declared here so the object's shape is visible in one place rather
+        # than inferred from the getattr(..., default) reads scattered below.
+        self._transaction_nonce = None
+        self._staging_kind = None
+        self._staging_slot = None
+        self._staging_destination = None
+        self._staging_claim_callback = None
+        self._staging_cleanup_failed = False
         self._fh = None
         self._use_anonymous_staging = True
         import threading
@@ -1500,12 +1520,20 @@ class _ConnectorLogWriter:
             expected_digest = proof_info.get('sha256')
             payload_info = None
             canonical_info = None
+            # Coerced once here rather than at each use below: those uses run
+            # only when a payload was read, which only happens inside this
+            # guard, and repeating int()/str() there hid that from the reader
+            # and from the type checker alike.
+            size = 0
+            digest = ''
             if expected_size is not None and expected_digest is not None:
+                size = int(expected_size)
+                digest = str(expected_digest)
                 try:
                     payload_info = cls._read_named_payload(
-                        payload_path, expected_size, expected_digest)
+                        payload_path, size, digest)
                     canonical_info = cls._read_named_payload(
-                        Path(path), expected_size, expected_digest)
+                        Path(path), size, digest)
                 except FileExistsError as exc:
                     raise FileExistsError(
                         errno.EEXIST,
@@ -1516,10 +1544,9 @@ class _ConnectorLogWriter:
             payload_entry_identity = None
             if payload_info is not None:
                 payload, payload_identity, payload_entry_identity = payload_info
-                if (len(payload) > int(expected_size) or
-                        (len(payload) == int(expected_size) and
-                         hashlib.sha256(payload).hexdigest() !=
-                         str(expected_digest))):
+                if (len(payload) > size or
+                        (len(payload) == size and
+                         hashlib.sha256(payload).hexdigest() != digest)):
                     raise FileExistsError(
                         errno.EEXIST,
                         'named create proof payload was rebound',
@@ -1529,9 +1556,8 @@ class _ConnectorLogWriter:
             if canonical_info is not None:
                 canonical_identity = canonical_info[1]
                 canonical_payload = canonical_info[0]
-                if (len(canonical_payload) != int(expected_size) or
-                        hashlib.sha256(canonical_payload).hexdigest() !=
-                        str(expected_digest)):
+                if (len(canonical_payload) != size or
+                        hashlib.sha256(canonical_payload).hexdigest() != digest):
                     raise FileExistsError(
                         errno.EEXIST,
                         'named create proof destination was rebound',
@@ -1599,7 +1625,12 @@ class _ConnectorLogWriter:
         # never cleanup-authoritative.
         record = None
         if os.path.lexists(str(claim)):
-            claim_identity = cls._named_claim_stage_identity(claim)[0]
+            stage_identity = cls._named_claim_stage_identity(claim)
+            # None where the entry vanished between the checks: no identity to
+            # match, so the comparison below fails closed rather than raising
+            # a TypeError out of the subscript.
+            claim_identity = (stage_identity[0]
+                              if stage_identity is not None else None)
             if claim_identity != proof_info['identity']:
                 raise FileExistsError(
                     errno.EEXIST,
@@ -2062,6 +2093,10 @@ class _ConnectorLogWriter:
                 if attempt + 1 < self._STAGING_KEY_GUARD_RETRIES:
                     time.sleep(self._STAGING_KEY_GUARD_RETRY_DELAY)
         if guard is None:
+            if last_error is None:
+                raise _ConnectorOwnershipError(
+                    'connector staging key guard was never attempted: '
+                    f'{guard_path}')
             raise last_error
         try:
             try:
@@ -2106,8 +2141,8 @@ class _ConnectorLogWriter:
 
     def _current_staging_key(self):
         key = self._load_staging_key()
-        if (getattr(self, '_staging_key_bytes', None) is not None and
-                not hmac.compare_digest(key, self._staging_key_bytes)):
+        established = getattr(self, '_staging_key_bytes', None)
+        if established is not None and not hmac.compare_digest(key, established):
             raise RuntimeError('connector staging key changed during recovery')
         return key
 
@@ -2153,8 +2188,9 @@ class _ConnectorLogWriter:
                 if (int(size) != len(payload) or
                         hashlib.sha256(payload).hexdigest() != digest):
                     raise ValueError
-            except (UnicodeError, ValueError):
-                raise ValueError('connector log staging temp has invalid provenance')
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    'connector log staging temp has invalid provenance') from exc
             return payload, {'token': token, 'nonce': nonce, 'size': int(size),
                              'sha256': digest, 'authenticated': False}
         if not raw.startswith(cls._TEMP_MAGIC):
@@ -2198,8 +2234,9 @@ class _ConnectorLogWriter:
                     raise ValueError
                 authenticated = True
         except (UnicodeError, ValueError, TypeError, IndexError,
-                base64.binascii.Error):
-            raise ValueError('connector log staging temp has invalid provenance')
+                binascii.Error) as exc:
+            raise ValueError(
+                'connector log staging temp has invalid provenance') from exc
         return payload, {
             'token': token, 'nonce': nonce, 'kind': kind, 'slot': slot,
             'destination': destination, 'size': size, 'sha256': digest,
@@ -2273,7 +2310,7 @@ class _ConnectorLogWriter:
                 int(size) == expected_size and len(payload) < int(size)
             )
         except (UnicodeError, ValueError, TypeError, IndexError,
-                base64.binascii.Error):
+                binascii.Error):
             return False
 
     def _prepare_staged_for_replace(self, temporary, expected_size,
@@ -3179,7 +3216,7 @@ class _ConnectorLogWriter:
             raw = journal.read_text(encoding='utf-8')
             try:
                 manifest = json.loads(raw)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 # Current journals are append-only state records.  If a hard
                 # exit tears the newest append, retain the last complete JSON
                 # line, which is the durable ``preparing`` intent.
@@ -3192,7 +3229,8 @@ class _ConnectorLogWriter:
                     if isinstance(candidate, dict):
                         manifest = candidate
                 if manifest is None:
-                    raise ValueError('connector log journal has no complete state')
+                    raise ValueError(
+                        'connector log journal has no complete state') from exc
             if manifest.get('version') not in (2, 3) or manifest.get('kind') != kind:
                 raise ValueError('unsupported connector log journal version')
             if manifest.get('token') != self._identity_digest:
@@ -3944,7 +3982,7 @@ class _ConnectorLogWriter:
                 self._staging_slot = index
                 self._staging_destination = destinations[index]
 
-                def claim(staged):
+                def claim(staged, index=index):
                     entry = manifest['destinations'][index]
                     staged_identity = self._owner._identity_for(staged)
                     entry['temporary_identity'] = (
@@ -4176,7 +4214,7 @@ class _ConnectorLogWriter:
                 self._staging_slot = index
                 self._staging_destination = destinations[index][0]
 
-                def claim(staged):
+                def claim(staged, index=index):
                     entry = manifest['destinations'][index]
                     staged_identity = self._owner._identity_for(staged)
                     entry['temporary_identity'] = (
@@ -4301,13 +4339,16 @@ class _ConnectorLogWriter:
             raise AssertionError('connector log record exceeded byte ceiling')
         if self._active_bytes and self._active_bytes + len(data) > self._max_bytes:
             self._rotate()
+        handle = self._fh
+        if handle is None:
+            raise OSError('connector log is not open')
         view = memoryview(data)
         while view:
-            written = self._fh.write(view)
+            written = handle.write(view)
             if written is None or written <= 0:
                 raise OSError('short write while appending connector log record')
             view = view[written:]
-        self._fh.flush()
+        handle.flush()
         self._active_bytes += len(data)
 
     def _records_for_line(self, line):
@@ -4509,7 +4550,10 @@ class _EventStreamWriter:
                 self._open_segment()
             if self._size and self._size + len(data) > self._max_bytes:
                 self._rotate()
-            self._fh.write(data)
+            handle = self._fh
+            if handle is None:
+                raise OSError('connector event segment is not open')
+            handle.write(data)
             self._size += len(data)
 
     def close(self):
@@ -4824,4 +4868,26 @@ class _LeechLogWriter:
         return False
 
 
-__all__ = [name for name in globals() if not name.startswith('__')]
+# Only what this module defines. It used to be a comprehension over
+# globals(), which re-listed everything the wildcard imports above had
+# pulled in and, being computed, told no static analyser anything at
+# all. The facade unions the four lists, so the exported set is
+# unchanged; test_module_exports_cover_the_package pins that.
+__all__ = [
+    'PORTABLE_PUBLICATION_ENV',
+    '_ConnectorLogWriter',
+    '_ConnectorOwnership',
+    '_ConnectorOwnershipError',
+    '_EVENT_SEGMENT_RE',
+    '_EventStreamReader',
+    '_EventStreamWriter',
+    '_LEGACY_EVENT_LOG_NAME',
+    '_LeechLogWriter',
+    '_SharedFileLock',
+    '_SharedLockError',
+    '_TornNamedClaimRecord',
+    '_anonymous_publication_available',
+    '_event_segment_name',
+    '_event_segments',
+    '_posix_mode_exposed',
+]

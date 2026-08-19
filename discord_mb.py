@@ -11,16 +11,24 @@ _facade_reload_snapshot = (
     _compat_builtins.dict(_compat_builtins.globals())
     if _compat_builtins.globals().get('_facade_build_complete') else None)
 _facade_reload_active = _facade_reload_snapshot is not None
-_facade_mutation_versions = _compat_builtins.globals().get(
+# Declared before the lookup rather than after it: a reload reuses the previous
+# generation's dict by identity, and stating the type here is what lets a
+# reader (and a type checker) know these are never None inside the functions
+# below, where module-level narrowing does not reach.
+_facade_mutation_versions: dict = {}
+_previous_mutation_versions = _compat_builtins.globals().get(
     '_facade_mutation_versions')
-if _facade_mutation_versions is None:
-    _facade_mutation_versions = {}
-_facade_mutation_depths = _compat_builtins.globals().get(
+if _previous_mutation_versions is not None:
+    _facade_mutation_versions = _previous_mutation_versions
+_facade_mutation_depths: dict = {}
+_previous_mutation_depths = _compat_builtins.globals().get(
     '_facade_mutation_depths')
-if _facade_mutation_depths is None:
-    _facade_mutation_depths = {}
+if _previous_mutation_depths is not None:
+    _facade_mutation_depths = _previous_mutation_depths
 _facade_sync_depth = 0
-_facade_reload_mutation_versions = None
+# Replaced with this generation's snapshot below; declared as a dict so
+# _facade_name_mutated() is not reading a maybe-None module global.
+_facade_reload_mutation_versions: dict = {}
 _active_reload_lock = _compat_builtins.globals().get('_facade_mutation_lock')
 _reload_lock_held = False
 _FACADE_MISSING = _compat_builtins.object()
@@ -35,7 +43,7 @@ def _acquire_reload_lock():
 
 def _release_reload_lock():
     global _reload_lock_held
-    if _reload_lock_held:
+    if _reload_lock_held and _active_reload_lock is not None:
         _reload_lock_held = False
         _active_reload_lock.release()
 
@@ -138,9 +146,7 @@ _previous_compatibility_class_globals = _compat_builtins.globals().get(
 _previous_compatibility_class_specs = _compat_builtins.globals().get(
     '_compatibility_class_specs')
 _facade_mutation_lock = _compat_builtins.globals().get(
-    '_facade_mutation_lock')
-if _facade_mutation_lock is None:
-    _facade_mutation_lock = _compat_threading.RLock()
+    '_facade_mutation_lock') or _compat_threading.RLock()
 
 # A normal import reuses an already-imported local package, preserving type and
 # import-lock semantics. Path imports and mismatched deployments use a private
@@ -460,6 +466,10 @@ for _module in _implementation_modules:
 _release_reload_lock()
 
 
+# The mutable defaults are the point: they freeze this generation's
+# ledgers into the function, so a later reload rebinding the module
+# globals cannot retarget a wrapper that is already in flight.
+# pylint: disable-next=dangerous-default-value
 def _sync_compatibility_overrides_unlocked(
         _modules=_implementation_modules,
         _values=_build_implementation_values,
@@ -933,22 +943,22 @@ def _compatibility_method(function):
 
 def _prepare_compatibility_class(implementation):
     """Build descriptor replacements without mutating the implementation."""
-    replacements = {}
+    prepared = {}
     for name, descriptor in _compat_builtins.tuple(
             implementation.__dict__.items()):
         if _compat_builtins.isinstance(
                 descriptor, _compat_builtins.staticmethod):
-            replacements[name] = _compat_builtins.staticmethod(
+            prepared[name] = _compat_builtins.staticmethod(
                 _compatibility_method(descriptor.__func__))
         elif _compat_builtins.isinstance(
                 descriptor, _compat_builtins.classmethod):
-            replacements[name] = _compat_builtins.classmethod(
+            prepared[name] = _compat_builtins.classmethod(
                 _compatibility_method(descriptor.__func__))
         elif _compat_inspect.isfunction(descriptor):
-            replacements[name] = _compatibility_method(descriptor)
+            prepared[name] = _compatibility_method(descriptor)
         elif _compat_builtins.isinstance(
                 descriptor, _compat_builtins.property):
-            replacements[name] = _compat_builtins.property(
+            prepared[name] = _compat_builtins.property(
                 _compatibility_method(descriptor.fget)
                 if descriptor.fget is not None else None,
                 _compatibility_method(descriptor.fset)
@@ -957,7 +967,7 @@ def _prepare_compatibility_class(implementation):
                 if descriptor.fdel is not None else None,
                 descriptor.__doc__,
             )
-    return replacements
+    return prepared
 
 
 _compatibility_classes = {}
@@ -1112,9 +1122,12 @@ def _facade_name_mutated(name):
 
 
 if _facade_reload_snapshot is not None:
+    # Both are absent on a first import and only populated by a reload.
+    _previous_globals_by_module = _previous_implementation_globals or {}
+    _previous_propagated_by_module = _previous_compatibility_propagated or {}
     for _module in _implementation_modules:
-        _old_globals = _previous_implementation_globals.get(_module, {})
-        for _name in _previous_compatibility_propagated.get(_module, ()):
+        _old_globals = _previous_globals_by_module.get(_module, {})
+        for _name in _previous_propagated_by_module.get(_module, ()):
             if _name in _facade_exports or _name not in _old_globals:
                 continue
             _start_value = _facade_reload_snapshot.get(
@@ -1215,4 +1228,6 @@ _release_reload_lock()
 
 
 if __name__ == '__main__':
-    _cli()
+    # Published into these globals by the re-export loop above, not by a
+    # module-level def, so it has to be looked up rather than named.
+    globals()['_cli']()

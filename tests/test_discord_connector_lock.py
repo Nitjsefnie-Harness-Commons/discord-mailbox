@@ -135,6 +135,9 @@ def test_parent_walk_parses_ppid_after_final_comm_paren(tmp):
         "/proc/200/cmdline": b"node\0/opt/apps/kimi-code/dist/main.mjs\0",
     }
 
+    # Mirrors open(path, mode='r', ...), which is the signature it stands
+    # in for.
+    # pylint: disable-next=keyword-arg-before-vararg
     def fake_open(path, mode="r", *args, **kwargs):
         value = files[str(path)]
         return BytesIO(value) if "b" in mode else StringIO(value)

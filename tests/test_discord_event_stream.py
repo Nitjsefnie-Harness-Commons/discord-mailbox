@@ -7,6 +7,10 @@ share.  These tests drive the writers and the reader cursor directly -- no
 Discord client, no connector process -- and cover the Windows lock path by
 substituting the platform module, so one host exercises every branch.
 """
+# pylint: disable=subprocess-run-check
+# Every subprocess.run below is a probe whose exit status is the
+# assertion; check=True would raise before the test could read it.
+import importlib.util
 import json
 import os
 import subprocess
@@ -368,8 +372,12 @@ def test_leech_log_writes_an_oversized_line_whole(tmp):
 
 def test_leech_log_survives_concurrent_leech_processes(tmp):
     """Real concurrent writers keep every line intact and the file bounded."""
-    m = _mod()  # noqa: F841 -- fail early if the module cannot load at all
+    _mod()                    # fail early if the module cannot load at all
     path = Path(tmp) / "leech.log"
+    # The template's own body uses %-placeholders for the child to fill in,
+    # so the outer substitution stays %-formatted too rather than mixing two
+    # conventions in one string.
+    # pylint: disable=consider-using-f-string
     program = (
         "import os, sys\n"
         "sys.path.insert(0, %r)\n"
@@ -379,6 +387,7 @@ def test_leech_log_survives_concurrent_leech_processes(tmp):
         "for i in range(120):\n"
         "    w.write('[leech %%d] line %%03d %%s' %% (os.getpid(), i, 'z' * 40))\n"
         % (os.path.dirname(os.path.abspath(__file__)), MB, str(path)))
+    # pylint: enable=consider-using-f-string
     children = [subprocess.Popen([sys.executable, "-c", program])
                 for _ in range(4)]
     for child in children:
@@ -403,9 +412,7 @@ def test_leech_log_survives_concurrent_leech_processes(tmp):
 
 def test_shared_lock_uses_flock_on_posix(tmp):
     """The POSIX branch takes a real exclusive flock and releases it."""
-    try:
-        import fcntl  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("fcntl") is None:
         return                                   # not applicable on this host
     m = _mod()
     lock = m._SharedFileLock(Path(tmp) / "leech.log.lock", timeout=0.2)

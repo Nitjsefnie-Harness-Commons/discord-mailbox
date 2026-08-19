@@ -9,6 +9,9 @@ from .connector import *
 # --- CLI ---
 
 
+# A dispatcher: most branches fall through to the implicit None, and a
+# few return a command's exit code straight to SystemExit.
+# pylint: disable-next=inconsistent-return-statements
 def _cli():
     for _stream in (sys.stdout, sys.stderr):
         _reconf = getattr(_stream, 'reconfigure', None)  # absent on non-TextIOWrapper streams
@@ -399,4 +402,12 @@ def _cli():
         leech_main(args.identity, claude_pid=args.claude_pid, flavor=args.flavor)
 
 
-__all__ = [name for name in globals() if not name.startswith('__')]
+# Only what this module defines. It used to be a comprehension over
+# globals(), which re-listed everything the wildcard imports above had
+# pulled in and, being computed, told no static analyser anything at
+# all. The facade unions the four lists, so the exported set is
+# unchanged; test_module_exports_cover_the_package pins that.
+__all__ = [
+    '_cli',
+    '_core',
+]

@@ -15,6 +15,7 @@ __version__ = "0.34.0"
 import argparse
 import asyncio
 import base64
+import binascii
 import codecs
 from collections import deque
 import errno
@@ -112,6 +113,9 @@ __RELOAD_STATE_NAMES = tuple(spec[0] for spec in __SETTING_SPECS) + (
 
 def __refresh_dependencies():
     """Repeat the former monolith's ``from ... import ...`` bindings."""
+    # pylint: disable=reimported
+    # Re-imported on purpose: a reload has to rebind these from scratch,
+    # which is the entire job of this function.
     from collections import deque as current_deque
     from pathlib import Path as current_path
     from typing import Any as current_any
@@ -137,7 +141,7 @@ def __refresh_reload_state(dependencies=None):
     current_path = dependencies['Path']
     current_setting = dependencies['setting']
     home = current_path.home()
-    default_status_plugin = (
+    default_plugin = (
         home / '.claude' / 'skills' / 'discord' /
         'discord_status_default.py')
     kimi_status_plugin = (
@@ -159,7 +163,7 @@ def __refresh_reload_state(dependencies=None):
         'KIMI_TOKEN_DIR': home / '.agent-bundle' / 'discord',
         'CODEX_TOKEN_DIR': home / '.agent-bundle' / 'discord',
         'HOSTNAME': (socket.gethostname() or '?').split('.')[0],
-        'DEFAULT_STATUS_PLUGIN': default_status_plugin,
+        'DEFAULT_STATUS_PLUGIN': default_plugin,
         'KIMI_STATUS_PLUGIN': kimi_status_plugin,
         'CODEX_STATUS_PLUGIN': codex_status_plugin,
         '_PARENT_CMD_PATTERNS': {
@@ -308,8 +312,7 @@ def find_parent_pid_from(start_pid, flavor='claude'):
     matches the flavor CLI. Linux walks /proc; Windows walks via psutil when
     installed (pip install psutil), else returns None — caller can pass
     --claude-pid explicitly. Returns None if not found.'''
-    import re as _re
-    rx = _re.compile(_PARENT_CMD_PATTERNS.get(flavor, _PARENT_CMD_PATTERNS['claude']))
+    rx = re.compile(_PARENT_CMD_PATTERNS.get(flavor, _PARENT_CMD_PATTERNS['claude']))
     if sys.platform == 'win32':
         try:
             import psutil
@@ -345,11 +348,11 @@ def find_parent_pid_from(start_pid, flavor='claude'):
         if rx.search(cmd):
             return pid
         try:
-            with open(f'/proc/{pid}/stat') as f:
-                stat = f.read()
+            with open(f'/proc/{pid}/stat', encoding='utf-8') as f:
+                stat_line = f.read()
             # ``comm`` may itself contain spaces and parentheses. Only the
             # final ')' terminates it; after that come fixed fields state, ppid.
-            tail = stat[stat.rindex(')') + 1:].split()
+            tail = stat_line[stat_line.rindex(')') + 1:].split()
             pid = int(tail[1])
         except (FileNotFoundError, PermissionError, ValueError, IndexError):
             return None
@@ -389,7 +392,8 @@ def pid_cmdline(pid):
         pass
     try:                                   # no /proc (macOS, BSD)
         r = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=5,
+                           check=False)
         return r.stdout.strip() or None
     except Exception:
         return None
@@ -432,7 +436,8 @@ def pid_alive(pid):
     if sys.platform == 'win32':
         try:
             r = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'],
-                               capture_output=True, text=True, timeout=5)
+                               capture_output=True, text=True, timeout=5,
+                               check=False)
             return str(pid) in r.stdout
         except Exception as e:
             # fail-open: don't kill connector on tooling error
@@ -460,8 +465,7 @@ def parse_message_header(content, default_to):
     Both returned values are caller-capped before they go into an event — this
     function does not truncate.
     """
-    import re as _re
-    m = _re.search(r'\*\*\[[^\]\n]*?→([^\]\n]+)\]\*\*[ \t]*([^\n]*)', content or '')
+    m = re.search(r'\*\*\[[^\]\n]*?→([^\]\n]+)\]\*\*[ \t]*([^\n]*)', content or '')
     if m:
         return m.group(1).strip(), m.group(2).strip()
     for line in (content or '').splitlines():
@@ -1040,7 +1044,8 @@ def fetch_usage(timeout=60):
         return {}
     try:
         r = subprocess.run([sys.executable, str(script), '--json', '--quiet'],
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout,
+                           check=False)
         return (json.loads(r.stdout) or {}).get('usage') or {}
     except (subprocess.SubprocessError, OSError, ValueError):
         return {}
@@ -1792,8 +1797,7 @@ def emoji_cli(args):
             return 0
         rows = resp.get('emoji', [])
         if args.grep:
-            import re as _re
-            rx = _re.compile(args.grep, _re.I)
+            rx = re.compile(args.grep, re.I)
             rows = [e for e in rows if rx.search(e['name'])]
         if args.animated:
             rows = [e for e in rows if e['animated']]
@@ -2527,6 +2531,7 @@ __all__ = [
     'attach_extras',
     'attachments_cli',
     'base64',
+    'binascii',
     'build_activity',
     'cancel_tracked_tasks',
     'cap_event_subject',

@@ -73,7 +73,7 @@ def run(path, pl, tmpdir, extra_env=None, timeout=90):
     if extra_env:
         env.update(extra_env)
     r = subprocess.run([sys.executable, path], input=pl, capture_output=True,
-                       env=env, timeout=timeout)
+                       env=env, timeout=timeout, check=False)
     return (r.returncode, r.stdout.decode("utf-8", "replace"),
             r.stderr.decode("utf-8", "replace"))
 

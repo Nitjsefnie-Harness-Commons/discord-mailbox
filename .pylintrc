@@ -50,7 +50,21 @@ disable=
 # File descriptors here are opened, identity-checked, and released in explicit
 # try/finally blocks because the check has to happen between open and use. A
 # with-statement cannot express that.
-    consider-using-with
+    consider-using-with,
+# pylint cannot tell a handler that re-raises to SHIELD an exception from a
+# broader handler below it -- `except _ConnectorOwnershipError: raise` before
+# `except FileExistsError: ...` -- from a genuine no-op. Removing those would
+# silently reroute errors into the wrong recovery path.
+    try-except-raise,
+# A boolean-expression counter on identity checks that must all hold at once.
+    too-many-boolean-expressions,
+# Raised against `try: ... except: ... raise / else: close()`, where the else
+# clause is what says the close happens only on success. De-indenting it, as
+# the message suggests, would lose exactly that.
+    no-else-raise,
+# `x == []` in a suite asserts the value is an empty LIST, not merely falsy.
+# The suggested `not x` would also accept None, 0 and "" -- a weaker test.
+    use-implicit-booleaness-not-comparison
 max-attributes=30
 max-args=10
 max-positional-arguments=10

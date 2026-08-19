@@ -1,0 +1,44 @@
+name: types
+
+# pyright over the shipped package and its facade. The suites are excluded in
+# pyrightconfig.json: they monkeypatch module attributes and replace stdlib
+# modules on purpose, which a type checker can only ever call an error.
+#
+# pythonPlatform is "All" rather than the runner's, because this package
+# genuinely targets both -- the msvcrt branches are as real as the fcntl ones
+# and are guarded at runtime, not by the platform the check happens to run on.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: types-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pyright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install the type checker
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: pyright
+        run: pyright
