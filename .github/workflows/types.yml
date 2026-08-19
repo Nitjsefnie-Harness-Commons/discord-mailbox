@@ -35,10 +35,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Install the type checker
+      - name: Install the type checker and the runtime dependencies
+        # discord.py and psutil are imported by the code being checked, so
+        # without them every `import discord` is an unresolved-import error and
+        # the gate fails on the environment rather than on the source.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt discord.py psutil
 
       - name: pyright
         run: pyright
