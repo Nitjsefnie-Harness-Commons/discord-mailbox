@@ -2727,14 +2727,21 @@ def test_portable_publication_env_forces_the_named_path(tmp):
     """The CI seam that runs the macOS/Windows protocol on a Linux runner."""
     m = _mod()
     available = m._anonymous_publication_available
+    # Not hasattr: _restore_portable ASSIGNS os.O_TMPFILE = None where there
+    # was no attribute to restore, which is every macOS and Windows run, so
+    # after any earlier test in this suite hasattr is True and the value is
+    # None.  The predicate under test reads the value for that reason.
+    def unforced():
+        return getattr(os, "O_TMPFILE", None) is not None and os.name != "nt"
+
     old = os.environ.get("DISCORD_MB_PORTABLE_PUBLICATION")
     try:
         os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "1"
         assert available() is False
         os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "0"
-        assert available() is (hasattr(os, "O_TMPFILE") and os.name != "nt")
+        assert available() is unforced()
         os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION")
-        assert available() is (hasattr(os, "O_TMPFILE") and os.name != "nt")
+        assert available() is unforced()
     finally:
         if old is None:
             os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION", None)
