@@ -1601,7 +1601,28 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
 
 
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
-    """A failing pop cannot leave a partial private package tree behind."""
+    """A failing pop cannot leave a partial private package tree behind.
+
+    Injecting that failure means giving sys.modules a dict subclass, and on
+    macOS 3.12 and 3.13 CPython segfaults under it. faulthandler put the crash
+    inside its own import machinery, during a collection, with no frame from
+    this package on the stack at all:
+
+        Garbage-collecting
+        File "<frozen importlib._bootstrap>", line 488 in
+            _call_with_frames_removed
+        File "<frozen importlib._bootstrap_external>", line 1087 in
+            source_to_code
+
+    A plain import of an unimported stdlib module survives the same swap, so
+    it is not the substitution by itself -- it takes enough allocation to
+    trigger a collection while the import lock is held, which compiling this
+    package's four modules does and importing http.client does not. macOS 3.11
+    and every Linux and Windows lane run the test normally.
+    """
+    if sys.platform == "darwin" and sys.version_info >= (3, 12):
+        _util.skip("CPython segfaults in its own import machinery here; see "
+                   "this test's docstring for the faulthandler stack")
     script = (
         "import contextvars, faulthandler, functools, importlib, "
         "importlib.util, inspect, pathlib, sys, types, uuid\n"
