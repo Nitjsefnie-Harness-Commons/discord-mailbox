@@ -100,9 +100,16 @@ def toplevel_imports(path):
 def runner(tests, tmp_prefix="hooktests_"):
     """Shared main(): run every callable, print PASS/FAIL, return exit code.
 
-    Each test takes one argument: an isolated temp dir."""
+    Each test takes one argument: an isolated temp dir.
+
+    The directory is handed over fully resolved. The connector operates on the
+    realpath of everything it is given, so on a platform whose temporary root
+    is itself a symlink -- macOS resolves /var to /private/var -- an unresolved
+    directory makes every `writer_path == test_path` comparison in the suites
+    false and silently disarms the failure injections built on them."""
     failed = []
     with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
+        tmp = os.path.realpath(tmp)
         for t in tests:
             d = os.path.join(tmp, t.__name__)
             os.makedirs(d, exist_ok=True)
