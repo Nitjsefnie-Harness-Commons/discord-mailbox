@@ -84,3 +84,32 @@ jobs:
         with:
           name: wheel
           path: dist/*.whl
+
+  portable:
+    # macOS has no O_TMPFILE and Windows has no equivalent, so on both of them
+    # every publication takes the portable named path -- a protocol the Linux
+    # lanes above never execute even once, which is how a crash-recovery bug in
+    # it reached CI unnoticed. This lane forces that path on a free runner, and
+    # points TMPDIR at a symlink so the macOS /var -> /private/var aliasing is
+    # exercised with it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip discord.py psutil
+
+      - name: Run every mailbox suite on the portable publication path
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          DISCORD_MB_PORTABLE_PUBLICATION: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/portable-real"
+          ln -sfn "$RUNNER_TEMP/portable-real" "$RUNNER_TEMP/portable-tmp"
+          TMPDIR="$RUNNER_TEMP/portable-tmp" python run_tests.py

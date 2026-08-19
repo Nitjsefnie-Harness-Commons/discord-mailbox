@@ -17,11 +17,43 @@ def _posix_mode_exposed(mode):
     return bool(stat.S_IMODE(mode) & 0o077)
 
 
+PORTABLE_PUBLICATION_ENV = 'DISCORD_MB_PORTABLE_PUBLICATION'
+
+
+def _anonymous_publication_available():
+    """True when a crash before publication can be made invisible.
+
+    Linux hides an unfinished publication in an O_TMPFILE inode that has no
+    pathname until it is complete, so no recovery ever sees a torn one. macOS
+    has no O_TMPFILE and Windows has no equivalent, so both take the portable
+    named path, where every intermediate state is a real directory entry that
+    a crash leaves behind for the next start to reason about.
+
+    Setting DISCORD_MB_PORTABLE_PUBLICATION=1 takes the portable path on a
+    platform that does not need it. That is how CI exercises the macOS and
+    Windows publication protocol on a Linux runner; nothing in normal
+    operation sets it.
+    """
+    if os.environ.get(PORTABLE_PUBLICATION_ENV) == '1':
+        return False
+    return getattr(os, 'O_TMPFILE', None) is not None and os.name != 'nt'
+
+
 # --- Connector storage ---
 # Kept local to avoid import cost for connectorless commands (send, leech, …).
 
 class _ConnectorOwnershipError(RuntimeError):
     """The connector identity or log path is already owned by another process."""
+
+
+class _TornNamedClaimRecord(FileExistsError):
+    """A fixed claim entry whose bytes are not a complete record at all.
+
+    Distinct from a complete record that fails a check.  A record that parses
+    but carries no durable authenticator is a deliberate artifact and is
+    preserved; bytes that do not parse are a write that stopped partway, which
+    only the portable publication path can leave behind at a fixed name.
+    """
 
 
 class _ConnectorOwnership:
@@ -822,10 +854,9 @@ class _ConnectorLogWriter:
         # has no such key, so an exact residue is a preserved collision.
         if cls._recover_named_claim(path, auth_key=auth_key):
             return True
-        tmpfile_flag = getattr(os, 'O_TMPFILE', None)
-        if tmpfile_flag is None or os.name == 'nt':
+        if not _anonymous_publication_available():
             return False
-        flags = os.O_RDWR | tmpfile_flag | getattr(os, 'O_BINARY', 0)
+        flags = os.O_RDWR | os.O_TMPFILE | getattr(os, 'O_BINARY', 0)
         try:
             fd = os.open(str(Path(path).parent), flags, mode)
         except OSError as exc:
@@ -982,6 +1013,11 @@ class _ConnectorLogWriter:
         try:
             record = cls._read_named_claim_record(
                 proof, target, auth_key=auth_key)
+        except _TornNamedClaimRecord:
+            # Reported as itself so recovery can tell a half-written record
+            # from a complete one that failed a check.  Every other caller
+            # still sees a FileExistsError and fails closed as before.
+            raise
         except (FileExistsError, ValueError) as exc:
             raise FileExistsError(
                 errno.EEXIST,
@@ -1161,9 +1197,9 @@ class _ConnectorLogWriter:
         try:
             record = json.loads(bytes(raw).decode('ascii'))
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise FileExistsError(errno.EEXIST,
-                                  'named create claim is not ours',
-                                  os.fspath(claim)) from exc
+            raise _TornNamedClaimRecord(errno.EEXIST,
+                                        'named create claim is torn',
+                                        os.fspath(claim)) from exc
         expected_path = str(Path(os.path.abspath(os.fspath(path))))
         if (not isinstance(record, dict) or
                 record.get('magic') != 'DISCORD-MB-NAMED-CREATE-1' or
@@ -1341,6 +1377,43 @@ class _ConnectorLogWriter:
         return opened_identity, opened_identity
 
     @classmethod
+    def _discard_torn_named_proof(cls, proof, claim_stage, claim):
+        """Drop a half-written proof that never reached publication.
+
+        A torn record can only exist on the portable path, where the fixed
+        proof name exists from the moment the inode is created rather than
+        from the moment its record is complete.  Linux publishes from an
+        anonymous inode, so a crash there is invisible and the next start has
+        nothing to reconcile; leaving the portable residue in place instead
+        wedges every later start of that log for good.
+
+        Discarding is safe exactly when the transaction never got past that
+        first step: the proof is still the only link to its inode, and neither
+        the claim stage nor the canonical claim exists.  Anything further
+        along, any extra link, and any record that merely fails a check rather
+        than failing to parse, is somebody's real state and is preserved.
+        """
+        if os.path.lexists(str(claim_stage)) or os.path.lexists(str(claim)):
+            return False
+        proof = Path(proof)
+        if _linklike(proof):
+            return False
+        try:
+            info = proof.lstat()
+        except OSError:
+            return False
+        if (not stat.S_ISREG(info.st_mode) or
+                getattr(info, 'st_nlink', 1) != 1):
+            return False
+        identity = _ConnectorOwnership._identity_for(proof)
+        entry_identity = _ConnectorOwnership._entry_identity(proof)
+        if identity is None:
+            return False
+        removed = cls._unlink_if_identity(proof, identity, entry_identity)
+        cls._fsync_directory(proof.parent)
+        return removed
+
+    @classmethod
     def _recover_named_claim(cls, path, auth_key=None):
         temporary, claim, payload_path = cls._named_publish_paths(path)
         claim_stage = cls._named_claim_staging_path(path)
@@ -1349,7 +1422,12 @@ class _ConnectorLogWriter:
         # A fixed pathname is not an ownership token.  The only recovery
         # authority is a MAC made with a durable key; without that key every
         # exact proof/stage entry is preserved and startup fails closed.
-        proof_info = cls._read_named_claim_proof(proof, auth_key=auth_key)
+        try:
+            proof_info = cls._read_named_claim_proof(proof, auth_key=auth_key)
+        except _TornNamedClaimRecord:
+            if not cls._discard_torn_named_proof(proof, claim_stage, claim):
+                raise
+            proof_info = None
         stage_exists = os.path.lexists(str(claim_stage))
         if proof_info is None:
             if stage_exists:
@@ -2528,9 +2606,27 @@ class _ConnectorLogWriter:
                 self._read_staged_payload(
                     temporary, require_provenance=True, **context)
             except RuntimeError:
-                continue
+                # An exclusive create that died before its journal append is
+                # only reachable on the portable path, where the name exists
+                # from the moment of creation.  It leaves an empty entry at a
+                # name this transaction alone planned.  Nothing distinguishes
+                # that from an empty foreign collision, and nothing needs to:
+                # an empty file has no content a deletion could lose, while
+                # keeping it strands one hidden temp per hard restart.  Any
+                # collision carrying bytes still survives untouched.
+                if not self._planned_temp_is_empty(temporary):
+                    continue
             self._unlink_if_identity(
                 temporary, current_identity, current_entry_identity)
+
+    @staticmethod
+    def _planned_temp_is_empty(temporary):
+        """True for a zero-length regular file at a planned temp name."""
+        try:
+            info = temporary.lstat()
+        except OSError:
+            return False
+        return stat.S_ISREG(info.st_mode) and info.st_size == 0
 
     def _cleanup_journal_temp(self, journal, kind):
         """Keep legacy journal temps: a pathname and JSON are not ownership.
@@ -2669,10 +2765,9 @@ class _ConnectorLogWriter:
         bytes, so a crash before the journal identity callback is recoverable
         by envelope authentication rather than pathname adoption.
         """
-        tmpfile_flag = getattr(os, 'O_TMPFILE', None)
-        if tmpfile_flag is None or os.name == 'nt':
+        if not _anonymous_publication_available():
             return None
-        flags = os.O_RDWR | tmpfile_flag | getattr(os, 'O_BINARY', 0)
+        flags = os.O_RDWR | os.O_TMPFILE | getattr(os, 'O_BINARY', 0)
         try:
             fd = os.open(str(directory), flags, 0o600)
         except OSError as exc:

@@ -2723,6 +2723,25 @@ else:
 '''
 
 
+def test_portable_publication_env_forces_the_named_path(tmp):
+    """The CI seam that runs the macOS/Windows protocol on a Linux runner."""
+    m = _mod()
+    available = m._anonymous_publication_available
+    old = os.environ.get("DISCORD_MB_PORTABLE_PUBLICATION")
+    try:
+        os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "1"
+        assert available() is False
+        os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "0"
+        assert available() is (hasattr(os, "O_TMPFILE") and os.name != "nt")
+        os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION")
+        assert available() is (hasattr(os, "O_TMPFILE") and os.name != "nt")
+    finally:
+        if old is None:
+            os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION", None)
+        else:
+            os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = old
+
+
 def _force_portable(mod):
     old = getattr(mod.os, "O_TMPFILE", None)
     mod.os.O_TMPFILE = None
@@ -2736,8 +2755,19 @@ def _restore_portable(mod, old):
         mod.os.O_TMPFILE = old
 
 
-def test_connector_named_fallback_partial_first_claim_is_bounded_and_fail_closed(tmp):
-    """A torn unauthenticated bootstrap claim is bounded and preserved."""
+def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(tmp):
+    """A torn bootstrap claim is bounded and does not wedge the next start.
+
+    The torn record is never adopted -- its bytes cannot even be parsed, let
+    alone authenticated -- but it must not survive as a permanent barrier
+    either.  On Linux this residue cannot exist at all: publication happens
+    from an anonymous inode, so a crash leaves no name behind.  The portable
+    path names the proof from the moment it is created, and a proof that no
+    start can get past would brick that log on macOS and Windows for good.
+
+    The complete-but-unauthenticated case, which IS preserved and fails
+    closed, is covered by the forged-proof tests below.
+    """
     scenarios = (("key", 190), ("migrate", 191), ("rotate", 192))
     for kind, code in scenarios:
         case = Path(tmp) / f"partial-first-claim-{kind}"
@@ -2779,21 +2809,18 @@ def test_connector_named_fallback_partial_first_claim_is_bounded_and_fail_closed
         m = _mod()
         old = _force_portable(m)
         try:
-            for _ in range(2):
-                try:
-                    m._ConnectorLogWriter(
-                        path, max_bytes=32 if kind == "rotate" else 16,
-                        backup_count=1, lock_root=lock_root)
-                except (OSError, RuntimeError):
-                    pass
-                else:
-                    raise AssertionError(
-                        f"{kind} unauthenticated partial claim was adopted")
-                assert proof.exists()
+            for attempt in range(2):
+                writer = m._ConnectorLogWriter(
+                    path, max_bytes=32 if kind == "rotate" else 16,
+                    backup_count=1, lock_root=lock_root)
+                writer.close()
+                assert not proof.exists(), (
+                    f"{kind} torn claim survived start {attempt}")
         finally:
             _restore_portable(m, old)
 
-        assert len(list(lock_root.glob("*.create-proof"))) == 1
+        assert not list(lock_root.glob("*.create-proof"))
+        assert not list(lock_root.glob("*.create.*"))
 
 
 def _claim_swap_restore(mod, claim):
