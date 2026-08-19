@@ -1,6 +1,17 @@
 {
     "typeCheckingMode": "basic",
     "pythonVersion": "3.13",
-    "include": ["."],
-    "exclude": ["**/__pycache__", "docs", "examples", ".venv", "node_modules"]
+    "include": [
+        "discord_mb.py",
+        "discord_mb_lib"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "docs",
+        "examples",
+        ".venv",
+        "node_modules"
+    ],
+    "reportMissingModuleSource": "none",
+    "pythonPlatform": "All"
 }

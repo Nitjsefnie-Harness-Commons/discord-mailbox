@@ -5,6 +5,13 @@ __version__ = "0.34.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
+# pylint: disable=used-before-assignment
+# The globals that __refresh_reload_state() injects are declared in the
+# TYPE_CHECKING block below, so that readers and both gates can see them.
+# pylint treats that block as not taken and reports every use of those names as
+# a use before assignment. Nothing else here can trip the check: every other
+# module global is a plain def or a module-level assignment.
+
 import argparse
 import asyncio
 import base64
@@ -26,7 +33,38 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+# Declared for readers and static analysis only; never executed, because
+# TYPE_CHECKING is False at runtime. Every name here is bound at import by
+# globals().update(__refresh_reload_state()) below and rebound on each facade
+# reload, so nothing that only reads the source can see it -- which is why both
+# the type checker and the linter reported all of them as undefined.
+if TYPE_CHECKING:  # pragma: no cover
+    from ._settings import setting
+    from ._temp_provenance import _linklike, ensure_owned_temp_dir
+
+    BRIDGE_CHANNEL_NAME: str
+    DIRECTORY_CHANNEL_NAME: str
+    ATTACHMENTS_CHANNEL_NAME: str
+    CREDS_CHANNEL_NAME: str
+    BROADCAST_ROLE_NAME: str
+    META_CATEGORY_NAME: str
+    SCRIPT_ROOT: Path
+    _DEFAULT_CONNECTOR_LOCK_ROOT: Path
+    STATE_ROOT: Path
+    TOKEN_DIR: Path
+    KIMI_TOKEN_DIR: Path
+    CODEX_TOKEN_DIR: Path
+    HOSTNAME: str
+    DEFAULT_STATUS_PLUGIN: Path
+    KIMI_STATUS_PLUGIN: Path
+    CODEX_STATUS_PLUGIN: Path
+    _PARENT_CMD_PATTERNS: dict
+    _DUR_UNITS: dict
+    _FLAVOR_STATUS_PLUGINS: dict
+    _EXTENSION_FLAVOR_DIRS: dict
+
 
 # Force UTF-8 on stdout (Windows consoles default to a legacy codepage that
 # cannot encode the emoji this tool emits). Guarded by a marker on `sys`, which
@@ -889,7 +927,10 @@ def duration_secs(text):
     'Seconds in a "4d11h" / "6h54m" style duration, or None if unparseable.'
     if not isinstance(text, str):
         return None
-    total = sum(int(n) * _DUR_UNITS[u.lower()] for n, u in _DUR_RE.findall(text))
+    # Bound locally: inside a comprehension the linter cannot see a name
+    # that only the TYPE_CHECKING block declares.
+    units = _DUR_UNITS
+    total = sum(int(n) * units[u.lower()] for n, u in _DUR_RE.findall(text))
     return total or None
 
 
@@ -2418,8 +2459,164 @@ def status_plugin_cli(args):
             print(f"error:   {resp.get('error')}")
 
 
+# Spelled out rather than comprehended from globals(): a computed __all__ is
+# opaque to every static analyser, so the three modules that do
+# `from .core import *` were left with no resolvable names at all.
+# test_core_exports_match_the_module_namespace pins this list against the
+# namespace it describes, so a new public name cannot drift out of it quietly.
 __all__ = [
-    name for name in globals()
-    if (not name.startswith('__')
-        and not name.startswith('_discord_mb_class_')
-        and name != 'SCRIPT_ROOT')]
+    'ATTACHMENTS_CHANNEL_NAME',
+    'Any',
+    'BRIDGE_CHANNEL_NAME',
+    'BROADCAST_ROLE_NAME',
+    'CODEX_STATUS_PLUGIN',
+    'CODEX_TOKEN_DIR',
+    'CONNECTOR_LOG_BACKUP_COUNT',
+    'CONNECTOR_LOG_MAX_BYTES',
+    'CREDS_CHANNEL_NAME',
+    'CREDS_TEMPLATE',
+    'DEFAULT_STATUS_PLUGIN',
+    'DIRECTORY_CHANNEL_NAME',
+    'EVENT_STREAM_RETAINED_SEGMENTS',
+    'EVENT_STREAM_SEGMENT_MAX_BYTES',
+    'FORUM_POST_HISTORY_LIMIT',
+    'HOSTNAME',
+    'KIMI_STATUS_PLUGIN',
+    'KIMI_TOKEN_DIR',
+    'LEECH_LOG_BACKUP_COUNT',
+    'LEECH_LOG_MAX_BYTES',
+    'MAX_BODY',
+    'MAX_BODY_TOTAL',
+    'META_CATEGORY_NAME',
+    'Path',
+    'RECEIPT_EMOJI',
+    'STATE_ROOT',
+    'STATUS_KINDS',
+    'STATUS_MANIFEST_NAME',
+    'STATUS_PLUGIN_NAME',
+    'SendError',
+    'SendRetry',
+    'StatusPluginGatewayTransportError',
+    'TOKEN_DIR',
+    'TYPE_CHECKING',
+    'USAGE_CLAIM_REFRESH',
+    'USAGE_CLAIM_TTL',
+    'USAGE_PACE_BAND',
+    'USAGE_PROVIDERS',
+    'USAGE_STATUS_INTERVAL',
+    'USAGE_STATUS_JITTER',
+    'USAGE_STATUS_LOCK_TTL',
+    'USAGE_STATUS_POLL',
+    'USAGE_WINDOWS',
+    '_CHUNK_FRAME_RE',
+    '_CLAIM_RE',
+    '_DEFAULT_CONNECTOR_LOCK_ROOT',
+    '_DUR_RE',
+    '_DUR_UNITS',
+    '_EXTENSION_FLAVOR_DIRS',
+    '_ExtensionContext',
+    '_FLAVOR_STATUS_PLUGINS',
+    '_PARENT_CMD_PATTERNS',
+    '_TEST_LOCK_ROOT_ENV',
+    '_ensure_state_root',
+    '_flat_component',
+    '_linklike',
+    '_meta_request',
+    'argparse',
+    'asyncio',
+    'attach_extras',
+    'attachments_cli',
+    'base64',
+    'build_activity',
+    'cancel_tracked_tasks',
+    'cap_event_subject',
+    'channels_cli',
+    'chunk_body',
+    'claim_usage_slot',
+    'coarse_duration',
+    'codecs',
+    'context_cli',
+    'continuation_chunk_for',
+    'conversation_cli',
+    'creds_cli',
+    'default_status_plugin',
+    'deque',
+    'duration_secs',
+    'embed_record',
+    'emoji_cli',
+    'ensure_owned_temp_dir',
+    'errno',
+    'extension_cli',
+    'extension_dir',
+    'extension_registry_path',
+    'fetch_usage',
+    'find_claude_pid_from',
+    'find_parent_pid_from',
+    'flatten_components',
+    'forum_cli',
+    'hashlib',
+    'heartbeat_due',
+    'hmac',
+    'inbox_dir',
+    'install_status_plugin',
+    'io',
+    'is_connector_process',
+    'json',
+    'list_agents_cli',
+    'load_extension',
+    'load_status_plugin',
+    'message_cli',
+    'message_extras',
+    'meta_in_dir',
+    'meta_out_dir',
+    'move_cli',
+    'moved_body',
+    'moved_frames',
+    'msg_cache_dir',
+    'os',
+    'outbox_dir',
+    'pace_dot',
+    'parse_claim_name',
+    'parse_message_header',
+    'pid_alive',
+    'pid_cmdline',
+    'pins_cli',
+    'pins_dir',
+    'poll_record',
+    'random',
+    're',
+    'read_extension_registry',
+    'read_status_manifest',
+    'recover_status_plugin_after_gateway',
+    'recovery_label',
+    'register_cli',
+    'render_claim_name',
+    'render_usage_name',
+    'replay_last_presence',
+    'resolve_token_and_flavor',
+    'run_status_plugin_task',
+    'send',
+    'servers_cli',
+    'setting',
+    'setup_main',
+    'socket',
+    'stat',
+    'state_dir',
+    'status_plugin_cli',
+    'status_plugin_failure_is_transport',
+    'status_plugin_gateway_call',
+    'status_plugin_slot',
+    'status_presence_record',
+    'subprocess',
+    'sweep_status_plugin',
+    'sys',
+    'tempfile',
+    'thread_cli',
+    'time',
+    'topic_cli',
+    'usage_gate_paths',
+    'usage_period',
+    'uuid',
+    'write_extension_registry',
+    'write_status_manifest',
+]

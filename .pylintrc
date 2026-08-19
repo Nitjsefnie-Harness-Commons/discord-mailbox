@@ -1,5 +1,8 @@
 [MASTER]
 
+# Every disable below is a pattern this codebase uses deliberately, not a
+# finding waved through. The gate exists for real defects; a rule the code
+# structurally cannot satisfy is the one that trains people to ignore output.
 [MESSAGES CONTROL]
 disable=
     line-too-long,
@@ -14,7 +17,40 @@ disable=
     broad-exception-caught,
     broad-exception-raised,
     global-statement,
-    too-few-public-methods
+    too-few-public-methods,
+# The package is one logical unit split across four modules, and its whole
+# hardened surface -- _ConnectorOwnership, _ConnectorLogWriter, every staging
+# and journal helper -- is underscore-prefixed. The public surface is the CLI
+# in discord_mb.py. Cross-module access to those internals is the design.
+    protected-access,
+# Lazy imports are deliberate: connectorless commands (send, leech, ...) must
+# not pay for discord.py or psutil at import. test_discord_extras.py pins the
+# module-level import set, so promoting one back to the top is caught there.
+    import-outside-toplevel,
+# discord_mb.py is a compatibility facade that must extend sys.path before it
+# can import the package it re-exports. Same reason setup.cfg ignores E402.
+    wrong-import-position,
+# The package re-exports through `from .core import *` on purpose; core.__all__
+# is a literal list and test_core_exports_match_the_module_namespace pins it.
+    wildcard-import,
+    unused-wildcard-import,
+# Size and branch metrics. This is dense crash-recovery code whose functions
+# are long because the protocol steps belong together; splitting them to
+# satisfy a counter would make the ordering harder to verify, not easier.
+    too-many-lines,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-return-statements,
+    too-many-nested-blocks,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-instance-attributes,
+    too-many-public-methods,
+# File descriptors here are opened, identity-checked, and released in explicit
+# try/finally blocks because the check has to happen between open and use. A
+# with-statement cannot express that.
+    consider-using-with
 max-attributes=30
 max-args=10
 max-positional-arguments=10

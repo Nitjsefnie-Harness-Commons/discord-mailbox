@@ -2006,6 +2006,34 @@ def test_cli_reads_the_live_facade_docstring(tmp):
     assert result.returncode == 0, result.stderr
 
 
+def test_core_exports_match_the_module_namespace(tmp):
+    """core.__all__ is now a literal, so nothing recomputes it on drift.
+
+    It was a comprehension over globals(), which no static analyser can
+    evaluate -- `from .core import *` therefore resolved to nothing in the
+    three modules that do it. Spelling the list out fixed that and introduced
+    the usual hazard of a hand-maintained export list: a new public name that
+    silently never reaches the facade. This recomputes the old expression and
+    requires the two to agree.
+    """
+    # Through the facade, never `from discord_mb_lib import core`: this
+    # package is also installed as a wheel, so a bare import resolves to
+    # site-packages and the test would pass while describing somebody else's
+    # copy of core.py.
+    core = _util.load(MB, "mb_core_exports")._core_module
+
+    expected = sorted(
+        name for name in vars(core)
+        if (not name.startswith('__')
+            and not name.startswith('_discord_mb_class_')
+            and name != 'SCRIPT_ROOT'))
+    declared = sorted(core.__all__)
+    assert declared == expected, (
+        "core.__all__ has drifted from the module namespace.\n"
+        f"missing from __all__: {sorted(set(expected) - set(declared))}\n"
+        f"stale in __all__:     {sorted(set(declared) - set(expected))}")
+
+
 def _functions_calling_os_open(path):
     """(line, name, source) for every function that calls os.open with flags.
 
