@@ -692,6 +692,7 @@ def test_connector_log_migration_uses_validated_payload_after_temp_rebound(tmp):
     real_read = m._ConnectorLogWriter._read_staged_payload
     swapped = {"done": False}
     rebound = {"path": None}
+
     def validate_then_replace(self, temporary, *args, **kwargs):
         payload = real_read(self, temporary, *args, **kwargs)
         destination = kwargs.get("expected_destination")
@@ -2277,6 +2278,7 @@ def test_connector_log_exact_temp_collision_is_never_adopted_or_deleted(tmp):
         collision.write_bytes(b"KEEP-ME-COLLISION")
 
         original_owned_temp_path = m._ConnectorLogWriter._owned_temp_path
+
         def collide(owner, requested_kind, index, directory=None):
             if requested_kind == kind:
                 return collision
@@ -2960,6 +2962,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 
     real_read = m._ConnectorLogWriter._read_staged_payload
     swapped = {"done": False}
+
     def validate_then_replace(self, temporary, *args, **kwargs):
         payload = real_read(self, temporary, *args, **kwargs)
         if not swapped["done"]:
@@ -4534,7 +4537,7 @@ if kind == "rotate":
         for _ in range(attempts):
             crashed = subprocess.run(
                 [sys.executable, "-c", child, str(Path(MB)), str(path),
-                kind, str(code), str(lock_root)], capture_output=True,
+                 kind, str(code), str(lock_root)], capture_output=True,
             )
             assert crashed.returncode == code, (
                 kind, crashed.returncode,
@@ -5024,7 +5027,7 @@ def test_connector_log_collision_after_migration_journal_publish_is_preserved(tm
         collision.write_bytes(b"KEEP-PLANNED-COLLISION")
 
         restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                                           lock_root=lock_root)
+                                          lock_root=lock_root)
         restarted.close()
         assert collision.read_bytes() == b"KEEP-PLANNED-COLLISION"
 
@@ -5092,7 +5095,7 @@ def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
         staged.write_bytes(forged)
 
         restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                                           lock_root=lock_root)
+                                          lock_root=lock_root)
         restarted.close()
         assert staged.read_bytes() == forged
 
@@ -5245,6 +5248,7 @@ def test_connector_cli_preserves_custom_log_path(tmp):
     seen = {}
     original = m.ConnectorApp
     old_argv = sys.argv
+
     class FakeConnectorApp:
         def __init__(self, *args, **kwargs):
             seen.update(args=args, kwargs=kwargs)

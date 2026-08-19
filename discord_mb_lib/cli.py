@@ -8,6 +8,7 @@ from .connector import *
 
 # --- CLI ---
 
+
 def _cli():
     for _stream in (sys.stdout, sys.stderr):
         _reconf = getattr(_stream, 'reconfigure', None)  # absent on non-TextIOWrapper streams
@@ -396,5 +397,6 @@ def _cli():
             log_path=args.log_path, flavor=args.flavor).run()
     elif args.command == 'leech':
         leech_main(args.identity, claude_pid=args.claude_pid, flavor=args.flavor)
+
 
 __all__ = [name for name in globals() if not name.startswith('__')]

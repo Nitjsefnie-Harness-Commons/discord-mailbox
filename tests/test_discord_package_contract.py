@@ -1535,6 +1535,7 @@ def test_facade_code_objects_name_the_installed_module(tmp):
         timeout=30)
     assert result.returncode == 0, result.stderr
 
+
 def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
     """Deleting an original facade global removes the split global too."""
     script = (
@@ -1843,6 +1844,7 @@ def test_facade_connector_main_source_is_the_real_implementation(tmp):
     origin = Path(inspect.getsourcefile(m.connector_main))
     assert origin.is_file() and origin.name == "connector.py", origin
 
+
 def test_fetch_usage_resolves_helper_from_current_facade_file(tmp):
     """The public facade's current location selects its usage helper."""
     m = _util.load(MB, "discord_usage_helper_location")
@@ -1931,6 +1933,7 @@ def test_package_fetch_usage_is_quiet_without_any_helper(tmp):
         else:
             os.environ["DISCORD_MB_USAGE_QUERY"] = original_env
 
+
 def test_star_import_does_not_leak_facade_build_temporaries(tmp):
     """Refactor-only loop state must not overwrite caller globals."""
     script = (
@@ -1975,6 +1978,7 @@ def test_projected_classes_keep_working_source_locations(tmp):
         [sys.executable, "-c", script], capture_output=True, text=True,
         timeout=30)
     assert result.returncode == 0, result.stderr
+
 
 def test_cli_reads_the_live_facade_docstring(tmp):
     """The importable CLI retains the monolith's dynamic ``__doc__`` lookup."""

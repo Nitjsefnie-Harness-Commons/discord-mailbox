@@ -790,18 +790,18 @@ class _ConnectorLogWriter:
             after = path.lstat()
         except OSError as exc:
             raise RuntimeError(f'connector staging key disappeared: {path}') from exc
-        if (_linklike(path) or
-                before_identity != (
-                    str(getattr(opened, 'st_dev', None)),
-                    str(getattr(opened, 'st_ino', None)),
-                ) or
-                before_identity != (
-                    str(getattr(after, 'st_dev', None)),
-                    str(getattr(after, 'st_ino', None)),
-                ) or
-                (getattr(opened, 'st_dev', None), getattr(opened, 'st_ino', None)) !=
-                (getattr(after_open, 'st_dev', None), getattr(after_open, 'st_ino', None))):
-                raise RuntimeError(f'connector staging key changed while reading: {path}')
+        opened_identity = (getattr(opened, 'st_dev', None),
+                           getattr(opened, 'st_ino', None))
+        reopened_identity = (getattr(after_open, 'st_dev', None),
+                             getattr(after_open, 'st_ino', None))
+        if (_linklike(path)
+                or before_identity != (str(opened_identity[0]),
+                                       str(opened_identity[1]))
+                or before_identity != (str(getattr(after, 'st_dev', None)),
+                                       str(getattr(after, 'st_ino', None)))
+                or opened_identity != reopened_identity):
+            raise RuntimeError(
+                f'connector staging key changed while reading: {path}')
         return b''.join(chunks)
 
     @staticmethod
@@ -3177,9 +3177,9 @@ class _ConnectorLogWriter:
         kind = kind or manifest.get('kind')
         transaction_nonce = manifest.get('transaction_nonce')
         for index, (destination, temporary, present, expected_size, expected_digest,
-             in_place, before_identity, before_entry_identity,
-             temporary_identity, temporary_entry_identity, before_size,
-             before_digest, before_present) in enumerate(destinations):
+                    in_place, before_identity, before_entry_identity,
+                    temporary_identity, temporary_entry_identity, before_size,
+                    before_digest, before_present) in enumerate(destinations):
             destination_paths.add(destination)
             raw_entries = manifest.get('destinations', [])
             entry = (raw_entries[index] if isinstance(raw_entries, list) and
@@ -3378,9 +3378,9 @@ class _ConnectorLogWriter:
         self._validate_recovery_states(manifest, root, destinations, sources)
         destination_paths = {destination for destination, *_ in destinations}
         for index, (destination, temporary, _present, expected_size, expected_digest,
-             in_place, _before_identity, _before_entry_identity,
-             temporary_identity, temporary_entry_identity, _before_size,
-             _before_digest, _before_present) in enumerate(destinations):
+                    in_place, _before_identity, _before_entry_identity,
+                    temporary_identity, temporary_entry_identity, _before_size,
+                    _before_digest, _before_present) in enumerate(destinations):
             complete = False
             if destination.is_file():
                 complete = self._file_matches_state(
@@ -3438,10 +3438,10 @@ class _ConnectorLogWriter:
             self._unlink_if_identity(
                 source, source_identity, source_entry_identity)
         for index, (destination, temporary, _present, expected_size,
-             expected_digest, _in_place, _before_identity,
-             _before_entry_identity, _temporary_identity,
-             _temporary_entry_identity, _before_size, _before_digest,
-             _before_present) in enumerate(destinations):
+                    expected_digest, _in_place, _before_identity,
+                    _before_entry_identity, _temporary_identity,
+                    _temporary_entry_identity, _before_size, _before_digest,
+                    _before_present) in enumerate(destinations):
             if temporary.exists():
                 self._read_staged_payload(
                     temporary, expected_size=expected_size,
@@ -3531,9 +3531,9 @@ class _ConnectorLogWriter:
 
         self._validate_recovery_states(manifest, root, destinations)
         for index, (destination, temporary, present, expected_size, expected_digest,
-             in_place, _before_identity, _before_entry_identity,
-             temporary_identity, temporary_entry_identity, _before_size,
-             _before_digest, _before_present) in enumerate(destinations):
+                    in_place, _before_identity, _before_entry_identity,
+                    temporary_identity, temporary_entry_identity, _before_size,
+                    _before_digest, _before_present) in enumerate(destinations):
             if not present:
                 if temporary is not None and temporary.exists():
                     self._read_staged_payload(
@@ -3597,10 +3597,10 @@ class _ConnectorLogWriter:
 
         self._validate_recovery_states(manifest, root, destinations)
         for index, (destination, temporary, _present, expected_size,
-             expected_digest, _in_place, _before_identity,
-             _before_entry_identity, _temporary_identity,
-             _temporary_entry_identity, _before_size, _before_digest,
-             _before_present) in enumerate(destinations):
+                    expected_digest, _in_place, _before_identity,
+                    _before_entry_identity, _temporary_identity,
+                    _temporary_entry_identity, _before_size, _before_digest,
+                    _before_present) in enumerate(destinations):
             if temporary is not None and temporary.exists():
                 self._read_staged_payload(
                     temporary, expected_size=expected_size,
@@ -3839,6 +3839,7 @@ class _ConnectorLogWriter:
                 self._staging_kind = 'migrate'
                 self._staging_slot = index
                 self._staging_destination = destinations[index]
+
                 def claim(staged):
                     entry = manifest['destinations'][index]
                     staged_identity = self._owner._identity_for(staged)
@@ -4070,6 +4071,7 @@ class _ConnectorLogWriter:
                 self._staging_kind = 'rotate'
                 self._staging_slot = index
                 self._staging_destination = destinations[index][0]
+
                 def claim(staged):
                     entry = manifest['destinations'][index]
                     staged_identity = self._owner._identity_for(staged)
@@ -4715,5 +4717,6 @@ class _LeechLogWriter:
     def __exit__(self, exc_type, exc, tb):
         self.close()
         return False
+
 
 __all__ = [name for name in globals() if not name.startswith('__')]

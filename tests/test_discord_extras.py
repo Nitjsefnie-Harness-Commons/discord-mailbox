@@ -71,6 +71,7 @@ class _Snapshot:
     The COMPONENTS and EMBEDS are real discord.py objects either way — only the
     container is synthetic, so the code under test sees what it sees in
     production."""
+
     def __init__(self, data, discord, factory):
         self.content = data.get("content") or ""
         self.attachments = []
@@ -278,6 +279,7 @@ def test_status_plugin_transport_failure_is_retried_after_reconnect(_tmp):
     ClientConnectionResetError = type(
         "ClientConnectionResetError", (Exception,),
         {"__module__": "aiohttp.client_exceptions"})
+
     async def gateway_failure(exc):
         async def call():
             raise exc

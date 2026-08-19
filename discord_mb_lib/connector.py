@@ -3,6 +3,7 @@
 from .core import *
 from .storage import *
 
+
 def leech_main(identity, claude_pid=None, log_path=None, flavor=None):
     '''Read-only companion to a RUNNING connector ("leech"): lets a SECOND
     session receive this identity's traffic. The master connector streams every
@@ -309,7 +310,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             sweep_status_plugin(identity)
         except Exception as e:
             log(f'status-plugin startup sweep failed: {type(e).__name__}: {e}')
-
 
         intents = discord.Intents.default()
         intents.message_content = True
@@ -1073,12 +1073,14 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         seen, posts = set(), []
         for t in getattr(forum, 'threads', []):
             if t.id not in seen:
-                seen.add(t.id); posts.append(entry(t))
+                seen.add(t.id)
+                posts.append(entry(t))
         if include_archived:
             try:
                 async for t in forum.archived_threads(limit=limit):
                     if t.id not in seen:
-                        seen.add(t.id); posts.append(entry(t))
+                        seen.add(t.id)
+                        posts.append(entry(t))
             except Exception as e:
                 log(f'archived_threads fetch failed for forum {forum.id}: {type(e).__name__}: {e}')
         posts.sort(key=lambda p: p['created'] or '', reverse=True)   # newest first
@@ -2642,6 +2644,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         raise sweep_error.with_traceback(sweep_tb)
     if cleanup_error is not None:
         raise cleanup_error.with_traceback(cleanup_error.__traceback__)
+
 
 class ConnectorApp:
     """Configuration and execution boundary for one connector lifecycle.

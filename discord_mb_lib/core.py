@@ -881,6 +881,8 @@ def pace_dot(pct, pace_pct, band=USAGE_PACE_BAND):
 
 
 _DUR_RE = re.compile(r'(\d+)\s*([dhms])', re.IGNORECASE)
+
+
 def duration_secs(text):
     'Seconds in a "4d11h" / "6h54m" style duration, or None if unparseable.'
     if not isinstance(text, str):
@@ -1740,9 +1742,11 @@ def emoji_cli(args):
     if action == 'list':
         resp = _meta_request(args.identity, {'op': 'emoji-list', 'server': args.server}, args.timeout)
         if not resp.get('ok'):
-            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr); return 1
+            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr)
+            return 1
         if args.json:
-            print(json.dumps(resp.get('emoji', []), indent=2)); return 0
+            print(json.dumps(resp.get('emoji', []), indent=2))
+            return 0
         rows = resp.get('emoji', [])
         if args.grep:
             import re as _re
@@ -1761,7 +1765,8 @@ def emoji_cli(args):
     if action == 'upload':
         path = os.path.abspath(os.path.expanduser(args.path))
         if not os.path.isfile(path):
-            print(f'error: no such file: {path}', file=sys.stderr); return 1
+            print(f'error: no such file: {path}', file=sys.stderr)
+            return 1
         raw = open(path, 'rb').read()
         if len(raw) > 256 * 1024:
             print(f"error: {len(raw)/1024:.0f} KB, over Discord's 256 KB emoji cap", file=sys.stderr)
@@ -1771,7 +1776,8 @@ def emoji_cli(args):
                                              'name': name,
                                              'image': base64.b64encode(raw).decode()}, args.timeout)
         if not resp.get('ok'):
-            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr); return 1
+            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr)
+            return 1
         print(f"created :{resp['name']}: id={resp['id']} animated={resp['animated']} "
               f"({resp['bytes']} bytes) in {resp['server_name']}")
         print(f"  paste: {resp['ref']}")
@@ -1780,7 +1786,8 @@ def emoji_cli(args):
         resp = _meta_request(args.identity, {'op': 'emoji-delete', 'server': args.server,
                                              'ref': args.emoji}, args.timeout)
         if not resp.get('ok'):
-            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr); return 1
+            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr)
+            return 1
         print(f"deleted :{resp['name']}: (id={resp['id']}) from {resp['server_name']}")
         print("  note: <:name:id> refs in existing messages now point at a dead id")
         return 0
@@ -1788,7 +1795,8 @@ def emoji_cli(args):
         resp = _meta_request(args.identity, {'op': 'emoji-rename', 'server': args.server,
                                              'ref': args.emoji, 'name': args.name}, args.timeout)
         if not resp.get('ok'):
-            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr); return 1
+            print(f"error: {resp.get('error', 'unknown')}", file=sys.stderr)
+            return 1
         print(f"renamed :{resp['old_name']}: -> :{resp['name']}: (id unchanged: {resp['id']})")
         print(f"  paste: {resp['ref']}")
         return 0
@@ -2406,6 +2414,7 @@ def status_plugin_cli(args):
             print(f"status:  kind={ls.get('kind')} text={ls.get('text')!r} set_at={ls.get('set_at')}")
         if resp.get('error'):
             print(f"error:   {resp.get('error')}")
+
 
 __all__ = [
     name for name in globals()
