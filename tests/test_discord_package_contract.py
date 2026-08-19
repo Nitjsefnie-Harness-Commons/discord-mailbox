@@ -858,11 +858,18 @@ def test_reload_rebinds_from_import_dependencies(tmp):
         "from discord_mb_lib import core, storage, connector, cli\n"
         "modules = (core, storage, connector, cli)\n"
         "real_path = pathlib.Path\n"
+        # Bind to the CONCRETE class (PosixPath/WindowsPath), captured before
+        # pathlib.Path is reassigned below. On 3.11 Path.__new__ substitutes the
+        # concrete class only when `cls is Path`, and that compares against the
+        # module global this test has just replaced -- so routing through the
+        # abstract base leaves it unsubstituted and it has no _flavour. Later
+        # versions do not care, and the identity assertions are unaffected.
+        "real_concrete = type(real_path())\n"
         "class PathReplacement:\n"
         "    def __new__(cls, *args, **kwargs): "
-        "return real_path(*args, **kwargs)\n"
+        "return real_concrete(*args, **kwargs)\n"
         "    @staticmethod\n"
-        "    def home(): return real_path.home()\n"
+        "    def home(): return real_concrete.home()\n"
         "markers = {\n"
         "  'deque': object(), 'Path': PathReplacement, 'Any': object(),\n"
         "  'setting': lambda name, default=None: 'PATCHED-' + name,\n"
