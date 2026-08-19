@@ -2731,6 +2731,7 @@ def test_portable_publication_env_forces_the_named_path(tmp):
     # was no attribute to restore, which is every macOS and Windows run, so
     # after any earlier test in this suite hasattr is True and the value is
     # None.  The predicate under test reads the value for that reason.
+
     def unforced():
         return getattr(os, "O_TMPFILE", None) is not None and os.name != "nt"
 

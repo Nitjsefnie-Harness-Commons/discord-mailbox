@@ -1999,6 +1999,63 @@ def test_cli_reads_the_live_facade_docstring(tmp):
     assert result.returncode == 0, result.stderr
 
 
+def _functions_calling_os_open(path):
+    """(line, name, source) for every function that calls os.open with flags.
+
+    The flags argument is almost always a `flags` local built a few lines
+    earlier, so the whole enclosing function is the unit that has to mention
+    O_BINARY, not the call's second argument.
+    """
+    import ast
+
+    source = Path(path).read_text(encoding="utf-8")
+    tree = ast.parse(source, str(path))
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls = [
+            child for child in ast.walk(node)
+            if (isinstance(child, ast.Call) and
+                isinstance(child.func, ast.Attribute) and
+                child.func.attr == "open" and
+                isinstance(child.func.value, ast.Name) and
+                child.func.value.id == "os" and
+                len(child.args) >= 2)
+        ]
+        if calls:
+            found.append((node.lineno, node.name, ast.get_source_segment(
+                source, node) or ""))
+    return found
+
+
+def test_every_os_open_selects_binary_mode(tmp):
+    """os.open defaults to TEXT mode on Windows, which corrupts every payload.
+
+    Without O_BINARY the CRT rewrites \\n to \\r\\n on the way out and strips
+    \\r on the way back in, and stops reading at a 0x1a byte. Everything this
+    package writes through a raw descriptor is bytes -- staged envelopes with
+    a recorded length and digest, a 32-byte random staging key, hard-linked
+    payloads -- so a translated round trip changes the file's size, breaks its
+    digest, and truncates its reads. A POSIX runner cannot notice: O_BINARY
+    does not exist there, and getattr(os, 'O_BINARY', 0) is 0.
+
+    This reads source text rather than calling anything, so it holds on every
+    platform.
+    """
+    package = Path(_util.SCRIPTS) / "discord_mb_lib"
+    sources = sorted(package.glob("*.py")) + [Path(MB)]
+    missing = []
+    checked = 0
+    for source in sources:
+        for lineno, name, body in _functions_calling_os_open(source):
+            checked += 1
+            if "O_BINARY" not in body:
+                missing.append(f"{source.name}:{lineno}: {name}")
+    assert checked >= 15, f"only found {checked} such functions; parser drifted"
+    assert not missing, "os.open without O_BINARY in:\n" + "\n".join(missing)
+
+
 def main():
     return _util.runner(_util.collect(globals()), "discord_package_contract_")
 

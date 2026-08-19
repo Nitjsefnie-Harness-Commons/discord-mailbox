@@ -819,7 +819,8 @@ def claim_usage_slot(period=None, guild_id=None, root=None, now=None):
     period = usage_period(now) if period is None else period
     gate, lock = usage_gate_paths(root, guild_id)
     try:
-        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY |
+                     getattr(os, 'O_BINARY', 0))
     except FileExistsError:
         try:
             # Lock age is measured against the REAL clock, never the injected
@@ -832,7 +833,8 @@ def claim_usage_slot(period=None, guild_id=None, root=None, now=None):
         except OSError:
             return False
         try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY |
+                         getattr(os, 'O_BINARY', 0))
         except OSError:
             return False
     except OSError:

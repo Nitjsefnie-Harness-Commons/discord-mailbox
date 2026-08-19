@@ -112,6 +112,7 @@ def mark_created_temp(path: str | os.PathLike[str], scope: str) -> bool:
     marker = _marker_for(candidate)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
     try:
         fd = os.open(marker, flags, 0o600)
     except FileExistsError:

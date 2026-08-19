@@ -790,7 +790,8 @@ class _ConnectorLogWriter:
             str(getattr(before, 'st_dev', None)),
             str(getattr(before, 'st_ino', None)),
         )
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         fd = os.open(str(path), flags)
         try:
             opened = os.fstat(fd)
@@ -974,7 +975,8 @@ class _ConnectorLogWriter:
             str(getattr(info, 'st_dev', None)),
             str(getattr(info, 'st_ino', None)),
         )
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         try:
             fd = os.open(str(proof), flags)
         except OSError as exc:
@@ -1153,7 +1155,8 @@ class _ConnectorLogWriter:
             str(getattr(info, 'st_ino', None)),
         )
         claim_entry_identity = _ConnectorOwnership._entry_identity(claim)
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         fd = os.open(str(claim), flags)
         try:
             opened = os.fstat(fd)
@@ -1258,7 +1261,8 @@ class _ConnectorLogWriter:
             raise FileExistsError(errno.EEXIST,
                                   'named create payload is link-like',
                                   os.fspath(payload_path))
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         try:
             fd = os.open(str(payload_path), flags)
         except FileNotFoundError:
@@ -1352,7 +1356,8 @@ class _ConnectorLogWriter:
             str(getattr(info, 'st_ino', None)),
         )
         before_entry = _ConnectorOwnership._entry_identity(stage)
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         fd = os.open(str(stage), flags)
         try:
             opened = os.fstat(fd)
@@ -2453,7 +2458,8 @@ class _ConnectorLogWriter:
         if expected_entry_identity is not None:
             expected_entry_identity = tuple(
                 str(value) for value in expected_entry_identity)
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                 getattr(os, 'O_BINARY', 0))
         try:
             fd = os.open(str(path), flags)
         except OSError:
@@ -2700,7 +2706,9 @@ class _ConnectorLogWriter:
         """Persist directory entry updates where the platform supports it."""
         if os.name == 'nt':
             return
-        fd = os.open(str(directory), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        fd = os.open(str(directory), os.O_RDONLY |
+                     getattr(os, 'O_DIRECTORY', 0) |
+                     getattr(os, 'O_BINARY', 0))
         try:
             os.fsync(fd)
         finally:
@@ -2854,7 +2862,8 @@ class _ConnectorLogWriter:
                 data, mode, name, directory)
             if anonymous is not None:
                 return anonymous
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                 getattr(os, 'O_BINARY', 0))
         fd = os.open(str(name), flags, 0o600)
         opened = os.fstat(fd)
         expected_identity = (
@@ -4451,7 +4460,8 @@ class _EventStreamWriter:
         while True:
             path = self._dir / _event_segment_name(self._generation)
             try:
-                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT |
+                             os.O_EXCL | getattr(os, 'O_BINARY', 0),
                              0o600)
             except FileExistsError:
                 self._generation += 1
