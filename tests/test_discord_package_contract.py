@@ -383,9 +383,14 @@ def test_deleted_facade_monkeypatch_restores_implementation_global(tmp):
         "    raise RuntimeError('stale fake open')\n"
         "discord_mb.open = fake_open\n"
         "try:\n"
-        "    try: discord_mb.pid_cmdline(999999999)\n"
-        "    except RuntimeError: pass\n"
-        "    else: raise AssertionError('override did not reach implementation')\n"
+        # pid_cmdline reads /proc through the builtin on POSIX; on Windows it
+        # goes through psutil and never calls open, so there the override has
+        # nothing to reach and only the restore half below is meaningful.
+        "    if sys.platform != 'win32':\n"
+        "        try: discord_mb.pid_cmdline(999999999)\n"
+        "        except RuntimeError: pass\n"
+        "        else: raise AssertionError("
+        "'override did not reach implementation')\n"
         "finally:\n"
         "    del discord_mb.open\n"
         "assert discord_mb.pid_cmdline(999999999) is None\n"
@@ -1360,7 +1365,9 @@ def test_missing_nonbuiltin_global_can_be_restored_from_facade(tmp):
         "from discord_mb_lib import storage\n"
         "del storage.Path\n"
         "discord_mb.Path = pathlib.Path\n"
-        "ownership = discord_mb._ConnectorOwnership('/tmp/probe')\n"
+        "import tempfile\n"
+        "probe = pathlib.Path(tempfile.gettempdir()) / 'probe'\n"
+        "ownership = discord_mb._ConnectorOwnership(probe)\n"
         "ownership.close()\n"
     )
     result = subprocess.run(

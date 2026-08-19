@@ -348,7 +348,9 @@ def test_connector_log_migration_packs_the_full_bounded_window(tmp):
     m = _mod()
     path = Path(tmp) / "packed.log"
     lines = [f"{i:02d}\n" for i in range(12)]
-    path.write_text("".join(lines), encoding="utf-8")
+    # write_bytes, not write_text: the latter translates \n to \r\n on
+    # Windows, and the assertions below compare exact bytes.
+    path.write_bytes("".join(lines).encode("utf-8"))
 
     writer = m._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
     writer.close()
@@ -364,7 +366,9 @@ def test_connector_log_migration_crash_keeps_recoverable_sources(tmp):
     del m
     path = Path(tmp) / "crash.log"
     lines = [f"{i:02d}\n" for i in range(12)]
-    path.write_text("".join(lines), encoding="utf-8")
+    # write_bytes, not write_text: the latter translates \n to \r\n on
+    # Windows, and the assertions below compare exact bytes.
+    path.write_bytes("".join(lines).encode("utf-8"))
     child = r'''
 import importlib.util
 import os
@@ -1105,7 +1109,8 @@ def test_connector_log_preserves_symlink_target_and_bounded_metadata(tmp):
     assert alias.is_symlink()
     assert alias.resolve() == target.resolve()
     assert after.st_ino == before.st_ino
-    assert after.st_mode & 0o777 == 0o600
+    if _util.POSIX_MODES:
+        assert after.st_mode & 0o777 == 0o600
     assert after.st_mtime_ns == before.st_mtime_ns
 
 
@@ -1121,8 +1126,11 @@ def test_connector_log_rotation_preserves_target_mode(tmp):
     writer.write("1234567")
     writer.write("next")
     writer.close()
-    assert target.stat().st_mode & 0o777 == 0o600
-    assert target.with_name("rotate-target.log.1").stat().st_mode & 0o777 == 0o600
+    if _util.POSIX_MODES:
+        assert target.stat().st_mode & 0o777 == 0o600
+        assert target.with_name(
+            "rotate-target.log.1").stat().st_mode & 0o777 == 0o600
+    assert target.with_name("rotate-target.log.1").exists()
 
 
 def test_connector_log_symlink_aliases_share_canonical_lock(tmp):
@@ -3837,15 +3845,19 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
     else:
         raise AssertionError("symlink lock root was adopted")
 
-    permissive = Path(tmp) / "permissive-root"
-    permissive.mkdir(mode=0o777)
-    os.chmod(permissive, 0o777)
-    try:
-        m._ConnectorOwnership(path, lock_inode=True, lock_root=permissive)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("world-writable lock root was adopted")
+    if _util.POSIX_MODES:
+        # Windows reports 0o666 for anything this package creates, so there is
+        # no permissive-mode signal to reject there; _posix_mode_exposed()
+        # returns False on nt for exactly that reason.
+        permissive = Path(tmp) / "permissive-root"
+        permissive.mkdir(mode=0o777)
+        os.chmod(permissive, 0o777)
+        try:
+            m._ConnectorOwnership(path, lock_inode=True, lock_root=permissive)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("world-writable lock root was adopted")
 
     regular_file = Path(tmp) / "regular-file-root"
     regular_file.write_text("not a directory", encoding="utf-8")
@@ -3876,7 +3888,13 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
 def test_connector_staging_key_lifecycle_rejects_tampering(tmp):
     """The persistent HMAC key is private, complete, and never adopted."""
     m = _mod()
-    for kind in ("symlink", "permissive", "partial"):
+    kinds = ("symlink", "permissive", "partial")
+    if not _util.POSIX_MODES:
+        # Windows reports 0o666 for everything this package creates, so a
+        # chmod to 0o644 changes nothing observable and the key is correctly
+        # still accepted. The symlink and partial arms still run.
+        kinds = ("symlink", "partial")
+    for kind in kinds:
         case = Path(tmp) / f"staging-key-{kind}"
         case.mkdir()
         root = case / "lock-root"
@@ -3907,6 +3925,9 @@ def test_connector_staging_key_lifecycle_rejects_tampering(tmp):
 
 def test_connector_staging_key_rejects_transient_swap_restore_during_open(tmp):
     """A path restored after open cannot disguise a different opened inode."""
+    if os.name == "nt":
+        _util.skip("Windows refuses to rename a file that is open, so the "
+                   "swap this models cannot be staged there")
     m = _mod()
     path = Path(tmp) / "connector-staging.key"
     original = b"A" * m._ConnectorLogWriter._STAGING_KEY_BYTES
@@ -4137,7 +4158,9 @@ def test_connector_staging_key_authority_is_durable_and_matches_published_key(tm
     authority = m._ConnectorLogWriter._staging_key_authority_path(key_path)
     assert authority.parent == lock_root, authority
     assert authority.exists(), sorted(item.name for item in lock_root.iterdir())
-    assert not (authority.stat().st_mode & 0o077), oct(authority.stat().st_mode)
+    if _util.POSIX_MODES:
+        assert not (authority.stat().st_mode & 0o077), oct(
+            authority.stat().st_mode)
     assert len(key) == 32
     assert key_path.read_bytes() == key
     assert m._ConnectorLogWriter._authority_staging_key(authority) == key
