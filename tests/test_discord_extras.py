@@ -83,6 +83,9 @@ class _Message(_Snapshot):
     def __init__(self, data, discord, factory):
         super().__init__(data, discord, factory)
         self.poll = None
+        # Declared here, not grown per test: discord.Message always has it,
+        # and a fixture that only sometimes does hides the empty case.
+        self.reactions = []
         self.message_snapshots = [
             _Snapshot(s["message"], discord, factory)
             for s in data.get("message_snapshots") or []]
@@ -182,7 +185,7 @@ def test_message_reactions_verb_is_reachable_from_the_parser(_tmp):
     import subprocess
     out = subprocess.run(
         [sys.executable, MB, "message", "--help"],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True, timeout=30, check=False)
     assert out.returncode == 0, out.stderr
     assert "reactions" in out.stdout, out.stdout
 
