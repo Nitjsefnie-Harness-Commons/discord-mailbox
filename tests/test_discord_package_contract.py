@@ -76,6 +76,29 @@ def test_package_modules_are_importable_from_the_script_directory(tmp):
     _assert_child_ok(result)
 
 
+def test_importing_the_package_keeps_output_written_before_it(tmp):
+    """The UTF-8 rewrap must not swallow the importer's pending output.
+
+    Replacing sys.stdout with a new wrapper over the same buffer strands
+    whatever the old wrapper still holds. On a terminal nothing is held, so
+    this is invisible; on a pipe -- every captured run, every log file, every
+    test harness -- the text is simply gone.
+    """
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
+        "print('before the import')\n"
+        "import discord_mb_lib.core\n"
+        "print('after the import')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        timeout=30)
+    _assert_child_ok(result)
+    assert result.stdout.splitlines() == [
+        "before the import", "after the import"], result.stdout
+
+
 def test_canonical_facade_remains_an_exact_module_type(tmp):
     """The compatibility layer must not replace the monolith's module type."""
     script = (

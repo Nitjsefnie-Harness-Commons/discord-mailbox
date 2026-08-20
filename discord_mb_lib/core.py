@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.38.0"
+__version__ = "0.38.1"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -76,6 +76,14 @@ if TYPE_CHECKING:  # pragma: no cover
 # tool that loads this module more than once hits that; `sys` is the only
 # namespace that persists across the re-exec, so the flag lives there.
 if hasattr(sys.stdout, 'buffer') and not getattr(sys, '_discord_mb_utf8', False):
+    try:
+        # Whatever the importing program has written is still sitting in the
+        # wrapper we are about to drop, and a new wrapper over the same buffer
+        # cannot see it. On a terminal there is nothing pending, so this is
+        # invisible; on a pipe the text is simply lost.
+        sys.stdout.flush()
+    except (ValueError, OSError):
+        pass                                         # already closed/detached
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys._discord_mb_utf8 = True                      # type: ignore[attr-defined]
 
