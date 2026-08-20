@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.35.0"
+__version__ = "0.36.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -689,7 +689,30 @@ def message_extras(m, depth=0):
         for a in f['attachments']:
             parts.append(f"[forwarded attachment] {a['filename']} {a['url']}")
     return {'embeds': embeds, 'components': comps, 'poll': poll,
-            'forwarded': forwarded, 'rendered': '\n\n'.join(parts)}
+            'forwarded': forwarded, 'reactions': reaction_records(m),
+            'rendered': '\n\n'.join(parts)}
+
+
+def reaction_records(m):
+    """`[{emoji, count, me}]` for one message, in Discord's own order.
+
+    `emoji` is the string form `message react` accepts, so a reaction read back
+    here can be passed straight to a write without translation: a unicode
+    reaction renders as the character, a custom one as `<:name:id>`.
+
+    `me` is carried alongside `count` because "did my own receipt land" and
+    "did anyone react" are different questions, and the second cannot answer
+    the first.
+    """
+    out = []
+    for r in (getattr(m, 'reactions', None) or []):
+        emoji = getattr(r, 'emoji', None)
+        out.append({
+            'emoji': str(emoji) if emoji is not None else '',
+            'count': int(getattr(r, 'count', 0) or 0),
+            'me': bool(getattr(r, 'me', False)),
+        })
+    return out
 
 
 def attach_extras(record, m, body_key='body'):
@@ -709,6 +732,8 @@ def attach_extras(record, m, body_key='body'):
         record['poll'] = x['poll']
     if x['forwarded']:
         record['forwarded'] = x['forwarded']
+    if x['reactions']:
+        record['reactions'] = x['reactions']
     if x['rendered'] and x['rendered'] != (record.get(body_key) or '').strip():
         record[f'{body_key}_rendered'] = x['rendered']
     return record
@@ -1731,6 +1756,8 @@ def message_cli(args):
         req = {'op': 'message-edit', 'channel': args.channel, 'msg_id': args.msg_id, 'content': args.content}
     elif act == 'delete':
         req = {'op': 'message-delete', 'channel': args.channel, 'msg_id': args.msg_id}
+    elif act == 'reactions':
+        req = {'op': 'message-reactions', 'channel': args.channel, 'msg_id': args.msg_id}
     else:  # react / unreact
         req = {'op': 'message-react', 'channel': args.channel, 'msg_id': args.msg_id,
                'emoji': args.emoji, 'remove': act == 'unreact'}
@@ -1742,7 +1769,17 @@ def message_cli(args):
     if not resp.get('ok'):
         print(f'error: {resp.get("error", resp)}', file=sys.stderr)
         sys.exit(1)
-    if act in ('react', 'unreact'):
+    if act == 'reactions':
+        rows = resp.get('reactions') or []
+        if getattr(args, 'json', False):
+            print(json.dumps(rows, indent=2, ensure_ascii=False))
+        elif not rows:
+            print(f"no reactions on msg_id={resp.get('msg_id')}")
+        else:
+            for r in rows:
+                mine = ' (mine)' if r.get('me') else ''
+                print(f"{r.get('emoji')} x{r.get('count')}{mine}")
+    elif act in ('react', 'unreact'):
         print(f"{act}ed {resp.get('emoji')} on msg_id={resp.get('msg_id')}")
     else:
         verb = 'edited' if act == 'edit' else 'deleted'
@@ -2590,6 +2627,7 @@ __all__ = [
     'poll_record',
     'random',
     're',
+    'reaction_records',
     'read_extension_registry',
     'read_status_manifest',
     'recover_status_plugin_after_gateway',

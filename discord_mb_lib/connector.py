@@ -573,6 +573,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             elif op == 'emoji-rename':
                 resp.update(await op_emoji_rename(req.get('server'), req.get('ref', ''), req.get('name', '')))
                 resp['ok'] = True
+            elif op == 'message-reactions':
+                resp.update(await op_message_reactions(req.get('channel'), req.get('msg_id', '')))
+                resp['ok'] = True
             elif op == 'message-react':
                 resp.update(await op_message_react(req.get('channel'), req.get('msg_id', ''), req.get('emoji', ''), remove=bool(req.get('remove'))))
                 resp['ok'] = True
@@ -1485,6 +1488,18 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 'ref': f'<{"a" if e.animated else ""}:{e.name}:{e.id}>',
                 'server_name': guild.name}
 
+    async def op_message_reactions(channel_ref, msg_id):
+        """Read one message's reactions without fetching it for anything else."""
+        if not msg_id:
+            raise ValueError('msg_id required')
+        channel = await resolve_channel_ref(channel_ref)
+        try:
+            msg = await channel.fetch_message(int(msg_id))
+        except Exception as e:
+            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
+        return {'msg_id': str(msg.id), 'channel_id': str(channel.id),
+                'reactions': reaction_records(msg)}
+
     async def op_message_react(channel_ref, msg_id, emoji, remove=False):
         'Add or remove (the bot\'s own) reaction on a message.'
         if not msg_id:
@@ -2349,10 +2364,23 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             'msg_id': str(msg.id),
             'path': str(path),
         }))
+        # The receipt is attempted AFTER the record is durable, so a
+        # delivery is never marked ✅ that was not written. Its outcome is then
+        # recorded on that same record -- without this the ✅ is documented as
+        # part of the delivery guarantee with no surface to confirm it on.
+        receipt = {'emoji': RECEIPT_EMOJI, 'ok': True, 'error': None}
         try:
             await msg.add_reaction(RECEIPT_EMOJI)
         except Exception as e:
+            receipt = {'emoji': RECEIPT_EMOJI, 'ok': False,
+                       'error': f'{type(e).__name__}: {e}'}
             log(f'react failed on {msg.id}: {e}')
+            emit_event({'event': 'receipt_failed', 'msg_id': str(msg.id),
+                        'emoji': RECEIPT_EMOJI, 'error': receipt['error'],
+                        'path': str(path)})
+        payload['receipt'] = receipt
+        tmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        tmp.replace(path)
         return path
 
     @client.event

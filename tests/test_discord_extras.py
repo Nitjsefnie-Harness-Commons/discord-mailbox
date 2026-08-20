@@ -120,6 +120,73 @@ def test_body_rendered_marks_a_body_that_is_not_the_message(_tmp):
     assert "All Systems Operational" in rec["body_rendered"]
 
 
+class _Reaction:
+    """Stands in for discord.Reaction: the three fields a record reads."""
+
+    def __init__(self, emoji, count, me):
+        self.emoji = emoji
+        self.count = count
+        self.me = me
+
+
+def test_reactions_are_readable_off_the_record(_tmp):
+    """(issue #5) Reactions were writable and had no read path at all."""
+    mb, msg = _msg({"content": "hi"})
+    if mb is None:
+        return
+    msg.reactions = [_Reaction("\u2705", 2, True), _Reaction("\U0001f44d", 1, False)]
+    rec = mb.attach_extras({"body": msg.content}, msg)
+    assert rec["reactions"] == [
+        {"emoji": "\u2705", "count": 2, "me": True},
+        {"emoji": "\U0001f44d", "count": 1, "me": False},
+    ], rec
+
+
+def test_me_distinguishes_my_receipt_from_anyone_reacting(_tmp):
+    """"Did my ✅ land" and "did anyone react" are different questions."""
+    mb, msg = _msg({"content": "hi"})
+    if mb is None:
+        return
+    msg.reactions = [_Reaction("\u2705", 3, False)]
+    rec = mb.attach_extras({"body": msg.content}, msg)
+    assert rec["reactions"][0]["count"] == 3
+    assert rec["reactions"][0]["me"] is False, (
+        "a busy reaction someone else added must not read as our own receipt")
+
+
+def test_custom_emoji_reads_back_in_the_form_the_write_verb_takes(_tmp):
+    """A reaction read here can be handed straight to `message react`."""
+    mb, msg = _msg({"content": "hi"})
+    if mb is None:
+        return
+    _mb, discord = _mod()
+    custom = discord.PartialEmoji(name="clawd", id=1234567890)
+    msg.reactions = [_Reaction(custom, 1, True)]
+    rec = mb.attach_extras({"body": msg.content}, msg)
+    assert rec["reactions"][0]["emoji"] == str(custom)
+    assert ":" in rec["reactions"][0]["emoji"], rec
+
+
+def test_a_message_without_reactions_gains_no_key(_tmp):
+    """Additive, like every other extra: an unreacted message is unchanged."""
+    mb, msg = _msg({"content": "plain"})
+    if mb is None:
+        return
+    msg.reactions = []
+    assert sorted(mb.attach_extras({"body": msg.content}, msg)) == ["body"]
+
+
+def test_message_reactions_verb_is_reachable_from_the_parser(_tmp):
+    """The read verb the issue asks for, wired to its own op."""
+    del _tmp
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, MB, "message", "--help"],
+        capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert "reactions" in out.stdout, out.stdout
+
+
 def test_plain_message_record_is_unchanged(_tmp):
     """An ordinary text message must keep EXACTLY its old record shape.
 
