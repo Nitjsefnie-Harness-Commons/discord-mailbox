@@ -20,8 +20,8 @@ classifiers = [
 dependencies = ["discord.py>=2.3", "psutil>=5.9"]
 
 [project.urls]
-Homepage = "https://github.com/Nitjsefnie/discord-mailbox"
-Issues = "https://github.com/Nitjsefnie/discord-mailbox/issues"
+Homepage = "https://github.com/Nitjsefnie-Harness-Commons/discord-mailbox"
+Issues = "https://github.com/Nitjsefnie-Harness-Commons/discord-mailbox/issues"
 
 [project.scripts]
 discord-mb = "discord_mb_lib.cli:_cli"
