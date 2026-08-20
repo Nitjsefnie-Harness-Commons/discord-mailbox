@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.36.1"
+__version__ = "0.37.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -2272,6 +2272,81 @@ def heartbeat_due(last_date, today):
     return last_date != today
 
 
+def package_fingerprint(root=None):
+    '''What the installed package looks like ON DISK right now, as
+    `{'version': str|None, 'digest': str|None}`.
+
+    A long-lived process keeps executing whatever it imported; this reads what
+    the NEXT import would get, so the two can be compared. Modules only, and
+    content only: bytecode and scratch files churn without the code changing,
+    and the digest must not move merely because the package was installed to a
+    different path. Both fields are None when the directory cannot be read,
+    which is also how a half-written install looks from here.'''
+    root = Path(root) if root is not None else Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    version = None
+    try:
+        modules = sorted(p for p in root.iterdir()
+                         if p.suffix == '.py' and p.is_file())
+        if not modules:
+            return {'version': None, 'digest': None}
+        for module in modules:
+            data = module.read_bytes()
+            # Name and length are hashed alongside the bytes so that moving
+            # content between modules cannot produce the same digest.
+            digest.update(module.name.encode('utf-8'))
+            digest.update(b'\0')
+            digest.update(str(len(data)).encode('ascii'))
+            digest.update(b'\0')
+            digest.update(data)
+            if module.name == 'core.py':
+                found = re.search(
+                    rb'^__version__\s*=\s*[\'"]([^\'"]+)[\'"]',
+                    data, re.MULTILINE)
+                if found:
+                    version = found.group(1).decode('utf-8', 'replace')
+    except OSError:
+        return {'version': None, 'digest': None}
+    return {'version': version, 'digest': digest.hexdigest()}
+
+
+def running_fingerprint():
+    '''What THIS process is executing, in `package_fingerprint`'s shape.
+
+    Call it at startup: the version is the one already imported and stays
+    right forever, but the digest can only be read off disk, so it describes
+    the running code exactly until the package is replaced.'''
+    return {'version': __version__,
+            'digest': package_fingerprint().get('digest')}
+
+
+def package_change_event(identity, running, installed, reported=None):
+    '''The `version_changed` event for a connector whose installed package has
+    moved out from under it, or None when there is nothing to say.
+
+    Reporting, never reacting: replacing a live gateway connection is the
+    owning session's decision, so this only ever describes. `reported` is the
+    install already announced -- passing it back latches the event to one per
+    install rather than one per check.'''
+    running = running or {}
+    installed = installed or {}
+    ins_v, ins_d = installed.get('version'), installed.get('digest')
+    if ins_d is None:
+        return None             # unreadable, or caught mid-install: say nothing
+    run_v, run_d = running.get('version'), running.get('digest')
+    if ins_v == run_v and (run_d is None or ins_d == run_d):
+        return None             # an unknown running digest is not evidence
+    if reported and (ins_v, ins_d) == (reported.get('version'),
+                                       reported.get('digest')):
+        return None
+    event = {'event': 'version_changed', 'identity': identity,
+             'running': run_v, 'installed': ins_v, 'restart_required': True}
+    if ins_v == run_v:
+        # Two identical version strings cannot carry a reinstall, so say it.
+        event['reinstalled'] = True
+    return event
+
+
 def load_extension(path):
     '''Import an extension .py by path; return (module, setup, command).
 
@@ -2618,6 +2693,8 @@ __all__ = [
     'os',
     'outbox_dir',
     'pace_dot',
+    'package_change_event',
+    'package_fingerprint',
     'parse_claim_name',
     'parse_message_header',
     'pid_alive',
@@ -2638,6 +2715,7 @@ __all__ = [
     'replay_last_presence',
     'resolve_token_and_flavor',
     'run_status_plugin_task',
+    'running_fingerprint',
     'send',
     'servers_cli',
     'setting',

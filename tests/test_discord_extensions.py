@@ -265,6 +265,178 @@ def test_heartbeat_date_survives_restart(tmp):
     assert m.heartbeat_due(last, "2026-08-12") is False
 
 
+# ------------------------------------------------ installed-package drift
+# A connector imports the package once and then runs for days. When the wheel
+# is replaced underneath it, nothing in the process changes -- so the running
+# code and the installed code have to be compared explicitly.
+
+def _fake_pkg(tmp, name, version, extra=""):
+    """A package directory shaped like discord_mb_lib, at a chosen version."""
+    root = Path(tmp) / name
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "core.py").write_text(f'__version__ = "{version}"\n{extra}')
+    (root / "storage.py").write_text("x = 1\n")
+    return root
+
+
+def test_package_fingerprint_reads_the_version_off_disk(tmp):
+    """Off disk, not out of memory: the point is what the NEXT import gets."""
+    m = _mod(tmp)
+    fp = m.package_fingerprint(_fake_pkg(tmp, "pkg", "1.2.3"))
+    assert fp["version"] == "1.2.3", fp
+    assert isinstance(fp["digest"], str) and len(fp["digest"]) == 64, fp
+
+
+def test_package_fingerprint_depends_on_content_not_location(tmp):
+    m = _mod(tmp)
+    assert (m.package_fingerprint(_fake_pkg(tmp, "one", "1.2.3"))
+            == m.package_fingerprint(_fake_pkg(tmp, "two", "1.2.3")))
+
+
+def test_package_fingerprint_moves_when_a_module_body_changes(tmp):
+    """A same-version reinstall is invisible to the version string alone."""
+    m = _mod(tmp)
+    before = m.package_fingerprint(_fake_pkg(tmp, "a", "1.2.3"))
+    after = m.package_fingerprint(_fake_pkg(tmp, "b", "1.2.3", extra="y = 2\n"))
+    assert before["version"] == after["version"] == "1.2.3", (before, after)
+    assert before["digest"] != after["digest"], before
+
+
+def test_package_fingerprint_ignores_files_that_are_not_modules(tmp):
+    """Bytecode and scratch files churn on their own; they are not the code."""
+    m = _mod(tmp)
+    root = _fake_pkg(tmp, "pkg", "1.2.3")
+    before = m.package_fingerprint(root)
+    (root / "notes.txt").write_text("scratch")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "core.cpython-313.pyc").write_bytes(b"\x00\x01")
+    assert m.package_fingerprint(root) == before
+
+
+def test_package_fingerprint_of_an_unreadable_root_is_unknown(tmp):
+    m = _mod(tmp)
+    assert m.package_fingerprint(Path(tmp) / "not-installed") == {
+        "version": None, "digest": None}
+
+
+def test_running_fingerprint_reports_the_version_this_process_imported(tmp):
+    m = _mod(tmp)
+    assert m.running_fingerprint()["version"] == m.__version__
+
+
+def test_no_event_while_the_installed_package_matches(tmp):
+    m = _mod(tmp)
+    fp = {"version": "1.0.0", "digest": "a"}
+    assert m.package_change_event("bob", fp, dict(fp)) is None
+
+
+def test_event_when_the_installed_version_moves_under_the_connector(tmp):
+    m = _mod(tmp)
+    ev = m.package_change_event("bob", {"version": "0.35.0", "digest": "a"},
+                                {"version": "0.36.0", "digest": "b"})
+    assert ev == {"event": "version_changed", "identity": "bob",
+                  "running": "0.35.0", "installed": "0.36.0",
+                  "restart_required": True}, ev
+
+
+def test_a_same_version_reinstall_says_so(tmp):
+    """Two identical version strings cannot carry it, so the payload must."""
+    m = _mod(tmp)
+    ev = m.package_change_event("bob", {"version": "1.0.0", "digest": "a"},
+                                {"version": "1.0.0", "digest": "b"})
+    assert ev["reinstalled"] is True, ev
+    assert ev["running"] == ev["installed"] == "1.0.0", ev
+    assert ev["restart_required"] is True, ev
+
+
+def test_one_event_per_install_not_one_per_check(tmp):
+    """The check runs every few minutes; the install happened once."""
+    m = _mod(tmp)
+    running = {"version": "0.35.0", "digest": "a"}
+    installed = {"version": "0.36.0", "digest": "b"}
+    assert m.package_change_event("bob", running, installed) is not None
+    assert m.package_change_event("bob", running, installed, installed) is None
+
+
+def test_a_further_install_is_reported_again(tmp):
+    m = _mod(tmp)
+    ev = m.package_change_event("bob", {"version": "0.35.0", "digest": "a"},
+                                {"version": "0.37.0", "digest": "c"},
+                                {"version": "0.36.0", "digest": "b"})
+    assert ev is not None and ev["installed"] == "0.37.0", ev
+
+
+def test_an_unreadable_install_reports_nothing(tmp):
+    """Mid-install the directory is half there; silence beats a false alarm."""
+    m = _mod(tmp)
+    assert m.package_change_event("bob", {"version": "1.0.0", "digest": "a"},
+                                  {"version": None, "digest": None}) is None
+
+
+def test_a_missing_running_digest_still_catches_a_version_move(tmp):
+    m = _mod(tmp)
+    ev = m.package_change_event("bob", {"version": "0.35.0", "digest": None},
+                                {"version": "0.36.0", "digest": "b"})
+    assert ev is not None and ev["installed"] == "0.36.0", ev
+
+
+def test_a_missing_running_digest_does_not_invent_a_reinstall(tmp):
+    """Unknown is not evidence of change."""
+    m = _mod(tmp)
+    assert m.package_change_event("bob", {"version": "1.0.0", "digest": None},
+                                  {"version": "1.0.0", "digest": "b"}) is None
+
+
+def _connector_source():
+    return (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
+        encoding="utf-8")
+
+
+def _heartbeat_watcher_source():
+    """The body of the periodic task, which is where the check belongs."""
+    parts = _connector_source().split("async def heartbeat_watcher", 1)
+    assert len(parts) == 2, "connector no longer runs a heartbeat watcher"
+    return parts[1].split("\n    async def ", 1)[0]
+
+
+def test_the_connector_captures_what_it_is_running_at_startup(_tmp):
+    """Captured once, at import time -- later reads describe the install."""
+    assert "running_fingerprint()" in _connector_source()
+
+
+def test_the_heartbeat_carries_the_running_version(_tmp):
+    body = _heartbeat_watcher_source()
+    assert "'event': 'heartbeat'" in body, "heartbeat no longer emitted here"
+    assert "running_version" in body, (
+        "the heartbeat says nothing about which code emitted it")
+
+
+def test_the_connector_checks_the_installed_package_on_the_heartbeat_loop(_tmp):
+    body = _heartbeat_watcher_source()
+    assert "package_fingerprint()" in body, (
+        "nothing re-reads the installed package, so a new install is invisible")
+    assert "package_change_event" in body, (
+        "the installed package is read but never compared to the running one")
+
+
+def test_the_connector_does_not_restart_itself_when_the_install_moves(_tmp):
+    """Replacing a live gateway connection is the owning session's decision."""
+    body = _heartbeat_watcher_source()
+    for forbidden in ("os.execv", "os.execl", "sys.exit", "client.close",
+                      "os._exit"):
+        assert forbidden not in body, f"{forbidden} in the version check"
+
+
+def test_extension_list_reports_the_running_and_installed_versions(_tmp):
+    """The on-demand half: one call answers "have I drifted?"."""
+    parts = _connector_source().split("async def op_extension_list", 1)
+    assert len(parts) == 2, "connector no longer serves extension-list"
+    body = parts[1].split("\n    async def ", 1)[0]
+    assert "running_version" in body, "extension list names no running version"
+    assert "installed_version" in body, (
+        "extension list cannot show a divergence without the installed version")
+
+
 # ------------------------------------------------------ ctx.on subscription
 # discord.Client has no add_listener (that is commands.Bot). These pin the
 # attribute-dispatch shape that a plain Client actually uses.

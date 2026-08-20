@@ -332,7 +332,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
     state = {'identity_map': {}, 'own_dir_msg_id': None, 'channels': {}, 'roles': {}, 'guild': None, 'watchers_started': False, 'extension': None, 'extension_ctx': None, 'extension_error': None, 'ext_listeners': {}, 'ext_installed': set(), 'ext_tasks': [], 'pins_cache': {}, 'forum_pins_cache': {},
              'status_task': None, 'status_state': 'empty', 'status_last': None, 'status_error': None,
-             'usage_period': None}
+             'usage_period': None,
+             # Captured now, while the imported code and the installed files
+             # are still the same thing; every later read describes the
+             # install, so the two can be compared.
+             'running_package': running_fingerprint(), 'reported_package': None}
 
     def ch(key):
         return state['channels'].get(key)
@@ -1705,7 +1709,12 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 'loaded': bool(state['extension']),
                 'last_error': state['extension_error'],
                 'store_keys': sorted((reg.get('store') or {}).keys()),
-                'last_heartbeat': reg.get('last_heartbeat')}
+                'last_heartbeat': reg.get('last_heartbeat'),
+                # What this process is executing against what a restart would
+                # pick up, so one call answers "has the library moved under
+                # me?" without an out-of-band watch on site-packages.
+                'running_version': state['running_package'].get('version'),
+                'installed_version': package_fingerprint().get('version')}
 
     async def op_extension_call(argv):
         ext = state['extension']
@@ -1726,7 +1735,13 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def heartbeat_watcher():
         '''One event per UTC calendar day, so a connector that has silently
         stopped becomes visible. Calendar-aligned rather than 24h-since-start,
-        so connectors started at different times do not drift apart.'''
+        so connectors started at different times do not drift apart.
+
+        Also the periodic place where the installed package is compared with
+        the one this process imported: an install replaces the files under a
+        live connector without touching the process, and nothing else here
+        would ever notice. Independently guarded, so a failing heartbeat does
+        not take the comparison down with it.'''
         while not client.is_closed():
             try:
                 today = time.strftime('%Y-%m-%d', time.gmtime())
@@ -1736,9 +1751,23 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     write_extension_registry(identity, reg, flavor)
                     emit_event({'event': 'heartbeat', 'identity': identity,
                                 'date': today,
+                                'running_version': state['running_package'].get('version'),
                                 'uptime_s': int(time.time() - _connector_started_at)})
             except Exception as e:
                 log(f'heartbeat failed: {type(e).__name__}: {e}')
+            try:
+                installed = package_fingerprint()
+                changed = package_change_event(identity, state['running_package'],
+                                               installed, state['reported_package'])
+                if changed:
+                    # Said, not acted on: dropping a live gateway connection
+                    # is the owning session's decision, not this loop's.
+                    state['reported_package'] = installed
+                    emit_event(changed)
+                    log(f"installed package changed: {changed['running']} -> "
+                        f"{changed['installed']}; restart to run it")
+            except Exception as e:
+                log(f'installed-version check failed: {type(e).__name__}: {e}')
             await asyncio.sleep(300)
 
     async def op_status_plugin_set(path):
