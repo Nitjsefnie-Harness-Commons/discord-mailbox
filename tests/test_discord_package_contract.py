@@ -1603,74 +1603,57 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
     """A failing pop cannot leave a partial private package tree behind.
 
-    Injecting that failure means giving sys.modules a dict subclass, and on
-    macOS 3.12 and 3.13 CPython segfaults under it. faulthandler put the crash
-    inside its own import machinery, during a collection, with no frame from
-    this package on the stack at all:
-
-        Garbage-collecting
-        File "<frozen importlib._bootstrap>", line 488 in
-            _call_with_frames_removed
-        File "<frozen importlib._bootstrap_external>", line 1087 in
-            source_to_code
-
-    A plain import of an unimported stdlib module survives the same swap, so
-    it is not the substitution by itself -- it takes enough allocation to
-    trigger a collection while the import lock is held, which compiling this
-    package's four modules does and importing http.client does not. macOS 3.11
-    and every Linux and Windows lane run the test normally.
+    The failure is injected into the mapping the cleanup reads -- the module's
+    own `sys` global -- and never into the interpreter's `sys.modules`.
+    Substituting the real one for a dict subclass reproduces the same rollback,
+    and segfaults CPython on macOS 3.12+ from inside its own import machinery
+    during a collection under the import lock, which is why this does not do
+    that. The facade resolves `sys.modules` at call time, so rebinding one
+    module global is the whole injection.
     """
-    if sys.platform == "darwin" and sys.version_info >= (3, 12):
-        _util.skip("CPython segfaults in its own import machinery here; see "
-                   "this test's docstring for the faulthandler stack")
-    script = (
-        "import contextvars, faulthandler, functools, importlib, "
-        "importlib.util, inspect, pathlib, sys, types, uuid\n"
-        # A segfault here leaves no Python traceback of its own; faulthandler
-        # is what turns it into a named frame on stderr.
-        "faulthandler.enable()\n"
-        f"mailbox = pathlib.Path({MB!r})\n"
-        "original_modules = sys.modules\n"
-        "class FailingModules(dict):\n"
-        "    failed = False\n"
-        "    def pop(self, name, *default):\n"
-        "        value = super().pop(name, *default)\n"
-        "        if name.startswith('_discord_mb_lib_') and not self.failed:\n"
-        "            self.failed = True\n"
-        "            raise RuntimeError('injected cleanup failure')\n"
-        "        return value\n"
-        # Breadcrumbs, because this child has died by signal on some macOS
-        # runners: a bare exit status says nothing about how far it got, and
-        # the interpreter cannot report its own segfault.
-        "def mark(step): print(step, file=sys.stderr, flush=True)\n"
-        "replacement = FailingModules(original_modules)\n"
-        "mark('built-replacement')\n"
-        "sys.modules = replacement\n"
-        "mark('swapped-sys-modules')\n"
-        "try:\n"
-        # Is a plain import survivable with sys.modules replaced at all? If
-        # this marker never prints, the crash is CPython's import machinery
-        # against a substituted modules mapping, not anything in the facade.
-        "    importlib.import_module('http.client')\n"
-        "    mark('plain-import-ok')\n"
-        "    before = {n for n in replacement if n.startswith('_discord_mb_lib_')}\n"
-        "    spec = importlib.util.spec_from_file_location('discord_alias', mailbox)\n"
-        "    module = importlib.util.module_from_spec(spec)\n"
-        "    mark('about-to-exec')\n"
-        "    try: spec.loader.exec_module(module)\n"
-        "    except RuntimeError: mark('raised-as-expected')\n"
-        "    else: raise AssertionError('cleanup failure was swallowed')\n"
-        "    after = {n for n in replacement if n.startswith('_discord_mb_lib_')}\n"
-        "    assert after == before, sorted(after - before)\n"
-        "    mark('assertions-passed')\n"
-        "finally:\n"
-        "    sys.modules = original_modules\n"
-        "    mark('restored-sys-modules')\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    module = _util.load(MB, "discord_cleanup_rollback")
+    assert module._private_package, "a path load must take the private branch"
+    package = module._package_name
+
+    class FailingModules(dict):
+        """Fails the first private pop, exactly as a partial cleanup would."""
+
+        failed = False
+
+        def pop(self, name, *default):
+            value = super().pop(name, *default)
+            if name.startswith("_discord_mb_lib_") and not self.failed:
+                self.failed = True
+                raise RuntimeError("injected cleanup failure")
+            return value
+
+    tree = {name: types.ModuleType(name) for name in
+            (package, f"{package}.core", f"{package}.storage")}
+    unrelated = {"os": sys.modules["os"]}
+    mapping = FailingModules({**tree, **unrelated})
+    original_sys = module.__dict__["sys"]
+    module.__dict__["sys"] = types.SimpleNamespace(modules=mapping)
+    try:
+        try:
+            module._cleanup_private_package()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("cleanup failure was swallowed")
+        # Every entry restored, and the same objects: a rollback that reinserts
+        # names but loses identity would leave two live copies of the package.
+        assert set(mapping) == set(tree) | set(unrelated), \
+            sorted(set(tree) - set(mapping))
+        assert {name: mapping[name] for name in tree} == tree
+        assert mapping["os"] is unrelated["os"]
+
+        # And the retry the abort path performs still empties the tree, so the
+        # rollback above is a delay, not a leak.
+        module._cleanup_private_package()
+        assert not [name for name in mapping
+                    if name.startswith("_discord_mb_lib_")]
+    finally:
+        module.__dict__["sys"] = original_sys
 
 
 def test_facade_wrappers_preserve_raw_signatures_and_defaults(tmp):
