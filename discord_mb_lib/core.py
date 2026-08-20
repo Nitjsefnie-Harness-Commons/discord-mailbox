@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.37.0"
+__version__ = "0.38.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -2310,6 +2310,38 @@ def package_fingerprint(root=None):
     return {'version': version, 'digest': digest.hexdigest()}
 
 
+PACKAGE_CHECK_SECONDS = 5
+'''How often a connector re-checks the installed package.
+
+Chosen against the file watch this replaces, not against the daily heartbeat
+that used to set the pace. The per-pass cost at this interval is a stat of each
+module, and the hash runs only when one of them moved.'''
+
+
+def package_stat_signature(root=None):
+    '''A cheap "has anything moved?" reading of the installed package.
+
+    Metadata only -- name, size, mtime -- so it costs a stat per module rather
+    than a read of every byte, which is what makes a short polling interval
+    affordable inside the gateway's own event loop. It only has to NOTICE a
+    change; `package_fingerprint` is what identifies one, and runs only when
+    this has moved.
+
+    None when the directory cannot be read, and None deliberately does not
+    compare equal to any real signature -- a package that is missing, or caught
+    mid-install, must not read as "unchanged" forever.'''
+    root = Path(root) if root is not None else Path(__file__).resolve().parent
+    try:
+        out = []
+        for module in sorted(p for p in root.iterdir()
+                             if p.suffix == '.py' and p.is_file()):
+            info = module.stat()
+            out.append((module.name, info.st_size, info.st_mtime_ns))
+    except OSError:
+        return None
+    return tuple(out) or None
+
+
 def running_fingerprint():
     '''What THIS process is executing, in `package_fingerprint`'s shape.
 
@@ -2604,6 +2636,7 @@ __all__ = [
     'MAX_BODY',
     'MAX_BODY_TOTAL',
     'META_CATEGORY_NAME',
+    'PACKAGE_CHECK_SECONDS',
     'Path',
     'RECEIPT_EMOJI',
     'STATE_ROOT',
@@ -2695,6 +2728,7 @@ __all__ = [
     'pace_dot',
     'package_change_event',
     'package_fingerprint',
+    'package_stat_signature',
     'parse_claim_name',
     'parse_message_header',
     'pid_alive',

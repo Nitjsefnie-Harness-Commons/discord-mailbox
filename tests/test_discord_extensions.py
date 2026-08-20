@@ -387,6 +387,39 @@ def test_a_missing_running_digest_does_not_invent_a_reinstall(tmp):
                                   {"version": "1.0.0", "digest": "b"}) is None
 
 
+def test_stat_signature_changes_when_a_module_changes(tmp):
+    """The cheap pre-check: it only has to notice, not to identify."""
+    m = _mod(tmp)
+    before = m.package_stat_signature(_fake_pkg(tmp, "s1", "1.2.3"))
+    after = m.package_stat_signature(_fake_pkg(tmp, "s2", "1.2.3", extra="y = 2\n"))
+    assert before is not None and after is not None
+    assert before != after, (before, after)
+
+
+def test_stat_signature_is_stable_when_nothing_changes(tmp):
+    """Called every few seconds, so an unstable signature would hash forever."""
+    m = _mod(tmp)
+    root = _fake_pkg(tmp, "stable", "1.2.3")
+    assert m.package_stat_signature(root) == m.package_stat_signature(root)
+
+
+def test_stat_signature_ignores_files_that_are_not_modules(tmp):
+    m = _mod(tmp)
+    root = _fake_pkg(tmp, "s3", "1.2.3")
+    before = m.package_stat_signature(root)
+    (root / "notes.txt").write_text("scratch")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "core.cpython-313.pyc").write_bytes(b"\x00")
+    assert m.package_stat_signature(root) == before
+
+
+def test_stat_signature_of_an_unreadable_root_is_unknown(tmp):
+    """Unknown must not equal a real signature, or a missing package reads
+    as a change on every pass."""
+    m = _mod(tmp)
+    assert m.package_stat_signature(Path(tmp) / "not-installed") is None
+
+
 def _connector_source():
     return (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
         encoding="utf-8")
@@ -411,20 +444,46 @@ def test_the_heartbeat_carries_the_running_version(_tmp):
         "the heartbeat says nothing about which code emitted it")
 
 
-def test_the_connector_checks_the_installed_package_on_the_heartbeat_loop(_tmp):
-    body = _heartbeat_watcher_source()
-    assert "package_fingerprint()" in body, (
-        "nothing re-reads the installed package, so a new install is invisible")
-    assert "package_change_event" in body, (
-        "the installed package is read but never compared to the running one")
-
-
 def test_the_connector_does_not_restart_itself_when_the_install_moves(_tmp):
     """Replacing a live gateway connection is the owning session's decision."""
-    body = _heartbeat_watcher_source()
+    body = _version_watcher_source()
     for forbidden in ("os.execv", "os.execl", "sys.exit", "client.close",
                       "os._exit"):
         assert forbidden not in body, f"{forbidden} in the version check"
+
+
+def _version_watcher_source():
+    """The body of the task that watches the install, whatever it is called."""
+    src = _connector_source()
+    parts = src.split("async def version_watcher", 1)
+    assert len(parts) == 2, "connector no longer runs a dedicated version watcher"
+    return parts[1].split("\n    async def ", 1)[0]
+
+
+def test_the_installed_package_is_checked_on_its_own_cadence(_tmp):
+    """A daily heartbeat and an install watch have nothing in common but a
+    loop; inheriting the heartbeat's 300s left an install undetected for up to
+    five minutes, which is not fast enough to replace an external file watch."""
+    body = _version_watcher_source()
+    assert "package_change_event" in body, "the version watcher compares nothing"
+    interval = _connector_source().split("PACKAGE_CHECK_SECONDS = ", 1)
+    assert len(interval) == 2 or "PACKAGE_CHECK_SECONDS" in body, (
+        "the cadence is not named, so it cannot be seen to differ from 300s")
+
+
+def test_the_package_check_stats_before_it_hashes(_tmp):
+    """Hashing half a megabyte every few seconds in the gateway's own loop is
+    the cost that makes a short interval unaffordable; the stat pass is not."""
+    body = _version_watcher_source()
+    assert "package_stat_signature" in body, (
+        "the watcher hashes unconditionally instead of stat-gating the hash")
+
+
+def test_the_heartbeat_loop_no_longer_carries_the_package_check(_tmp):
+    body = _heartbeat_watcher_source()
+    assert "package_change_event" not in body, (
+        "the package check is still on the daily heartbeat's cadence")
+    assert "'event': 'heartbeat'" in body, "heartbeat no longer emitted here"
 
 
 def test_extension_list_reports_the_running_and_installed_versions(_tmp):

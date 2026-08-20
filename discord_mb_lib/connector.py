@@ -336,7 +336,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
              # Captured now, while the imported code and the installed files
              # are still the same thing; every later read describes the
              # install, so the two can be compared.
-             'running_package': running_fingerprint(), 'reported_package': None}
+             'running_package': running_fingerprint(), 'reported_package': None,
+             'package_stat': package_stat_signature()}
 
     def ch(key):
         return state['channels'].get(key)
@@ -1735,13 +1736,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def heartbeat_watcher():
         '''One event per UTC calendar day, so a connector that has silently
         stopped becomes visible. Calendar-aligned rather than 24h-since-start,
-        so connectors started at different times do not drift apart.
-
-        Also the periodic place where the installed package is compared with
-        the one this process imported: an install replaces the files under a
-        live connector without touching the process, and nothing else here
-        would ever notice. Independently guarded, so a failing heartbeat does
-        not take the comparison down with it.'''
+        so connectors started at different times do not drift apart.'''
         while not client.is_closed():
             try:
                 today = time.strftime('%Y-%m-%d', time.gmtime())
@@ -1755,20 +1750,40 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                                 'uptime_s': int(time.time() - _connector_started_at)})
             except Exception as e:
                 log(f'heartbeat failed: {type(e).__name__}: {e}')
+            await asyncio.sleep(300)
+
+    async def version_watcher():
+        '''Watch for the installed package being replaced under this process.
+
+        Its own cadence, not the daily heartbeat's: a heartbeat is deduped to
+        one per UTC day, while an install wants reporting as soon after it
+        lands as possible. Sharing the heartbeat's 300s left an install
+        undetected for up to five minutes, which is too slow to retire the
+        external site-packages watch this event exists to replace.
+
+        Stat first, hash only on a change: the metadata pass is an order of
+        magnitude cheaper than reading every module, so the common case -- an
+        unchanged package -- costs almost nothing at this interval, and the
+        blocking read happens only when something actually moved.'''
+        while not client.is_closed():
             try:
-                installed = package_fingerprint()
-                changed = package_change_event(identity, state['running_package'],
-                                               installed, state['reported_package'])
-                if changed:
-                    # Said, not acted on: dropping a live gateway connection
-                    # is the owning session's decision, not this loop's.
-                    state['reported_package'] = installed
-                    emit_event(changed)
-                    log(f"installed package changed: {changed['running']} -> "
-                        f"{changed['installed']}; restart to run it")
+                signature = package_stat_signature()
+                if signature != state['package_stat']:
+                    state['package_stat'] = signature
+                    installed = package_fingerprint()
+                    changed = package_change_event(
+                        identity, state['running_package'], installed,
+                        state['reported_package'])
+                    if changed:
+                        # Said, not acted on: dropping a live gateway
+                        # connection is the owning session's decision.
+                        state['reported_package'] = installed
+                        emit_event(changed)
+                        log(f"installed package changed: {changed['running']} "
+                            f"-> {changed['installed']}; restart to run it")
             except Exception as e:
                 log(f'installed-version check failed: {type(e).__name__}: {e}')
-            await asyncio.sleep(300)
+            await asyncio.sleep(PACKAGE_CHECK_SECONDS)
 
     async def op_status_plugin_set(path):
         if not path:
@@ -2655,6 +2670,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             client.loop.create_task(leech_watcher())
             client.loop.create_task(usage_status_watcher())
             client.loop.create_task(heartbeat_watcher())
+            client.loop.create_task(version_watcher())
             # Built-in default status plugin: load it once at startup if the user
             # hasn't installed one. A later `status-plugin set` replaces it (single
             # slot). Best-effort — a failure here must never break the connector.
