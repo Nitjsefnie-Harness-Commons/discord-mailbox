@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.34.0"
+__version__ = "0.35.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
