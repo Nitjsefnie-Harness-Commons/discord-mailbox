@@ -34,7 +34,10 @@ on:
     branches: [main]
     paths:
       # The narrowest possible allow-list: the file that holds __version__.
-      - 'discord_mb_lib/__init__.py'
+      # That is core.py -- __init__.py is a docstring and defines nothing, so
+      # watching it meant a version bump touched no watched path and this
+      # workflow was never scheduled at all (issue #12).
+      - 'discord_mb_lib/core.py'
   workflow_dispatch:
     inputs:
       sha:
@@ -76,12 +79,21 @@ jobs:
 
       - name: Read and validate the version
         id: version
-        # Read from the installed attribute rather than grepped out of the
-        # file: pyproject.toml resolves the distribution version from this
-        # same attribute, so reading it the same way is the only way to be
-        # sure the tag and the wheel agree.
+        # Ask the BUILT DISTRIBUTION rather than grepping the file: pyproject
+        # resolves the distribution version from `discord_mb_lib.core`, so the
+        # only way to be sure the tag and the wheel agree is to read what the
+        # build produced.
+        #
+        # Not by importing it. `import discord_mb_lib` reaches a package that
+        # defines no `__version__` at all, which is how this step came to fail
+        # with AttributeError (issue #12), and importing `discord_mb_lib.core`
+        # instead would need discord.py and psutil that this job has no reason
+        # to install. `--no-deps` builds the distribution without them, and
+        # importlib.metadata reads the recorded version without importing any
+        # of it.
         run: |
-          version="$(python3 -c 'import discord_mb_lib; print(discord_mb_lib.__version__)')"
+          python3 -m pip install --quiet --no-deps .
+          version="$(python3 -c 'import importlib.metadata as m; print(m.version("discord-mailbox"))')"
           if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([._a-z0-9-]*)$'; then
             echo "__version__ is not a usable version: '$version'" >&2
             exit 1

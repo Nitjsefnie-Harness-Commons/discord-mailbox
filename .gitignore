@@ -76,3 +76,4 @@
 !/tests/test_discord_move.py
 !/tests/test_discord_package_contract.py
 !/tests/test_discord_usage_status.py
+!/tests/test_release_version_source.py
