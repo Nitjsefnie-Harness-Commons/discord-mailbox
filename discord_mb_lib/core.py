@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.38.1"
+__version__ = "0.39.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -787,6 +787,24 @@ def attach_extras(record, m, body_key='body'):
 # with no headroom for a race. Without it, a rename happens only when a number
 # or a colour actually changes, which is a few times an hour.
 #
+# The cost of carrying no clock is that a board which stops being updated is
+# indistinguishable from one whose numbers have not moved — the reader sees a
+# figure either way. So a board that has had nothing to publish for
+# USAGE_STALE_PERIODS consecutive periods stops asserting a number and says so
+# instead. Three properties keep that inside the rename budget:
+#
+#   * It waits out a threshold rather than reacting to one dataless period, so
+#     a single usage_query timeout never blanks a board that will be correct
+#     again in five minutes.
+#   * It is a state, not a clock: one rename on entering staleness and one on
+#     leaving it, however long the outage lasts.
+#   * It fires ONCE per episode. A host whose fetch is broken while another
+#     host's still works would otherwise blank a board the working host
+#     immediately republishes, and the two would trade renames every period.
+#     Publishing the marker once per episode bounds that disagreement to a
+#     single exchange, after which the host with real data wins — which is the
+#     right outcome, since a published figure from a working host is current.
+#
 # The channels are matched by the provider word in their name, NOT by id or by
 # an exact title, because this code renames them: whatever the name becomes, it
 # still contains "claude" / "kimi", so the next lookup still finds it. Creating
@@ -800,6 +818,7 @@ USAGE_STATUS_LOCK_TTL = 60         # steal a claim lock older than this
 USAGE_PACE_BAND = 1.0              # ±% around flat pace that reads as "on pace"
 USAGE_PROVIDERS = ('claude', 'kimi', 'codex')
 USAGE_WINDOWS = (('five_hour', '5h'), ('weekly', '7d'))
+USAGE_STALE_PERIODS = 3            # dataless periods before a board stops asserting
 
 # Optional third channel: an explicit, VISIBLE lease saying which connector is
 # publishing. The period bucket + name equality above already give one rename
@@ -1048,6 +1067,47 @@ def render_usage_name(provider, block):
     if not parts:
         return None
     return f"{provider} · " + ' · '.join(parts)
+
+
+def render_stale_usage_name(provider):
+    """Channel name for a board with nothing current to show, e.g.
+    `claude · ⚪ usage unknown`.
+
+    Carries no figure and no pace colour: the whole point is that the reader
+    cannot mistake it for a reading. ⚪ is already this module's mark for
+    "unknown, do not read as bad" (see `pace_dot`). The provider word stays
+    first so `usage_guild_targets` still matches the channel afterwards, which
+    is what lets the board come back when data does.
+    """
+    return f'{provider} · ⚪ usage unknown'
+
+
+def usage_board_plan(provider, block, live_name, misses=0, marked=False,
+                     threshold=USAGE_STALE_PERIODS):
+    """One board channel, one period -> (name to write or None, misses, marked).
+
+    `misses` counts consecutive periods with nothing renderable for this
+    provider; `marked` says the stale name has already been published for the
+    current episode. Both are per channel, and the returned pair is the state
+    to keep — `marked` only once the write it authorises has actually landed,
+    so a rename refused by permissions is retried rather than assumed done.
+
+    A renderable reading ends the episode outright: it resets the counter and
+    re-arms the marker, so the next outage is announced again.
+    """
+    name = render_usage_name(provider, block)
+    if name:
+        return (None if name == live_name else name), 0, False
+    misses += 1
+    if misses < threshold or marked:
+        # Below the threshold, or already announced: say nothing. Leaving the
+        # figure up for a few minutes is the lesser error, and re-announcing
+        # would fight a host that still has data.
+        return None, misses, marked
+    stale = render_stale_usage_name(provider)
+    if stale == live_name:
+        return None, misses, True    # already correct — nothing to publish
+    return stale, misses, True
 
 
 def fetch_usage(timeout=60):
@@ -2662,6 +2722,7 @@ __all__ = [
     'USAGE_PROVIDERS',
     'USAGE_STATUS_INTERVAL',
     'USAGE_STATUS_JITTER',
+    'USAGE_STALE_PERIODS',
     'USAGE_STATUS_LOCK_TTL',
     'USAGE_STATUS_POLL',
     'USAGE_WINDOWS',
@@ -2753,6 +2814,7 @@ __all__ = [
     'recovery_label',
     'register_cli',
     'render_claim_name',
+    'render_stale_usage_name',
     'render_usage_name',
     'replay_last_presence',
     'resolve_token_and_flavor',
@@ -2777,6 +2839,7 @@ __all__ = [
     'thread_cli',
     'time',
     'topic_cli',
+    'usage_board_plan',
     'usage_gate_paths',
     'usage_period',
     'uuid',

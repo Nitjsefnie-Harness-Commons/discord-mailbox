@@ -311,6 +311,168 @@ def test_the_provider_tuple_is_the_only_board_control_point(_tmp):
             f"usage channel matching hardcodes {hardcoded} beside the tuple")
 
 
+# --------------------------------------------------------------------------
+# staleness: a board that cannot be refreshed must stop asserting
+# --------------------------------------------------------------------------
+
+LIVE = "claude · 5h 🟢 1% · 7d 🟢 43%"
+READING = {"weekly": {"pct": 68.0, "pace_pct": 65.0}}
+
+
+def test_a_single_dataless_period_leaves_the_board_alone(_tmp):
+    """One usage_query timeout must not blank a board that will be right again
+    in five minutes — the figure is only a few minutes old at that point."""
+    mb = _mb()
+    if mb is None:
+        return
+    name, misses, marked = mb.usage_board_plan("claude", None, LIVE)
+    assert name is None, f"one empty period already renamed the board to {name!r}"
+    assert (misses, marked) == (1, False)
+
+
+def test_a_board_with_no_reading_stops_asserting_a_figure(_tmp):
+    """Issue #10: the board kept publishing its last numbers indefinitely.
+
+    Observed live: `7d 🟢 43%` stayed up for over twelve hours while the account
+    was actually at 68%, and nothing in the name said the reading was old.
+    """
+    mb = _mb()
+    if mb is None:
+        return
+    misses, marked, live = 0, False, LIVE
+    for _ in range(mb.USAGE_STALE_PERIODS - 1):
+        name, misses, marked = mb.usage_board_plan("claude", None, live,
+                                                   misses, marked)
+        assert name is None, "blanked before the threshold"
+    name, misses, marked = mb.usage_board_plan("claude", None, live, misses,
+                                               marked)
+    assert name == mb.render_stale_usage_name("claude"), (
+        f"a board with no reading for {mb.USAGE_STALE_PERIODS} periods still "
+        f"asserts a figure: {name!r}")
+    assert marked is True
+
+
+def test_the_stale_name_is_published_once_per_episode(_tmp):
+    """The bound on a disagreement between hosts.
+
+    A host whose fetch is broken while another host's still works would blank a
+    board the working host immediately republishes. Announcing once per episode
+    caps that at a single exchange instead of two renames every period, which
+    would sit outside Discord's 2-per-10-minutes budget.
+    """
+    mb = _mb()
+    if mb is None:
+        return
+    stale = mb.render_stale_usage_name("claude")
+    # already announced, and another host has since put a figure back up
+    name, _, marked = mb.usage_board_plan("claude", None, LIVE,
+                                          mb.USAGE_STALE_PERIODS, True)
+    assert name is None, f"re-announced over a live figure: {name!r}"
+    assert marked is True
+    # and it does not rewrite a name the channel already carries
+    name, _, marked = mb.usage_board_plan("claude", None, stale,
+                                          mb.USAGE_STALE_PERIODS, False)
+    assert name is None, "renamed a channel to the name it already had"
+    assert marked is True, "an already-stale board must count as announced"
+
+
+def test_a_reading_ends_the_episode_and_re_arms_the_marker(_tmp):
+    """Data coming back is what re-arms it — otherwise the second outage of a
+    connector's life would go unannounced."""
+    mb = _mb()
+    if mb is None:
+        return
+    stale = mb.render_stale_usage_name("claude")
+    name, misses, marked = mb.usage_board_plan(
+        "claude", READING, stale, mb.USAGE_STALE_PERIODS, True)
+    assert name == "claude · 7d 🔴 68%", name
+    assert (misses, marked) == (0, False), "the episode did not end"
+    # ...and the next outage is announced again
+    for _ in range(mb.USAGE_STALE_PERIODS - 1):
+        name, misses, marked = mb.usage_board_plan("claude", None, name,
+                                                   misses, marked)
+        assert name is None
+    name, _, _ = mb.usage_board_plan("claude", None, "claude · 7d 🔴 68%",
+                                     misses, marked)
+    assert name == stale, "the marker did not re-arm after a reading"
+
+
+def test_a_live_figure_that_needs_no_rename_is_not_stale(_tmp):
+    """Nothing to write is not the same as nothing to read."""
+    mb = _mb()
+    if mb is None:
+        return
+    current = mb.render_usage_name("claude", READING)
+    name, misses, marked = mb.usage_board_plan("claude", READING, current, 2,
+                                               False)
+    assert name is None, "rewrote a name the channel already carried"
+    assert (misses, marked) == (0, False), (
+        "a board showing a current figure was left counted as stale")
+
+
+def test_staleness_is_decided_per_provider(_tmp):
+    """usage_query returns partial results — Claude and Kimi on a box with no
+    Codex login. One provider dropping out must not blank the others."""
+    mb = _mb()
+    if mb is None:
+        return
+    data = {"claude": READING}
+    n_claude, _, _ = mb.usage_board_plan("claude", data.get("claude"), LIVE,
+                                         mb.USAGE_STALE_PERIODS, False)
+    n_codex, _, _ = mb.usage_board_plan("codex", data.get("codex"),
+                                        "codex · 7d 🟢 15%",
+                                        mb.USAGE_STALE_PERIODS, False)
+    assert n_claude == "claude · 7d 🔴 68%", n_claude
+    assert n_codex == mb.render_stale_usage_name("codex"), n_codex
+
+
+def test_the_stale_name_carries_no_figure_and_stays_matchable(_tmp):
+    """It has to survive the round trip: the channel is found again by the
+    provider word in whatever this code last renamed it to."""
+    mb = _mb()
+    if mb is None:
+        return
+    for provider in mb.USAGE_PROVIDERS:
+        name = mb.render_stale_usage_name(provider)
+        assert provider in name.lower(), (
+            f"{name!r} no longer matches its own provider, so the board can "
+            "never come back")
+        assert "%" not in name, f"the stale name still asserts a figure: {name!r}"
+        assert not any(ch.isdigit() for ch in name), name
+        assert "claim" not in name.lower(), (
+            f"{name!r} would be mistaken for the lease channel")
+        assert mb.parse_claim_name(name) == (None, None)
+        assert len(name) <= 100, "Discord caps a channel name at 100 characters"
+
+
+def test_an_empty_fetch_no_longer_ends_the_pass(_tmp):
+    """`update_usage_status` is a closure in the connector's run scope and
+    cannot be called without a live gateway, so pin the shape instead.
+
+    It used to `return` the moment `fetch_usage` came back empty, which is what
+    left every board holding its last figures. The empty read has to reach the
+    per-channel planning below it.
+    """
+    source = (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
+        encoding="utf-8")
+    body = source.split("async def update_usage_status", 1)
+    assert len(body) == 2, "the connector no longer publishes the board here"
+    body = body[1].split("async def usage_status_watcher", 1)[0]
+    empty = body.split("if not data:", 1)
+    assert len(empty) == 2, "the empty-read branch is gone"
+    branch = empty[1].split("pending = []", 1)[0]
+    # Statements only: a comment saying the branch does not return is not the
+    # branch not returning, and the two must not be able to satisfy each other.
+    branch = "\n".join(line for line in branch.splitlines()
+                       if not line.lstrip().startswith("#"))
+    assert "return" not in branch, (
+        "an empty usage read still ends the pass, so every board keeps the "
+        "figures it was last given")
+    assert "usage_board_plan(" in body, (
+        "the connector does not consult usage_board_plan, so nothing decides "
+        "when a board has gone stale")
+
+
 def main():
     return _util.runner(_util.collect(globals()), tmp_prefix="usagestatus_")
 
