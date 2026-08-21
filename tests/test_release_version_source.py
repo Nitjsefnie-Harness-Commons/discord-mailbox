@@ -63,11 +63,15 @@ def test_the_tag_workflow_watches_the_file_that_holds_the_version(_tmp):
 def test_the_tag_workflow_does_not_read_the_version_off_the_bare_package(_tmp):
     """`discord_mb_lib` defines no `__version__` — reading it there is an
     AttributeError, and `__init__.py` cannot gain one without importing core,
-    which drags discord.py and psutil into every consumer of the package."""
-    import discord_mb_lib                             # noqa: PLC0415
-    assert not hasattr(discord_mb_lib, "__version__"), (
-        "the package now exports __version__; this test's premise moved and "
-        "tag.yml's read should be revisited with it")
+    which drags discord.py and psutil into every consumer of the package.
+
+    Read the checkout rather than importing it: an import answers for whatever
+    copy is installed on the box, which is not the tree the workflow will run
+    against, and on a runner with no install it does not answer at all.
+    """
+    assert "discord_mb_lib/__init__.py" not in _modules_defining_version(), (
+        "the package root now declares __version__; this test's premise moved "
+        "and tag.yml's read should be revisited with it")
     text = TAG_WORKFLOW.read_text(encoding="utf-8")
     code = "\n".join(line for line in text.splitlines()
                      if not line.lstrip().startswith("#"))
