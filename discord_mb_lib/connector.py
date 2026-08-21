@@ -333,6 +333,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     state = {'identity_map': {}, 'own_dir_msg_id': None, 'channels': {}, 'roles': {}, 'guild': None, 'watchers_started': False, 'extension': None, 'extension_ctx': None, 'extension_error': None, 'ext_listeners': {}, 'ext_installed': set(), 'ext_tasks': [], 'pins_cache': {}, 'forum_pins_cache': {},
              'status_task': None, 'status_state': 'empty', 'status_last': None, 'status_error': None,
              'usage_period': None,
+             'usage_misses': {}, 'usage_stale': set(),
              # Captured now, while the imported code and the installed files
              # are still the same thing; every later read describes the
              # install, so the two can be compared.
@@ -2571,6 +2572,18 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             return False                 # could not claim -> do not publish
         return True
 
+    def _record_usage_stale(channel_id, marked):
+        """Remember whether this channel is currently showing the stale name.
+
+        Kept as a set rather than on the plan's return path because it may only
+        be recorded once the rename it describes has actually landed — a board
+        that could not be renamed has not announced anything.
+        """
+        if marked:
+            state['usage_stale'].add(channel_id)
+        else:
+            state['usage_stale'].discard(channel_id)
+
     async def update_usage_status():
         """One update period, from a connector that may be one of many machines.
 
@@ -2587,6 +2600,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
              cross-host interlock. A connector on another machine computing the
              same string from the same account usage has already published it,
              and this one then does nothing.
+
+        A period that yields nothing is not a no-op: `usage_board_plan` counts
+        it, and once a board has gone USAGE_STALE_PERIODS periods without a
+        reading it is renamed to say so rather than left holding figures that
+        read as current. See the design note above USAGE_STALE_PERIODS.
         """
         period = usage_period()
         if state.get('usage_period') == period:
@@ -2604,17 +2622,26 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if data is None:
                 data = await asyncio.to_thread(fetch_usage)
                 if not data:
+                    # NOT a return: an empty read is itself news for the board,
+                    # which otherwise keeps asserting the last figures it was
+                    # given. usage_board_plan decides when to say so.
                     log('usage status: no usage data this period')
-                    return
             pending = []
             for provider, chan in sorted(targets.items()):
-                name = render_usage_name(provider, data.get(provider))
-                if name and name != getattr(chan, 'name', None):
-                    pending.append((chan, name))
+                name, misses, marked = usage_board_plan(
+                    provider, data.get(provider), getattr(chan, 'name', None),
+                    state['usage_misses'].get(chan.id, 0),
+                    chan.id in state['usage_stale'])
+                state['usage_misses'][chan.id] = misses
+                if name is None:
+                    # Nothing to write, so the plan's verdict stands as is.
+                    _record_usage_stale(chan.id, marked)
+                else:
+                    pending.append((chan, name, marked))
             if not pending:
                 continue                 # already correct — nothing to publish
             await asyncio.sleep(random.uniform(0, USAGE_STATUS_JITTER))
-            for chan, name in pending:
+            for chan, name, marked in pending:
                 # Re-read the live name AFTER the jitter: another host may have
                 # published this exact string while we waited, and renaming to a
                 # value the channel already carries just burns rate-limit budget.
@@ -2628,6 +2655,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     # its retries: that is this guild's problem, not the pass's.
                     log(f'usage status: rename failed for {chan.id} in '
                         f'{guild.name}: {type(e).__name__}: {e}')
+                    continue             # not published -> not announced
+                _record_usage_stale(chan.id, marked)
 
     async def usage_status_watcher():
         """Re-check every USAGE_STATUS_POLL; act at most once per period.
