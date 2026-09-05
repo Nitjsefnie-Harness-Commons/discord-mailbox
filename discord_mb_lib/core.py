@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 'Discord-backed mailbox for selected-harness agent communication. CLI reference: the composed `discord` skill.'
 
-__version__ = "0.39.0"
+__version__ = "0.40.0"
 # Cross-platform: must work on Linux AND Windows. No POSIX-only calls without a
 # Windows fallback. Bump __version__ (SemVer) on every substantive change.
 
@@ -2191,6 +2191,30 @@ async def recover_status_plugin_after_gateway(state, *, restart, replay, clear):
 
 STATUS_PLUGIN_NAME = 'plugin.py'      # the installed copy inside the slot
 STATUS_MANIFEST_NAME = 'manifest.json'
+# Seconds between background retries after a reconnect recovery fails, and the
+# tuple length IS the attempt budget (#333). The first recovery attempt happens
+# inline on the reconnect; these come after it, so a fault that outlasts one
+# reconnect -- a DNS outage still failing getaddrinfo four minutes after the
+# retry was scheduled is the reported one -- no longer ends the plugin.
+STATUS_RECOVERY_BACKOFF = (30, 120, 600)
+
+
+def status_plugin_down_event(identity, reason, attempts, manifest=None):
+    '''The `status_plugin_down` event for a plugin recovery has given up on.
+
+    Reporting, never reacting, the way `package_change_event` is: reinstalling
+    is the owning session's decision. Emitted only once the retry budget is
+    EXHAUSTED, so a transient fault the retries absorb never reaches the
+    stream -- and a plugin that is down for good stops being invisible. The
+    reported episode left the presence empty for about 17 hours with two log
+    lines and no event, until a human asked about it.'''
+    event = {'event': 'status_plugin_down', 'identity': identity,
+             'reason': str(reason), 'attempts': int(attempts),
+             'reinstall_required': True}
+    source = (manifest or {}).get('source')
+    if source:
+        event['source'] = source
+    return event
 # Built-in default status plugin (ships in the bundle next to the discord skill).
 # The connector loads it at startup when no status plugin is set; a `status-plugin
 # set` replaces it. It is also the reference example for authoring a custom one.
@@ -2711,6 +2735,7 @@ __all__ = [
     'STATUS_KINDS',
     'STATUS_MANIFEST_NAME',
     'STATUS_PLUGIN_NAME',
+    'STATUS_RECOVERY_BACKOFF',
     'SendError',
     'SendRetry',
     'StatusPluginGatewayTransportError',
@@ -2828,6 +2853,7 @@ __all__ = [
     'stat',
     'state_dir',
     'status_plugin_cli',
+    'status_plugin_down_event',
     'status_plugin_failure_is_transport',
     'status_plugin_gateway_call',
     'status_plugin_slot',
