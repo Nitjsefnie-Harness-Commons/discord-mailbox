@@ -1607,7 +1607,14 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         state['status_task'] = client.loop.create_task(_run_status_plugin(run_fn))
 
     async def _restart_status_plugin_after_reconnect():
-        '''Restart only a transport-interrupted installed plugin.'''
+        '''Restart only a transport-interrupted installed plugin.
+
+        Every failure records WHY in state['status_reason'] (#333). The branch
+        that fired in the reported episode -- the installed slot is gone --
+        returned False without logging anything, so a 334 KB connector log held
+        two lines about a presence that stayed empty for 17 hours, no reason
+        for either, and no traceback.
+        '''
         if state.get('status_state') != 'retrying':
             return False
         task = state.get('status_task')
@@ -1615,19 +1622,97 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             return None
         slot_py = status_plugin_slot(identity) / STATUS_PLUGIN_NAME
         if read_status_manifest(identity) is None or not slot_py.is_file():
-            state['status_state'] = 'empty'
-            state['status_task'] = None
-            return False
+            # The slot sits under the temp state dir, so it can vanish without
+            # anyone uninstalling anything. The source is remembered in memory:
+            # rebuild the slot from it, which is exactly what the human did by
+            # hand ("status-plugin set, same plugin, ran fine since").
+            manifest = state.get('status_manifest') or {}
+            source = manifest.get('source')
+            rebuilt = False
+            if source and Path(source).is_file():
+                try:
+                    install_status_plugin(identity, source)
+                    write_status_manifest(identity, manifest)
+                    rebuilt = True
+                    log(f'[status-plugin] the installed slot was gone; '
+                        f'rebuilt it from {source}')
+                except Exception as e:
+                    log(f'[status-plugin] rebuilding the slot from {source} '
+                        f'failed: {type(e).__name__}: {e}')
+            if not rebuilt:
+                state['status_reason'] = (
+                    'the installed slot is gone (no manifest, or no '
+                    + STATUS_PLUGIN_NAME + ') and '
+                    + (f'the recorded source {source} is unreadable'
+                       if source else 'no source was recorded'))
+                log(f'[status-plugin] cannot restart: {state["status_reason"]}')
+                state['status_state'] = 'empty'
+                state['status_task'] = None
+                return False
         try:
             run_fn = load_status_plugin(str(slot_py))
             await _start_status_plugin(run_fn)
         except Exception as e:
-            log(f'[status-plugin] reconnect restart failed: {type(e).__name__}: {e}')
+            import traceback
+            state['status_reason'] = f'{type(e).__name__}: {e}'
             state['status_state'] = 'crashed'
-            state['status_error'] = f'{type(e).__name__}: {e}'
-            sweep_status_plugin(identity)
+            state['status_error'] = state['status_reason']
+            # The traceback is the whole point: the reported log had none.
+            log('[status-plugin] reconnect restart failed:\n'
+                + traceback.format_exc().rstrip())
+            # NOT swept here. Sweeping deletes the slot the retries below are
+            # about to try again, which is how one failed attempt became
+            # permanent abandonment.
             return False
+        state['status_reason'] = None
         return True
+
+    def _schedule_status_recovery_retry(reason):
+        'One background retry chain at a time; the reconnect path arms it.'
+        task = state.get('status_retry_task')
+        if task is not None and not task.done():
+            return
+        state['status_retry_task'] = client.loop.create_task(
+            _retry_status_recovery(reason))
+
+    async def _retry_status_recovery(reason):
+        '''Bounded background retry after the inline reconnect recovery failed.
+
+        Backgrounded rather than awaited inside on_ready: the recovery runs
+        before the watchers are started, so sleeping there would hold up the
+        whole connector for as long as the backoff.
+        '''
+        budget = len(STATUS_RECOVERY_BACKOFF)
+        last = reason
+        for attempt, delay in enumerate(STATUS_RECOVERY_BACKOFF, start=1):
+            await asyncio.sleep(delay)
+            if client.is_closed():
+                return
+            if state.get('status_state') not in ('empty', 'crashed', 'retrying'):
+                return                      # something else owns the slot now
+            state['status_state'] = 'retrying'
+            try:
+                restarted = await _restart_status_plugin_after_reconnect()
+            except Exception as e:
+                import traceback
+                state['status_reason'] = f'{type(e).__name__}: {e}'
+                log('[status-plugin] retry raised:\n'
+                    + traceback.format_exc().rstrip())
+                restarted = False
+            if restarted:
+                log(f'[status-plugin] recovered on retry {attempt}/{budget}')
+                return
+            last = state.get('status_reason') or last
+            log(f'[status-plugin] retry {attempt}/{budget} failed: {last}')
+        manifest = read_status_manifest(identity) or state.get('status_manifest')
+        sweep_status_plugin(identity)
+        state['status_state'] = 'empty'
+        state['status_task'] = None
+        log(f'[status-plugin] recovery abandoned after {budget} retries: {last}')
+        # Reporting, never reacting -- the owning session reinstalls. Without
+        # this the abandonment is invisible from outside the log file.
+        emit_event(status_plugin_down_event(identity, last, budget + 1,
+                                            manifest))
 
     async def _recover_status_after_gateway():
         async def _replay():
@@ -1652,7 +1737,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if outcome == 'restarted':
             log('status plugin restarted after gateway reconnect')
         elif outcome == 'cleared':
-            log('cleared stale status presence after plugin recovery failed')
+            reason = (state.get('status_reason') or state.get('status_error')
+                      or 'no reason recorded')
+            log('cleared stale status presence after plugin recovery failed: '
+                + str(reason))
+            _schedule_status_recovery_retry(reason)
 
     async def _extension_start(path, *, persist):
         '''Load + setup an extension. `persist` records it in the registry so
@@ -1800,6 +1889,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         manifest = {'source': str(Path(path).resolve()), 'name': Path(path).name,
                     'installed_at': time.strftime('%Y-%m-%dT%H:%M:%S')}
         write_status_manifest(identity, manifest)
+        # Kept in MEMORY as well as on disk: the slot lives under the temp
+        # state dir, so it can be removed by something that never asked this
+        # connector, and then the manifest cannot say what was installed (#333).
+        state['status_manifest'] = manifest
         await _start_status_plugin(run_fn)
         return {'installed': True, 'name': manifest['name'], 'source': manifest['source']}
 

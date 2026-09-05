@@ -493,6 +493,62 @@ def test_status_plugin_transport_failure_is_retried_after_reconnect(_tmp):
     assert "status plugin restarted after gateway reconnect" in connector_source
 
 
+def test_a_failed_recovery_is_retried_and_then_reported(_tmp):
+    """#333: one failed attempt after a reconnect ended the plugin for good.
+
+    A ten-minute DNS outage killed an in-flight gateway write. The connector
+    logged "transport interrupted; retry after reconnect"; twenty minutes
+    later the gateway came back, the recovery failed, and those two lines were
+    the entire record in a 334 KB log -- no reason, no traceback, no event,
+    and no second attempt. The presence stayed empty for about 17 hours until
+    a human asked; `status-plugin set` with the same default plugin fixed it
+    instantly.
+    """
+    mb, _ = _mod()
+    if mb is None:
+        return
+
+    down = mb.status_plugin_down_event(
+        "kvalita_gpu_box", "the installed slot is gone", 4,
+        {"source": "/plugins/discord_status_default.py"})
+    assert down["event"] == "status_plugin_down"
+    assert down["identity"] == "kvalita_gpu_box"
+    assert down["reason"] == "the installed slot is gone"
+    assert down["attempts"] == 4
+    assert down["reinstall_required"] is True
+    assert down["source"] == "/plugins/discord_status_default.py"
+    # No manifest to name: the event still has to fire, just without a source.
+    assert "source" not in mb.status_plugin_down_event("i", "why", 4)
+    assert len(mb.STATUS_RECOVERY_BACKOFF) >= 2, (
+        "a single retry is the behaviour this issue is about")
+
+    source = inspect.getsource(inspect.unwrap(mb._run_connector))
+    restart = source.split("async def _restart_status_plugin_after_reconnect",
+                           1)[1].split("def _schedule_status_recovery_retry", 1)[0]
+    assert "sweep_status_plugin" not in restart, (
+        "the reconnect restart still deletes the slot on failure, so the "
+        "retries below it have nothing left to retry")
+    assert "traceback.format_exc()" in restart, (
+        "a failed restart still logs no traceback")
+    assert "state['status_reason']" in restart, (
+        "a failed restart records no reason, so the log cannot name one")
+    assert "install_status_plugin(identity, source)" in restart, (
+        "a slot that vanished from the temp state dir is not rebuilt from "
+        "the source the connector installed")
+
+    retry = source.split("async def _retry_status_recovery", 1)[1]
+    assert "for attempt, delay in enumerate(STATUS_RECOVERY_BACKOFF" in retry, (
+        "recovery is not retried on a backoff")
+    assert "emit_event(status_plugin_down_event(" in retry, (
+        "an abandoned plugin still emits no event, so nothing outside the "
+        "log file can see it")
+    assert "recovery abandoned after" in retry
+    assert "_schedule_status_recovery_retry(reason)" in source, (
+        "the reconnect path never arms the retry")
+    assert "cleared stale status presence after plugin recovery failed: " in \
+        source, "the clear line still states no reason"
+
+
 def test_fixture_matches_the_shipped_parser(_tmp):
     """The fixture must stay loadable by whatever discord.py is installed.
 
