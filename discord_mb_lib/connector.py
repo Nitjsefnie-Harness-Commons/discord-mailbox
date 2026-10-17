@@ -10,7 +10,53 @@ from .storage import *
 from .core import _ExtensionContext
 from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _ConnectorOwnershipError, _EventStreamReader,
-                      _EventStreamWriter, _LeechLogWriter)
+                      _EventStreamWriter, _LeechLogWriter,
+                      _OwnershipAccessError, _OwnershipContendedError)
+
+
+def _recorded_owner(pidfile, identity):
+    """'alive' (a live connector PID), 'gone' (the recorded PID is dead or
+    recycled), or 'unknown' (no readable record)."""
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (OSError, ValueError):
+        return 'unknown', None
+    if pid == os.getpid() or not pid_alive(pid):
+        return 'gone', pid
+    if is_connector_process(pid, identity) is False:
+        return 'gone', pid
+    return 'alive', pid
+
+
+def _claim_ownership(identity, pidfile):
+    """-> (_ConnectorOwnership, None) or (None, the reason it cannot start).
+
+    Only an OS lock refusal is "already running". A lock file that cannot be
+    opened is an access problem (#372): when the recorded PID is gone, the
+    stale lock and PID file are removed and the claim retried once; otherwise
+    the real error is reported, never as contention.
+    """
+    try:
+        return _ConnectorOwnership(pidfile), None
+    except _ConnectorOwnershipError as exc:
+        error = exc
+    state, pid = _recorded_owner(pidfile, identity)
+    if state == 'alive':
+        return None, f'Connector for {identity} already running (PID {pid})'
+    if isinstance(error, _OwnershipAccessError) and state == 'gone':
+        try:
+            for stale in (pidfile.parent / f'.{pidfile.name}.lock', pidfile):
+                try:
+                    stale.unlink()
+                except FileNotFoundError:
+                    pass
+            return _ConnectorOwnership(pidfile), None
+        except (OSError, _ConnectorOwnershipError) as exc:
+            error = exc
+    if isinstance(error, _OwnershipContendedError):
+        return None, f'Connector for {identity} already running ({error})'
+    return None, (f'Connector for {identity} cannot claim its state ({error}); '
+                  f'this is not another connector: fix access to {pidfile.parent}')
 
 
 def leech_main(identity, claude_pid=None, log_path=None, flavor=None):
@@ -143,11 +189,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     # Claim the identity before opening its human log.  This is an OS lock,
     # not a check-then-write PID race; it also protects callers that choose
     # different --log paths for the same identity.
-    try:
-        process_owner = _ConnectorOwnership(pidfile)
-    except _ConnectorOwnershipError as e:
-        print(f'Connector for {identity} already running ({e})',
-              file=sys.stderr, flush=True)
+    process_owner, refusal = _claim_ownership(identity, pidfile)
+    if process_owner is None:
+        print(refusal, file=sys.stderr, flush=True)
         sys.exit(1)
 
     _connector_started_at = time.time()
@@ -2898,6 +2942,8 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
 
 __all__ = [
     'ConnectorApp',
+    '_claim_ownership',
+    '_recorded_owner',
     '_run_connector',
     'connector_main',
     'leech_main',

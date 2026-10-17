@@ -43,6 +43,64 @@ def _verdict(m, cmdline, identity):
     return m.is_connector_process(4242, identity)
 
 
+def _claim_module():
+    """The connector's ownership claim, or None when discord.py is absent."""
+    sys.path.insert(0, _util.SCRIPTS)
+    try:
+        import discord_mb_lib.connector as connector
+    except ImportError:
+        return None
+    return connector
+
+
+def test_only_lock_contention_reads_as_already_running(tmp):
+    """#372: a lock file that cannot be opened is not another connector."""
+    c = _claim_module()
+    if c is None:
+        return
+    pidfile = Path(tmp) / "connector.pid"
+    held = c._ConnectorOwnership(pidfile)
+    try:
+        owner, refusal = c._claim_ownership("agent", pidfile)
+        assert owner is None and "already running" in refusal, refusal
+    finally:
+        held.close()
+
+    real = c._ConnectorOwnership
+    calls = []
+
+    def denied_once(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise c._OwnershipAccessError("cannot use ownership lock: Permission denied")
+        return real(path)
+
+    # The recorded owner is gone: clean up its stale state, then claim.
+    pidfile.write_text("4194000\n")             # above any default pid_max
+    stale_lock = Path(tmp) / ".connector.pid.lock"
+    stale_lock.write_bytes(b"\0")
+    c._ConnectorOwnership = denied_once
+    try:
+        owner, refusal = c._claim_ownership("agent", pidfile)
+    finally:
+        c._ConnectorOwnership = real
+    assert owner is not None and refusal is None, refusal
+    assert not pidfile.exists(), "the dead owner's PID file survived cleanup"
+    owner.close()
+
+    # No readable record of an owner: report the access error, delete nothing.
+    pidfile.unlink(missing_ok=True)
+    calls.clear()
+    c._ConnectorOwnership = lambda path: (_ for _ in ()).throw(
+        c._OwnershipAccessError("cannot use ownership lock: Permission denied"))
+    try:
+        owner, refusal = c._claim_ownership("agent", pidfile)
+    finally:
+        c._ConnectorOwnership = real
+    assert owner is None and "Permission denied" in refusal, refusal
+    assert "already running" not in refusal and "not another connector" in refusal
+
+
 def test_recycled_pid_is_not_a_connector(tmp):
     """The reported incident: the PID now belongs to an unrelated service."""
     m = _mod()

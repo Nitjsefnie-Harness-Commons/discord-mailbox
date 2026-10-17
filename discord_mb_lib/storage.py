@@ -53,6 +53,19 @@ class _ConnectorOwnershipError(RuntimeError):
     """The connector identity or log path is already owned by another process."""
 
 
+class _OwnershipContendedError(_ConnectorOwnershipError):
+    """The OS lock call refused: another live process holds the lock."""
+
+
+class _OwnershipAccessError(_ConnectorOwnershipError):
+    """The ownership lock could not be opened or inspected at all.
+
+    Distinct from contention: a permission or I/O error on the state directory
+    is not another connector, and reporting it as "held" sent diagnosis after
+    a connector that did not exist (#372).
+    """
+
+
 class _TornNamedClaimRecord(FileExistsError):
     """A fixed claim entry whose bytes are not a complete record at all.
 
@@ -316,6 +329,9 @@ class _ConnectorOwnership:
             # write and before taking the OS lock, closing the symlink/reparse
             # and replacement windows on both POSIX and Windows.
             revalidate()
+            # Only the OS lock call itself reports contention; every earlier
+            # failure is an access error on the lock file.
+            contending = False
             if self._windows:
                 import msvcrt
                 # msvcrt.locking() locks bytes from the current file pointer;
@@ -326,11 +342,13 @@ class _ConnectorOwnership:
                     os.fsync(fh.fileno())
                 fh.seek(0)
                 revalidate()
+                contending = True
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
                 locked = True
             else:
                 import fcntl
                 revalidate()
+                contending = True
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 locked = True
             revalidate()
@@ -366,8 +384,11 @@ class _ConnectorOwnership:
                             fh.close()
                 except BaseException:
                     pass
-            raise _ConnectorOwnershipError(
-                f'ownership lock is held for {lock_path}') from exc
+            if locals().get('contending', False) and not locals().get('locked', False):
+                raise _OwnershipContendedError(
+                    f'ownership lock is held for {lock_path}') from exc
+            raise _OwnershipAccessError(
+                f'cannot use ownership lock {lock_path}: {exc}') from exc
 
     def _release_handle(self, fh):
         error = None
@@ -4878,6 +4899,8 @@ __all__ = [
     '_ConnectorLogWriter',
     '_ConnectorOwnership',
     '_ConnectorOwnershipError',
+    '_OwnershipAccessError',
+    '_OwnershipContendedError',
     '_EVENT_SEGMENT_RE',
     '_EventStreamReader',
     '_EventStreamWriter',
