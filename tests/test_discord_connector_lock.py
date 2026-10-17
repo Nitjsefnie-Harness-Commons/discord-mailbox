@@ -47,7 +47,7 @@ def _claim_module():
     """The connector's ownership claim, or None when discord.py is absent."""
     sys.path.insert(0, _util.SCRIPTS)
     try:
-        import discord_mb_lib.connector as connector
+        from discord_mb_lib import connector
     except ImportError:
         return None
     return connector
