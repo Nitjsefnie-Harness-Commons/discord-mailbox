@@ -274,6 +274,9 @@ class _ConnectorOwnership:
         flags = (os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0) |
                  getattr(os, 'O_BINARY', 0))
         fd = None
+        # Only the OS lock call itself reports contention; every earlier
+        # failure is an access error on the lock file.
+        contending = False
         try:
             try:
                 fd = os.open(str(lock_path), flags | os.O_CREAT | os.O_EXCL,
@@ -329,9 +332,6 @@ class _ConnectorOwnership:
             # write and before taking the OS lock, closing the symlink/reparse
             # and replacement windows on both POSIX and Windows.
             revalidate()
-            # Only the OS lock call itself reports contention; every earlier
-            # failure is an access error on the lock file.
-            contending = False
             if self._windows:
                 import msvcrt
                 # msvcrt.locking() locks bytes from the current file pointer;
@@ -384,7 +384,7 @@ class _ConnectorOwnership:
                             fh.close()
                 except BaseException:
                     pass
-            if locals().get('contending', False) and not locals().get('locked', False):
+            if contending and not locals().get('locked', False):
                 raise _OwnershipContendedError(
                     f'ownership lock is held for {lock_path}') from exc
             raise _OwnershipAccessError(
