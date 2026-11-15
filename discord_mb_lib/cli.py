@@ -95,10 +95,14 @@ def _cli():
     cr_add.add_argument('--upsert', action='store_true', help='Post anyway if an entry exists; latest post wins on get')
     cr.add_argument('--timeout', type=float, default=30.0)
 
-    cv = sub.add_parser('conversation', help='Fetch last N messages from any channel (default #agents)')
+    cv = sub.add_parser('conversation', help='Fetch last N messages from any channel or DM (default #agents)')
     cv.add_argument('identity', help='Identity whose connector serves the request')
     cv.add_argument('n', type=int, help='Number of messages per page (1-100)')
-    cv.add_argument('--channel', dest='channel_id', default=None, help='Channel ID (default: #agents bridge)')
+    where = cv.add_mutually_exclusive_group()
+    where.add_argument('--channel', dest='channel_id', default=None, help='Channel ID (default: #agents bridge)')
+    where.add_argument('--dm', default=None, metavar='IDENTITY_OR_USER_ID',
+                       help="Read this identity's bot DM with a user, named by registered identity or raw user id "
+                            "(resolved as `send --dm` does; sends nothing)")
     cv.add_argument('--before', dest='before_id', default=None, help='Fetch messages strictly before this message ID (for pagination)')
     cv.add_argument('--after', dest='after_id', default=None, help='Fetch messages strictly after this message ID (oldest-first)')
     cv.add_argument('--grep', default=None, help='Regex filter applied server-side to message content')
@@ -362,6 +366,7 @@ def _cli():
     elif args.command == 'conversation':
         conversation_cli(args.identity, args.n,
                          channel_id=args.channel_id,
+                         dm=args.dm,
                          before_id=args.before_id,
                          after_id=args.after_id,
                          grep=args.grep,
