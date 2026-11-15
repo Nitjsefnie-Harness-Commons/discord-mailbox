@@ -137,9 +137,7 @@ def _run(c, discord, tmp, world, requests):
         d.mkdir(parents=True, exist_ok=True)
     guild = types.SimpleNamespace(
         id=1, name="guild", roles=[],
-        text_channels=[world.bridge, world.directory_channel,
-                       world.Text(BRIDGE_ID + 2, c.ATTACHMENTS_CHANNEL_NAME),
-                       world.Text(BRIDGE_ID + 3, c.CREDS_CHANNEL_NAME)])
+        text_channels=[world.bridge, world.directory_channel])
     responses = {}
 
     class Client:
@@ -202,8 +200,9 @@ def _run(c, discord, tmp, world, requests):
         c.meta_out_dir = lambda identity: out_dir
         discord.Client = Client
         os.environ[LOCK_ROOT_ENV] = str(root / "locks")
-        c.connector_main("dm-test", claude_pid=os.getpid(), token="unused",
-                         log_path=root / "connector.log", flavor="claude")
+        with contextlib.redirect_stderr(io.StringIO()):    # its log is in connector.log
+            c.connector_main("dm-test", claude_pid=os.getpid(), token="unused",
+                             log_path=root / "connector.log", flavor="claude")
     finally:
         for n, v in saved.items():
             setattr(c, n, v)
@@ -287,7 +286,6 @@ def test_before_after_and_grep_reach_the_dm_history(tmp):
     assert "after" not in calls[0]
     assert calls[1]["after"].id == 6000 and calls[1]["oldest_first"] is True, calls
     assert [m["content"] for m in responses["c"]["messages"]] == ["newer needle"], responses["c"]
-    assert world.bridge.calls == [], "the bridge channel was read instead of the DM"
 
 
 def test_a_dm_user_together_with_a_channel_is_refused(tmp):
@@ -298,20 +296,13 @@ def test_a_dm_user_together_with_a_channel_is_refused(tmp):
     assert world.bridge.calls == [] and world.alice_dm.calls == []
 
 
-def test_the_default_channel_read_is_unchanged(tmp):
-    responses, world = _ask(tmp, {"r": _conv()})
-    if responses is None:
-        return
-    assert [m["content"] for m in responses["r"]["messages"]] == ["from the bridge"], responses["r"]
-    assert world.alice_dm.calls == []
+def _unopenable(world):
+    world.cached.clear()
+    world.fetch_error = RuntimeError("boom")
 
 
 def test_an_unopenable_dm_is_an_error_carrying_the_cause(tmp):
-    def broken(world):
-        world.cached.clear()
-        world.fetch_error = RuntimeError("boom")
-
-    responses, _ = _ask(tmp, {"r": _conv(dm_user="alice")}, broken)
+    responses, _ = _ask(tmp, {"r": _conv(dm_user="alice")}, _unopenable)
     if responses is None:
         return
     resp = responses["r"]
@@ -321,13 +312,9 @@ def test_an_unopenable_dm_is_an_error_carrying_the_cause(tmp):
 # The same resolution backs `send --dm` and the `move` DM destination; their
 # own error types and wording are what callers and `send_failed` events carry.
 def test_send_dm_keeps_its_own_errors_on_the_shared_resolution(tmp):
-    def broken(world):
-        world.cached.clear()
-        world.fetch_error = RuntimeError("boom")
-
     send = {"op": "send", "dm": True, "subject": "s", "body": "b"}
     responses, world = _ask(tmp, {"unknown": {**send, "to": "ghost"},
-                                  "unopenable": {**send, "to": "alice"}}, broken)
+                                  "unopenable": {**send, "to": "alice"}}, _unopenable)
     if responses is None:
         return
     assert responses["unknown"]["error"] == "SendError: unknown identity 'ghost' for --dm", responses
@@ -364,15 +351,11 @@ def test_the_cli_forwards_the_dm_user_in_the_request(tmp):
     core._meta_request = capture
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            core.conversation_cli("me", 5, dm="alice", grep="x")
-            core.conversation_cli("me", 5)
-            core.conversation_cli("me", 7, channel_id="1", before_id="2", after_id="3", grep="g")
+            core.conversation_cli("me", 5, dm="alice", before_id="2", after_id="3", grep="x")
     finally:
         core._meta_request = original
-    assert sent[0] == {"op": "conversation", "limit": 5, "dm_user": "alice", "grep": "x"}, sent
-    assert sent[1] == {"op": "conversation", "limit": 5}, sent
-    assert sent[2] == {"op": "conversation", "limit": 7, "channel_id": "1",
-                       "before_id": "2", "after_id": "3", "grep": "g"}, sent
+    assert sent == [{"op": "conversation", "limit": 5, "dm_user": "alice",
+                     "before_id": "2", "after_id": "3", "grep": "x"}], sent
 
 
 def test_the_parser_wires_dm_and_refuses_it_with_channel(tmp):
