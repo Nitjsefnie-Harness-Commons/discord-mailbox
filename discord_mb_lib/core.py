@@ -91,6 +91,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_ROOT))
 from ._settings import setting  # noqa: E402  (env -> ~/.agent-bundle/settings.json)
 from ._temp_provenance import _linklike, ensure_owned_temp_dir  # noqa: E402
+from ._meta_claim import MetaRequestPending, _take_response, _withdraw  # noqa: E402
 
 # --- Server topology (resolved by name at connector startup — no hardcoded IDs) ---
 # Overridable per machine: a server that lays its channels out differently sets
@@ -1367,19 +1368,9 @@ def _meta_request(identity, payload, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if out_path.exists():
-            data = json.loads(out_path.read_text(encoding='utf-8'))
-            try:
-                out_path.unlink()
-            except OSError:
-                pass
-            return data
+            return _take_response(out_path)
         time.sleep(0.2)
-    # timed out; clean up our request if connector hasn't picked it up
-    try:
-        in_path.unlink()
-    except OSError:
-        pass
-    raise TimeoutError(f'connector did not respond within {timeout}s (is it running for {identity!r}?)')
+    return _withdraw(in_path, out_path, timeout, identity)
 
 
 def attachments_cli(args):
@@ -2722,6 +2713,7 @@ __all__ = [
     'MAX_BODY',
     'MAX_BODY_TOTAL',
     'META_CATEGORY_NAME',
+    'MetaRequestPending',
     'PACKAGE_CHECK_SECONDS',
     'Path',
     'RECEIPT_EMOJI',
@@ -2759,6 +2751,8 @@ __all__ = [
     '_flat_component',
     '_linklike',
     '_meta_request',
+    '_take_response',
+    '_withdraw',
     'argparse',
     'asyncio',
     'attach_extras',

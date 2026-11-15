@@ -9,9 +9,6 @@ from .connector import *
 # --- CLI ---
 
 
-# A dispatcher: most branches fall through to the implicit None, and a
-# few return a command's exit code straight to SystemExit.
-# pylint: disable-next=inconsistent-return-statements
 def _cli():
     for _stream in (sys.stdout, sys.stderr):
         _reconf = getattr(_stream, 'reconfigure', None)  # absent on non-TextIOWrapper streams
@@ -354,7 +351,17 @@ def _cli():
     if not args.command:
         p.print_help()
         sys.exit(0)
+    try:
+        return _run_command(args)
+    except MetaRequestPending as e:
+        print(e, file=sys.stderr)
+        sys.exit(75)                        # EX_TEMPFAIL: queued, not failed
 
+
+# A dispatcher: most branches fall through to the implicit None, and a
+# few return a command's exit code straight to SystemExit.
+# pylint: disable-next=inconsistent-return-statements
+def _run_command(args):
     if args.command == 'send':
         send(args.identity, args.to, args.subject, args.body,
              reply_to=args.reply_to, pin=args.pin, channel=args.channel,
@@ -424,4 +431,5 @@ def _cli():
 __all__ = [
     '_cli',
     '_core',
+    '_run_command',
 ]
