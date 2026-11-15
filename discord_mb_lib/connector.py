@@ -12,7 +12,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _ConnectorOwnershipError, _EventStreamReader,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
-from ._dm import open_dm_channel, resolve_dm_user_id
+from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._meta_claim import _claim
 
 
@@ -871,10 +871,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         'Fetch messages from any channel (or, with dm_user, the DM with that user). Defaults to #agents. Supports cursor (before/after) and optional server-side grep.'
         import re as _re
         if dm_user:
-            uid = await resolve_dm_user_id(state, dm_user, refresh_directory)
+            uid = await _resolve_dm_user_id(state, dm_user, refresh_directory)
             if uid is None:
                 raise RuntimeError(f'unknown identity {dm_user!r} for --dm')
-            channel = await open_dm_channel(client, uid)
+            channel = await _open_dm_channel(client, uid)
         elif channel_id:
             cid = channel_id
             channel = client.get_channel(cid)
@@ -1257,10 +1257,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # --- destination ---
         created_thread = None
         if dest_kind == 'dm':
-            uid = await resolve_dm_user_id(state, dest, refresh_directory)
+            uid = await _resolve_dm_user_id(state, dest, refresh_directory)
             if uid is None:
                 raise RuntimeError(f'unknown identity {dest!r} for a DM destination')
-            target = await open_dm_channel(client, uid)
+            target = await _open_dm_channel(client, uid)
         elif dest_kind == 'forum':
             if not title:
                 raise ValueError('title required when moving into a forum')
@@ -2005,11 +2005,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # --- resolve the target channel ---
         channel = None
         if data.get('dm') and not reply_to:
-            uid = await resolve_dm_user_id(state, to, refresh_directory)
+            uid = await _resolve_dm_user_id(state, to, refresh_directory)
             if uid is None:
                 raise SendError(f'unknown identity {to!r} for --dm')
             try:
-                channel = await open_dm_channel(client, uid)
+                channel = await _open_dm_channel(client, uid)
             except Exception as e:
                 raise SendRetry(f'DM channel for {to!r} unavailable: {e}') from e
         elif reply_to:
@@ -2937,10 +2937,10 @@ __all__ = [
     'ConnectorApp',
     '_claim',
     '_claim_ownership',
+    '_open_dm_channel',
     '_recorded_owner',
+    '_resolve_dm_user_id',
     '_run_connector',
     'connector_main',
     'leech_main',
-    'open_dm_channel',
-    'resolve_dm_user_id',
 ]
