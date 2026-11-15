@@ -26,9 +26,11 @@ def _cli():
     sub = p.add_subparsers(dest='command')
 
     s = sub.add_parser('send', help='Queue a message for delivery via connector',
-                       description='Queue a text message. Body is text-only (no attachment flag here); '
-                                   'use `discord_mb.py attachments upload <path>` to post a file to #attachments, '
-                                   'then reference its message-id or url in the body if needed.')
+                       description='Queue a message for delivery. Use `--attach PATH` (repeatable) to attach a local file '
+                                   'to the message. A file over the --attach cap (9,500,000 bytes each) is refused at '
+                                   'delivery (a send_failed event names `attachments upload`): use '
+                                   '`discord_mb.py attachments upload <path>` for it, or to post a file as a message '
+                                   'of its own, then reference its message-id or url in the body if needed.')
     s.add_argument('identity', help='Sending identity (used to pick outbox dir)')
     s.add_argument('to', help='Recipient identity, comma-separated list ("a,b,c"), "all" for broadcast, or "nobody" for a user-less send (posts with no mention)')
     s.add_argument('subject', help='Subject line')
