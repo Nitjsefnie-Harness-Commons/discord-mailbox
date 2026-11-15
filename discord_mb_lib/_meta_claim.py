@@ -11,7 +11,7 @@ class MetaRequestPending(Exception):
 
 @contextlib.contextmanager
 def _claim(request: Path) -> Iterator[Path | None]:
-    # Off the connector's *.json scan and the exact name the CLI withdraws.
+    # Out of the connector's *.json scan.
     claimed = request.with_name(request.name + '.claimed')
     try:
         request.rename(claimed)
