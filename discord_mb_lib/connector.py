@@ -2081,7 +2081,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if not p.is_file():
                 raise SendError(f'attachment not found: {a}')
             if p.stat().st_size > 9_500_000:
-                raise SendError(f'attachment over the ~10MB Discord cap: {a} '
+                raise SendError(f'attachment over the 9,500,000-byte cap: {a} '
                                 f'(use `attachments upload` for the R2/side-channel route)')
 
         def make_files():
