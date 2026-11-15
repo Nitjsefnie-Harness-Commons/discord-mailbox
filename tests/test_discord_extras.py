@@ -509,10 +509,10 @@ def test_a_failed_recovery_is_retried_and_then_reported(_tmp):
         return
 
     down = mb.status_plugin_down_event(
-        "kvalita_gpu_box", "the installed slot is gone", 4,
+        "gpu_box", "the installed slot is gone", 4,
         {"source": "/plugins/discord_status_default.py"})
     assert down["event"] == "status_plugin_down"
-    assert down["identity"] == "kvalita_gpu_box"
+    assert down["identity"] == "gpu_box"
     assert down["reason"] == "the installed slot is gone"
     assert down["attempts"] == 4
     assert down["reinstall_required"] is True
