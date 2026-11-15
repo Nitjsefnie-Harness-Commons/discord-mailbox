@@ -66,6 +66,7 @@
 # ─── discord_mb_lib ───
 !/discord_mb_lib/
 !/discord_mb_lib/__init__.py
+!/discord_mb_lib/_dm.py
 !/discord_mb_lib/_settings.py
 !/discord_mb_lib/_temp_provenance.py
 !/discord_mb_lib/cli.py
@@ -79,6 +80,7 @@
 !/tests/test_discord_chunk_routing.py
 !/tests/test_discord_codex_flavor.py
 !/tests/test_discord_connector_lock.py
+!/tests/test_discord_conversation_dm.py
 !/tests/test_discord_event_stream.py
 !/tests/test_discord_extensions.py
 !/tests/test_discord_extras.py
