@@ -1,0 +1,17 @@
+{
+  "trees": {
+    "tests/": 10705
+  },
+  "schema_version": 1,
+  "baseline": {
+    "discord_mb.py": 1233,
+    "discord_mb_lib/connector.py": 2950,
+    "discord_mb_lib/core.py": 2874,
+    "discord_mb_lib/storage.py": 4916,
+    "tests/test_discord_event_stream.py": 521,
+    "tests/test_discord_extensions.py": 779,
+    "tests/test_discord_extras.py": 605,
+    "tests/test_discord_log_rotation.py": 5405,
+    "tests/test_discord_package_contract.py": 2188
+  }
+}
