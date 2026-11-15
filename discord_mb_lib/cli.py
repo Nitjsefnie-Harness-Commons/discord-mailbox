@@ -28,7 +28,9 @@ def _cli():
     s = sub.add_parser('send', help='Queue a message for delivery via connector',
                        description='Queue a message for delivery. Use `--attach PATH` (repeatable) to attach a local file '
                                    'to the message. A file over the --attach cap (9,500,000 bytes each) is refused '
-                                   'with an error that names `attachments upload`: use '
+                                   'at delivery, not when the send is queued: a plain send still exits 0 and the '
+                                   'refusal arrives as a send_failed event (with --wait, as an error on stderr and '
+                                   'exit 1). The error names `attachments upload`: use '
                                    '`discord_mb.py attachments <identity> upload <path>` (lands in #attachments by '
                                    'default) for it, or to post a file as a message of its own, then reference its '
                                    'message-id or url in the body if needed.')
@@ -51,7 +53,7 @@ def _cli():
     s.add_argument('--dm', action='store_true',
                    help='Send as a direct message (one recipient: identity or raw user id)')
     s.add_argument('--attach', action='append', default=None, metavar='PATH',
-                   help='Attach a local file (repeatable; ~10MB Discord cap each; rides the first chunk)')
+                   help='Attach a local file (repeatable; each file at most 9,500,000 bytes; rides the first chunk)')
     s.add_argument('--wait', action='store_true',
                    help='Send via the connector meta channel and print msg_id/channel_id (surfaces pin/send failures)')
     s.add_argument('--timeout', type=float, default=60.0,
