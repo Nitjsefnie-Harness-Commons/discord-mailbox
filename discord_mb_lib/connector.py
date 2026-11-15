@@ -13,6 +13,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
 from ._dm import open_dm_channel, resolve_dm_user_id
+from ._meta_claim import _claim
 
 
 def _recorded_owner(pidfile, identity):
@@ -453,7 +454,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         while not client.is_closed():
             try:
                 for f in sorted(in_dir.glob('*.json')):
-                    await dispatch_meta_file(f, out_dir)
+                    with _claim(f) as claimed:
+                        if claimed:
+                            await dispatch_meta_file(claimed, out_dir)
             except Exception as e:
                 log(f'meta_watcher error: {e}')
             await asyncio.sleep(0.5)
@@ -502,10 +505,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             req = json.loads(f.read_text(encoding='utf-8'))
         except Exception as e:
             log(f'unreadable meta file {f.name}: {e}; deleting')
-            try:
-                f.unlink()
-            except OSError:
-                pass
             return
         op = req.get('op')
         resp = {'op': op, 'ok': False}
@@ -655,14 +654,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 resp['error'] = f'unknown op: {op!r}'
         except Exception as e:
             resp['error'] = f'{type(e).__name__}: {e}'
-        out_path = out_dir / f.name
+        out_path = out_dir / f.stem
         tmp = out_path.with_suffix('.json.tmp')
         tmp.write_text(json.dumps(resp, indent=2), encoding='utf-8')
         tmp.replace(out_path)
-        try:
-            f.unlink()
-        except OSError:
-            pass
 
     async def op_attachment_list(limit):
         'List recent messages in #attachments that carry file attachments. Includes user uploads.'
@@ -2940,6 +2935,7 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
 
 __all__ = [
     'ConnectorApp',
+    '_claim',
     '_claim_ownership',
     '_recorded_owner',
     '_run_connector',

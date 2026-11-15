@@ -180,15 +180,14 @@ def _run(c, discord, tmp, world, requests):
                     coro.close()
             for name, payload in requests.items():
                 (in_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
-            for _ in range(200):
-                done = [n for n in requests if (out_dir / f"{n}.json").exists()]
-                if len(done) == len(requests):
+            for _ in range(200):        # until every request is answered or withdrawn
+                if not any(in_dir.iterdir()):
                     break
                 await asyncio.sleep(0.05)
             self.closed = True
             await meta
-            for name in done:
-                responses[name] = json.loads((out_dir / f"{name}.json").read_text(encoding="utf-8"))
+            for out in out_dir.glob("*.json"):
+                responses[out.stem] = json.loads(out.read_text(encoding="utf-8"))
 
     saved = {n: getattr(c, n) for n in _SWAPPED}
     saved_client = discord.Client
