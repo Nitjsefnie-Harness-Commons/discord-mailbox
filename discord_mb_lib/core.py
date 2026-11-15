@@ -1513,8 +1513,16 @@ def creds_cli(args):
 
 def conversation_cli(identity, n, channel_id=None, before_id=None, after_id=None, grep=None, timeout=15.0, as_json=False, dm=None):
     req = {'op': 'conversation', 'limit': n}
-    req.update({k: v for k, v in (('channel_id', channel_id), ('dm_user', dm), ('before_id', before_id),
-                                  ('after_id', after_id), ('grep', grep)) if v})
+    if channel_id:
+        req['channel_id'] = channel_id
+    if dm:
+        req['dm_user'] = dm
+    if before_id:
+        req['before_id'] = before_id
+    if after_id:
+        req['after_id'] = after_id
+    if grep:
+        req['grep'] = grep
     try:
         resp = _meta_request(identity, req, timeout)
     except TimeoutError as e:

@@ -549,7 +549,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                     raise ValueError('dm_user and channel_id are mutually exclusive')
                 resp['messages'] = await op_conversation(
                     int(req.get('limit', 20)),
-                    channel_id=None if dm_user else int(req.get('channel_id', 0)) or (ch('bridge').id if ch('bridge') else None),
+                    channel_id=int(req.get('channel_id', 0)) or (ch('bridge').id if ch('bridge') else None),
                     before_id=req.get('before_id'),
                     after_id=req.get('after_id'),
                     grep=req.get('grep'),
