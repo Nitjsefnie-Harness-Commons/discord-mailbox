@@ -11,7 +11,7 @@ class MetaRequestPending(Exception):
 
 @contextlib.contextmanager
 def _claim(request: Path) -> Iterator[Path | None]:
-    # Out of the *.json glob the CLI withdraws by.
+    # Off the connector's *.json scan and the exact name the CLI withdraws.
     claimed = request.with_name(request.name + '.claimed')
     try:
         request.rename(claimed)
@@ -40,9 +40,9 @@ def _withdraw(request: Path, response: Path, timeout: float, identity: Any) -> A
         if response.exists():
             return _take_response(response)
         raise MetaRequestPending(
-            f'the connector accepted the request and is still working on it after {timeout}s '
-            f'(Discord may be rate-limiting it); this is not a failure: the result will be '
-            f'written to {response}') from None
+            f'the connector accepted the request and had not answered it after {timeout}s '
+            f'(Discord may be rate-limiting it); this does not mean it failed: any result the '
+            f'connector writes goes to {response}') from None
     except OSError:
         pass
     raise TimeoutError(f'connector did not respond within {timeout}s (is it running for {identity!r}?)')
