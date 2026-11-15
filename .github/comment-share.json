@@ -1,0 +1,106 @@
+{
+  ".github/dependabot.yml": [
+    1102,
+    1476
+  ],
+  ".github/workflows/actionlint.yml": [
+    2038,
+    3276
+  ],
+  ".github/workflows/audit.yml": [
+    1362,
+    2532
+  ],
+  ".github/workflows/codeql.yml": [
+    1619,
+    2413
+  ],
+  ".github/workflows/lint.yml": [
+    692,
+    1748
+  ],
+  ".github/workflows/pr-gate.yml": [
+    427,
+    1095
+  ],
+  ".github/workflows/release.yml": [
+    1102,
+    2393
+  ],
+  ".github/workflows/tag.yml": [
+    3313,
+    6261
+  ],
+  ".github/workflows/tests.yml": [
+    3213,
+    6751
+  ],
+  ".github/workflows/types.yml": [
+    957,
+    1576
+  ],
+  "discord_mb_lib/__init__.py": [
+    56,
+    56
+  ],
+  "discord_mb_lib/_settings.py": [
+    2002,
+    2881
+  ],
+  "discord_mb_lib/_temp_provenance.py": [
+    1386,
+    4373
+  ],
+  "discord_mb_lib/connector.py": [
+    23904,
+    95698
+  ],
+  "discord_mb_lib/core.py": [
+    31938,
+    88586
+  ],
+  "discord_mb_lib/storage.py": [
+    31035,
+    148696
+  ],
+  "tests/_util.py": [
+    1744,
+    4645
+  ],
+  "tests/test_discord_chunk_routing.py": [
+    488,
+    1718
+  ],
+  "tests/test_discord_codex_flavor.py": [
+    879,
+    3602
+  ],
+  "tests/test_discord_connector_lock.py": [
+    1863,
+    5882
+  ],
+  "tests/test_discord_event_stream.py": [
+    2975,
+    14728
+  ],
+  "tests/test_discord_extensions.py": [
+    3696,
+    21567
+  ],
+  "tests/test_discord_extras.py": [
+    3855,
+    17868
+  ],
+  "tests/test_discord_move.py": [
+    538,
+    1934
+  ],
+  "tests/test_discord_usage_status.py": [
+    5221,
+    15910
+  ],
+  "tests/test_release_version_source.py": [
+    1085,
+    3005
+  ]
+}
