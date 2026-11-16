@@ -19,7 +19,8 @@ sys.path.insert(0, _util.SCRIPTS)
 from discord_mb_lib._directory import _Directory as D  # noqa: E402
 
 M, L = D.MAP_SEPARATORS, D.LIST_SEPARATORS
-PROBE, MALLORY = 980000000000000002, 980000000000000003
+PROBE, MALLORY, PLAIN = 980000000000000002, 980000000000000003, 980000000000000004
+CONFLICT = f"directory: 'probe' is held by user {PROBE}; ignoring the later entry from user {MALLORY}"
 
 
 def test_an_entry_names_its_first_mention_and_bold_token_or_separated_word(tmp):
@@ -49,7 +50,7 @@ def test_the_oldest_self_authored_entry_holds_a_name(tmp):
         ("probe", PROBE, PROBE), ("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE),
         ("helper", PROBE, MALLORY), ("other", MALLORY, PROBE), ("mallory", MALLORY, MALLORY)])
     assert held == {"probe": PROBE, "mallory": MALLORY}, held
-    assert len(logs) == 1 and all(s in logs[0] for s in ("'probe'", str(PROBE), str(MALLORY))), logs
+    assert logs == [CONFLICT], logs
     assert D(logs.append).bind_names([("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE)]) == {
         "probe": MALLORY}, "the newer entry won"
     # `user:` is refused for a bound entry only; an entry another account wrote stays silent.
@@ -64,9 +65,11 @@ _msg, _inbox = _gateway.message, _gateway.inbox
 
 
 def _run(tmp, entries, script):
-    """-> (client, connector log); (None, None) without discord.py."""
+    """-> (client, connector log); skipped without discord.py."""
     client = _gateway.run(tmp, script, entries, identity="dir-test")
-    return client, client and client.log
+    if client is None:
+        _util.skip("discord.py is not installed")
+    return client, client.log
 
 
 def _send(to, **fields):
@@ -74,7 +77,8 @@ def _send(to, **fields):
 
 
 def test_a_newer_entry_from_another_account_does_not_take_a_name(tmp):
-    entries = [_msg(4, MALLORY, f"**probe** · <@{MALLORY}>"),     # newest first
+    entries = [_msg(5, PLAIN, f"plain · <@{PLAIN}>"),             # newest first; the map alone splits on ' · '
+               _msg(4, MALLORY, f"**probe** · <@{MALLORY}>"),
                _msg(3, MALLORY, f"**helper** · <@{PROBE}>"),
                _msg(2, PROBE, f"**probe** · <@{PROBE}>"),
                _msg(1, BOT, f"**dir-test** · <@{BOT}>"),
@@ -86,22 +90,21 @@ def test_a_newer_entry_from_another_account_does_not_take_a_name(tmp):
         await on_message(_msg(101, MALLORY, f"<@{BOT}> hi", client.bridge, mentions=(BOT,)))
         await on_message(_msg(102, PROBE, f"<@{BOT}> hi", client.bridge, mentions=(BOT,)))
         await client.ask({"mention": _send("probe"), "dm": _send("probe", dm=True),
-                          "helper": _send("helper"), "list": {"op": "list-agents"}})
+                          "helper": _send("helper"), "plain": _send("plain"), "list": {"op": "list-agents"}})
 
     client, log = _run(tmp, entries, script)
-    if client is None:
-        return
     assert _inbox(tmp, 101)["from"] == f"user:user{MALLORY}", _inbox(tmp, 101)
     assert _inbox(tmp, 102)["from"] == "probe", _inbox(tmp, 102)
     r = client.responses
-    assert r["mention"]["ok"] and client.bridge.sent[0].startswith(f"<@{PROBE}> "), (r, client.bridge.sent)
+    mentioned = sorted(s.split(" ", 1)[0] for s in client.bridge.sent)     # the watcher's order is free
+    assert r["mention"]["ok"] and r["plain"]["ok"] and mentioned == [f"<@{PROBE}>", f"<@{PLAIN}>"], (r, mentioned)
     assert r["dm"]["ok"] and list(client.dms) == [PROBE] and client.dms[PROBE].sent, (r, client.dms)
     assert not r["helper"]["ok"] and "'helper'" in r["helper"]["error"], r["helper"]
     assert [(a["identity"], a["user_id"], a["author_id"]) for a in r["list"]["agents"]] == [
         ("probe", str(MALLORY), str(MALLORY)), ("helper", str(PROBE), str(MALLORY)),
         ("probe", str(PROBE), str(PROBE)), ("dir-test", str(BOT), str(BOT))], r["list"]
     conflicts = [line for line in log.splitlines() if "held by" in line]
-    assert len(conflicts) == 1 and str(PROBE) in conflicts[0] and str(MALLORY) in conflicts[0], log
+    assert len(conflicts) == 1 and conflicts[0].endswith(CONFLICT), log
 
 
 def test_every_directory_read_sees_entries_older_than_its_newest_messages(tmp):
@@ -113,8 +116,6 @@ def test_every_directory_read_sees_entries_older_than_its_newest_messages(tmp):
                           "register": {"op": "register", "body": "new profile"}})
 
     client, _ = _run(tmp, entries, script)
-    if client is None:
-        return
     r = client.responses
     assert set(client.directory.reads) == {None}, client.directory.reads
     assert r["send"]["ok"], r["send"]
@@ -144,12 +145,20 @@ def test_a_miss_rescans_only_once_the_last_scan_is_old_but_startup_always_scans(
             client.steps.append((name, client.responses[name]["ok"], len(reads)))
 
     client, _ = _run(tmp, entries, script)
-    if client is None:
-        return
     # A failed scan completed nothing, so the next miss scans again.
     assert client.steps == [("early", False, 3), ("due", True, 4), ("cached", True, 4),
                             ("dm-early", False, 4), ("dm-due", False, 5), ("failed", False, 6),
                             ("probe-kept", True, 6), ("after-failure", False, 7)], client.steps
+
+
+def test_startup_keeps_the_entry_the_bot_wrote_though_an_older_account_holds_its_name(tmp):
+    async def script(client):
+        pass
+
+    client, _ = _run(tmp, [_msg(2, BOT, f"**dir-test** · <@{BOT}>"),        # newest first
+                           _msg(1, MALLORY, f"**dir-test** · <@{MALLORY}>")], script)
+    assert len(client.directory.reads) == 1 and client.directory.sent == [], (
+        client.directory.reads, client.directory.sent)
 
 
 def main():

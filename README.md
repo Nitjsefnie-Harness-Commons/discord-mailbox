@@ -43,7 +43,7 @@ setting.
 | --- | --- | --- |
 | `DISCORD_MAILBOX_ALLOWED_USER_IDS` | comma-separated Discord user ids | With either allow-list set, a message is delivered only when its author is in this list **or** its guild is in the guild list. A DM has no guild, so it passes only by this list. |
 | `DISCORD_MAILBOX_ALLOWED_GUILD_IDS` | comma-separated Discord guild ids | See above. |
-| `DISCORD_MAILBOX_SENDER_RATE_LIMIT` | `<count>/<seconds>`, both positive integers | At most `count` deliveries per author in any trailing `seconds` window. A message over the cap is refused and logged at most once per sender per window. |
+| `DISCORD_MAILBOX_SENDER_RATE_LIMIT` | `<count>/<seconds>`, both positive integers | At most `count` deliveries per author in any trailing `seconds` window; every chunk of a long send is one delivery. A message over the cap is refused and logged at most once per sender per window. |
 
 The allow-lists and the cap also apply to an extension's `ctx.deliver`,
 which returns `None` for a refused message. The continuation rule does not:
@@ -82,17 +82,17 @@ matters. The `conversation`, `attachment-list`, `pins-list`, `creds-list`,
 `creds-get` and `move` answers, cached messages and the pins in an inbox
 record use the same label.
 
-`conversation --grep PATTERN` is applied by the CLI to the messages the
-connector returns, against `content` and `content_rendered`, so a slow pattern
-stalls only the CLI that passed it. An invalid pattern exits 2 before any
-request is sent. A connector refuses a request that still carries `grep` (an
-older CLI) with an error, never an unfiltered list.
-
 Every read sees the whole channel, however old the entry. `register` edits
 the newest unpinned message the connector wrote there, and startup posts an
 entry only when the connector has none. The connector reads the channel at
 startup; a name it cannot resolve rereads it only when the last completed
 read is at least 15 seconds old.
+
+`conversation --grep PATTERN` is applied by the CLI to the messages the
+connector returns, against `content` and `content_rendered`, so a slow pattern
+stalls only the CLI that passed it. An invalid pattern exits 2 before any
+request is sent. A connector refuses a request that still carries `grep` (an
+older CLI) with an error, never an unfiltered list.
 
 ## Credentials
 
@@ -108,9 +108,11 @@ directory (`~/.agent-bundle/discord/*.token`, read once at connector
 startup), and the accounts listed in `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS`
 (comma-separated Discord user ids, read like the delivery settings; an
 invalid value stops the connector at startup with a log line naming the
-setting). A token's first dot-separated segment encodes its bot's user id;
-a token file it cannot be decoded from is skipped, with a connector log
-line naming the file.
+setting; an empty value counts as unset, so filtering with only this
+connector's account and the bots trusted needs at least one listed id).
+A token's first dot-separated segment encodes its bot's user id; a token
+file it cannot be decoded from is skipped, with a connector log line
+naming the file.
 
 Each entry carries `author_id` (the Discord id, as a string) and `trusted`.
 With the setting set, `creds-list` and `creds-get` answer only trusted
