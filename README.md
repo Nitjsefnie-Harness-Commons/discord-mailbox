@@ -137,7 +137,8 @@ older CLI) with an error, never an unfiltered list.
 `attachments download` saves each attachment directly inside the destination
 directory, under the last component of its file name, with `/` and `\` both
 taken as separators. An attachment is not written when that name is empty,
-`.` or `..`, when its path does not resolve to a path inside the
+`.` or `..`, when its path cannot be resolved (a symlink loop already there,
+for example) or does not resolve to a path inside the
 destination directory (through a symlink already there, for example), when a
 directory already has that name, or when an earlier attachment on the
 same message took the same name or was saved to the same file (`A.txt` and

@@ -11,8 +11,15 @@ def _target(dest: Path, filename: str, targets: list[Path]) -> Path | str:
     if any(t.name == name for t in targets):
         return f'an earlier attachment on this message is saved as {name!r}'
     target = dest / name
+    try:  # only strict sees a loop on 3.13+
+        try:
+            resolved = target.resolve(strict=True)
+        except FileNotFoundError:
+            resolved = target.resolve()
+    except (OSError, RuntimeError):
+        return f'{name!r} does not resolve'
     # both sides resolved, as macOS /var is a symlink; strictly inside, as `C:` on Windows names dest itself
-    if dest.resolve() not in target.resolve().parents:
+    if dest.resolve() not in resolved.parents:
         return f'{name!r} does not resolve inside dest_dir'
     if target.is_dir():
         return f'{name!r} is a directory'
