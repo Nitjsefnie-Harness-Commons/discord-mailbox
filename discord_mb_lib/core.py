@@ -35,7 +35,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
-from ._control_files import write_private
+
+from . import _control_files
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1358,12 +1359,10 @@ def setup_main(token=None):
 
 def _meta_request(identity, payload, timeout):
     'Write request to inbox-metadata, poll outbox-metadata for response, delete, return parsed dict.'
-    in_dir = meta_in_dir(identity)
-    out_dir = meta_out_dir(identity)
     req_id = f'{uuid.uuid4()}.json'
-    in_path = in_dir / req_id
-    out_path = out_dir / req_id
-    write_private(in_path, json.dumps(payload))
+    in_path = meta_in_dir(identity) / req_id
+    out_path = meta_out_dir(identity) / req_id
+    _control_files.write_private(in_path, json.dumps(payload))
     deadline = time.time() + timeout
     while time.time() < deadline:
         if out_path.exists():
@@ -2739,6 +2738,7 @@ __all__ = [
     '_FLAVOR_STATUS_PLUGINS',
     '_PARENT_CMD_PATTERNS',
     '_TEST_LOCK_ROOT_ENV',
+    '_control_files',
     '_ensure_state_root',
     '_flat_component',
     '_linklike',
@@ -2850,6 +2850,5 @@ __all__ = [
     'usage_period',
     'uuid',
     'write_extension_registry',
-    'write_private',
     'write_status_manifest',
 ]
