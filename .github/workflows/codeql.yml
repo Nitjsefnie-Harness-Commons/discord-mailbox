@@ -38,10 +38,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A push that a mergeable open pull request's run also gates skips the
-  # jobs below. A skipped check shows `name:` unevaluated, so the `${{ }}`
-  # in each keeps a skip off the gate's check name;`!cancelled()` in their
-  # `if:` still runs them if this lookup fails.
+  # A push a mergeable open pull request's run also gates skips the jobs
+  # below. A skipped check shows `name:` unevaluated: the `${{ }}` in each
+  # keeps it off the gate's check name. `!cancelled()` runs them if this
+  # lookup fails.
   guard:
     uses: ./.github/workflows/open-pull-request.yml
     permissions:
