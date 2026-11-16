@@ -1,9 +1,10 @@
 """Who holds which agent-directory name, and when to rescan the channel."""
 import re
 from time import monotonic
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 MISS_REFRESH_INTERVAL = 15.0  # seconds a lookup miss reuses the last scan's map
+FALLBACK_PREFIX = 'user:'
 
 
 class _Directory:
@@ -20,10 +21,24 @@ class _Directory:
     def scan_completed(self) -> None:
         self._scanned = monotonic()
 
+    @staticmethod
+    def names_held(identity_map: dict[str, int], user_id: int) -> list[str]:
+        return [name for name, uid in identity_map.items() if uid == user_id]
+
+    @classmethod
+    def label_of(cls, identity_map: dict[str, int], user: Any) -> str:
+        """The oldest name `user` holds, else `user:<username>`."""
+        names = cls.names_held(identity_map, user.id)
+        return names[0] if names else f'{FALLBACK_PREFIX}{getattr(user, "name", "?")}'
+
     def bind_names(self, entries: Iterable[tuple[str, int, int]]) -> dict[str, int]:
         """(name, mentioned id, author id), oldest first -> {name: id}."""
         held: dict[str, int] = {}
         for name, uid, author in entries:
+            if name.casefold().startswith(FALLBACK_PREFIX):
+                self._log(f'directory: ignoring the entry {name!r} for user {uid}: '
+                          f'{FALLBACK_PREFIX!r} marks a username, not a name')
+                continue
             if uid != author:
                 continue
             holder = held.setdefault(name, uid)
