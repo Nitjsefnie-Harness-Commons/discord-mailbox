@@ -1,0 +1,24 @@
+# The project's runtime dependencies, which pyproject.toml declares with
+# their floors, for the CI jobs that run or type-check the package. CI
+# installs requirements-runtime.txt, this file compiled with hashes, with
+# --require-hashes, then the project itself with --no-deps.
+#
+# Compile it on the NEWEST Python the tests matrix runs (3.15):
+#   pip-compile --generate-hashes requirements-runtime.in
+# pip-compile resolves for its own interpreter and drops a dependency whose
+# marker is false there, and the lock must install on every matrix Python.
+# A dependency only newer Pythons need (audioop-lts, which discord.py
+# requires from 3.13 on) is kept only by a compile on a Python that needs
+# it, and the marker on its line below keeps it off older ones. A backport
+# only older Pythons need is listed here unconditionally instead, since a
+# marker false on the compiling Python drops the line.
+#
+# This file sits here, not beside pyproject.toml, for the same reason:
+# Dependabot compiles a directory holding pyproject.toml on the lowest Python
+# its requires-python admits (3.11, which drops audioop-lts), and compiles
+# this directory on the Python the lock's own header names.
+discord.py
+psutil
+audioop-lts; python_version >= "3.13"
+# aiohttp and aiosignal need it below Python 3.13.
+typing-extensions

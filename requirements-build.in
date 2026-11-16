@@ -1,0 +1,9 @@
+# The wheel builder and the build backend pyproject.toml names. CI builds
+# the wheel with `python -m build --no-isolation` and installs the project
+# with `--no-build-isolation`, both over this set, so neither downloads an
+# unverified backend. Compiled into requirements-build.txt with hashes on
+# Python 3.11, for the reason requirements-dev.in gives; --allow-unsafe
+# because setuptools is the point:
+#   pip-compile --generate-hashes --allow-unsafe requirements-build.in
+build
+setuptools
