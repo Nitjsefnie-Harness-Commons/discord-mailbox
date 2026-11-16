@@ -18,7 +18,7 @@ import _gateway  # noqa: E402
 import _util  # noqa: E402
 from test_discord_conversation_dm import BRIDGE_ID, _ask, _connector, _conv  # noqa: E402
 sys.path.insert(0, _util.SCRIPTS)
-from discord_mb_lib import core  # noqa: E402
+from discord_mb_lib import _control_files, core  # noqa: E402
 from discord_mb_lib._meta_claim import MetaRequestPending, _claim, _withdraw  # noqa: E402
 
 
@@ -137,6 +137,43 @@ def test_a_creds_add_request_carrying_a_password_is_private(tmp):
         assert seen[0][1] == 0o600, oct(seen[0][1])
 
 
+def test_write_private_publishes_a_fresh_private_inode_and_leaves_nothing_when_it_fails(tmp):
+    target, twin, seen, refused = Path(tmp) / "r.json", Path(tmp) / "twin", [], []
+    target.write_text("old", encoding="utf-8")
+    target.chmod(0o644)
+    os.link(target, twin)       # a write through the old inode would show here
+    real = {attr: getattr(os, attr) for attr in ("replace", "fdopen")}
+
+    def spy(src, dst):
+        seen.append((os.path.basename(src), os.stat(src).st_mode & 0o777))
+        real["replace"](src, dst)
+
+    def refuse(first, *args, **kwargs):
+        refused.append(first)
+        raise OSError("refused")
+
+    for attr, stand_in, text in (("replace", spy, "one"), ("replace", spy, "two"), ("replace", refuse, "three"),
+                                 ("fdopen", refuse, "three"), ("replace", spy, "\udc80")):  # the write fails
+        setattr(os, attr, stand_in)
+        try:
+            _control_files.write_private(target, text)
+        except (OSError, UnicodeError):
+            assert text != "two" and sorted(os.listdir(tmp)) == ["r.json", "twin"], (attr, os.listdir(tmp))
+        finally:
+            setattr(os, attr, real[attr])
+    assert len(seen) == 2 and seen[0][0] != seen[1][0], seen
+    assert (target.read_text(encoding="utf-8"), twin.read_text(encoding="utf-8")) == ("two", "old")
+    assert len(refused) == 2, refused
+    try:
+        os.fstat(refused[1])
+    except OSError:
+        pass
+    else:
+        raise AssertionError("the descriptor fdopen refused stayed open")
+    if _util.POSIX_MODES:
+        assert [mode for _, mode in seen] == [0o600, 0o600], seen
+
+
 def _aged(directory, name, age):
     path = directory / name
     path.write_text("{}", encoding="utf-8")
@@ -151,9 +188,12 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     def name(first):        # a response's name with its first character fixed, to order the sweep
         return first + str(uuid.uuid4())[1:] + ".json"
 
-    kept = [_aged(out, name("a"), 15 * 60 - 30), *(_aged(out, n, old) for n in (
-        "notes.json", "x" + name("a"), name("a") + ".old.json"))]
-    gone = [_aged(out, name(c), old) for c in "135"]
+    def temps(first):       # the old writer's temp and write_private's
+        return name(first) + ".tmp", "." + name(first) + ".k2j_x9a1.tmp"
+
+    kept = [*(_aged(out, n, 15 * 60 - 30) for n in (name("a"), *temps("a"))), *(_aged(out, n, old) for n in (
+        "notes.json", "x" + name("a"), name("a") + ".old.json", "." + name("a") + ".tmp"))]
+    gone = [_aged(out, name(c), old) for c in "135"] + [_aged(out, n, old) for n in temps("6")]
     faults = {name("0"): ("lstat", PermissionError), name("2"): ("unlink", FileNotFoundError),
               name("4"): ("lstat", FileNotFoundError)}           # unreadable, vanished, vanished
     kept += [_aged(out, n, old) for n in faults]
@@ -169,6 +209,7 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
         return call
 
     async def script(client):
+        later.append(sorted(out.iterdir()))         # before the meta watcher's first pass
         await client.ask({"first": {"op": "nope"}})
         later.append(sorted(out.iterdir()))
         late = _aged(out, name("b"), old)
@@ -182,8 +223,9 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     finally:
         for op, f in real.items():
             setattr(os, op, f)
-    assert later[0] == sorted([*kept, out / "first.json"]), later[0]
-    assert later[1] is False, "a response gone stale after start was kept"
+    assert later[0] == sorted(kept), later[0]
+    assert later[1] == sorted([*kept, out / "first.json"]), later[1]
+    assert later[2] is False, "a response gone stale after start was kept"
     assert fired == set(faults), fired
     assert not any(p.exists() for p in gone), gone
 
