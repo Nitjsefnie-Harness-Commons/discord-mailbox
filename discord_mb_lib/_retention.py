@@ -5,10 +5,11 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 from ._temp_provenance import _linklike
 
+FORGOTTEN_MAX = 4096
 _ID = re.compile(r'[0-9]+')
 _RECORD = re.compile(r'[0-9]+\.json')
 _CACHED = re.compile(r'[0-9]+\.json(?:\.tmp)?')
@@ -72,16 +73,27 @@ def _remove_where(directories: Iterable[Path], field: str, value: str) -> int:
     return removed
 
 
-def forget_messages(root: Path, channel_id, message_ids: Iterable) -> int:
+def _remember(forgotten: dict, ids: Iterable[str]) -> None:
+    for i in ids:
+        forgotten.pop(i, None)
+        forgotten[i] = None
+    while len(forgotten) > FORGOTTEN_MAX:
+        del forgotten[next(iter(forgotten))]
+
+
+def forget_messages(root: Path, channel_id, message_ids: Iterable, forgotten: dict) -> int:
     '''Remove the messages from every inbox and the channel's caches.'''
-    names = [f'{discord_id(m)}.json' for m in message_ids]
+    ids = [discord_id(m) for m in message_ids]
+    _remember(forgotten, ids)
+    names = [f'{i}.json' for i in ids]
     stores = [*_channel_dirs(root, discord_id(channel_id)), *_inboxes(root)]
     return sum(_unlink(d / name) for d in stores for name in names)
 
 
-def forget_channel(root: Path, channel_id) -> int:
+def forget_channel(root: Path, channel_id, forgotten: dict) -> int:
     '''Remove a channel's or thread's caches and every inbox record from it.'''
     cid = discord_id(channel_id)
+    _remember(forgotten, [cid])
     removed = 0
     for directory in _channel_dirs(root, cid):
         removed += sum(_unlink(p) for p in _records(directory, _CACHED))
@@ -101,8 +113,16 @@ def erase_cli(root: Path, user_id: str) -> None:
     print(json.dumps({'user_id': user_id, 'removed': erase_author(root, user_id)}))
 
 
-def watch(client, root: Path, log: Callable[[str], None]) -> None:
-    '''Register the handlers for messages, threads and channels deleted on Discord.'''
+def watch(client, root: Path, log: Callable[[str], None]) -> Callable[[Path, Any], Path | None]:
+    '''Register the deletion handlers; return the step that drops a record deleted while written.'''
+    forgotten: dict = {}
+
+    def settle(path: Path, msg) -> Path | None:
+        if str(msg.id) not in forgotten and str(msg.channel.id) not in forgotten:
+            return path
+        _unlink(path)
+        return None
+
     def handle(name: str, forget: Callable) -> None:
         async def handler(event):
             try:
@@ -113,7 +133,8 @@ def watch(client, root: Path, log: Callable[[str], None]) -> None:
         handler.__name__ = name
         client.event(handler)
 
-    handle('on_raw_message_delete', lambda e: forget_messages(root, e.channel_id, [e.message_id]))
-    handle('on_raw_bulk_message_delete', lambda e: forget_messages(root, e.channel_id, e.message_ids))
-    handle('on_raw_thread_delete', lambda e: forget_channel(root, e.thread_id))
-    handle('on_guild_channel_delete', lambda channel: forget_channel(root, channel.id))
+    handle('on_raw_message_delete', lambda e: forget_messages(root, e.channel_id, [e.message_id], forgotten))
+    handle('on_raw_bulk_message_delete', lambda e: forget_messages(root, e.channel_id, e.message_ids, forgotten))
+    handle('on_raw_thread_delete', lambda e: forget_channel(root, e.thread_id, forgotten))
+    handle('on_guild_channel_delete', lambda channel: forget_channel(root, channel.id, forgotten))
+    return settle

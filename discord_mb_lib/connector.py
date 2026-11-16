@@ -2503,7 +2503,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         payload['receipt'] = receipt
         tmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
         tmp.replace(path)
-        return path
+        return settle_inbox(path, msg)
 
     @client.event
     async def on_message(msg):
@@ -2514,7 +2514,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except Exception as e:
             log(f'on_message error: {e}')
 
-    _retention.watch(client, STATE_ROOT, log)
+    settle_inbox = _retention.watch(client, STATE_ROOT, log)
 
     async def refresh_directory(force=False):
         channel = ch('directory')
