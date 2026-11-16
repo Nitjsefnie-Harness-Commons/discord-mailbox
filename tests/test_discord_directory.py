@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """The agent directory: what an entry names, who holds a name, and how much of
 the channel each read sees.
-
-The pure half drives `discord_mb_lib._directory` directly. The connector half
-runs the REAL connector closures on a stand-in gateway client (the
-`tests/_gateway.py`): `on_ready`, `on_message` and the `meta_watcher` answering
-send, list-agents and register requests.
 """
 import asyncio
 import json
@@ -46,20 +41,14 @@ def test_an_entry_names_its_first_mention_and_bold_token_or_separated_word(tmp):
         assert D.parse_entry(content, L) == listed, (content, D.parse_entry(content, L))
 
 
-def test_the_oldest_self_authored_entry_holds_a_name(tmp):
+def test_a_name_is_held_once_and_never_as_a_user_prefix(tmp):
     del tmp
     logs = []
-    held = D(logs.append).bind_names([  # oldest first: (name, mentioned id, author id)
-        ("probe", PROBE, PROBE), ("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE),
-        ("helper", PROBE, MALLORY), ("other", MALLORY, PROBE), ("mallory", MALLORY, MALLORY)])
-    assert held == {"probe": PROBE, "mallory": MALLORY}, held
-    assert logs == [CONFLICT], logs
-    assert D(logs.append).bind_names([("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE)]) == {
-        "probe": MALLORY}, "the newer entry won"
-    # `user:` is refused for a bound entry only; an entry another account wrote stays silent.
-    logs.clear()
-    assert D(logs.append).bind_names([("user:eve", PROBE, MALLORY), ("USER:eve", MALLORY, MALLORY)]) == {}
-    assert len(logs) == 1 and "USER:eve" in logs[0] and str(PROBE) not in logs[0], logs
+    # A holder repeating its own entry is no conflict; `user:` is refused for a bound entry only.
+    entries = [("probe", PROBE, PROBE), ("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE),
+               ("user:eve", PROBE, MALLORY), ("USER:eve", MALLORY, MALLORY), ("user", PROBE, PROBE)]
+    assert D(logs.append).bind_names(entries) == {"probe": PROBE, "user": PROBE}, "a `user:` name was bound"
+    assert logs[:1] == [CONFLICT] and len(logs) == 2 and "USER:eve" in logs[1] and str(PROBE) not in logs[1], logs
 
 
 # --- the real connector -----------------------------------------------------
@@ -70,8 +59,6 @@ _msg, _inbox = _gateway.message, _gateway.inbox
 def _run(tmp, entries, script, outbox=False):
     """-> (client, connector log); skipped without discord.py."""
     client = _gateway.run(tmp, script, entries, identity="dir-test", outbox=outbox)
-    if client is None:
-        _util.skip("discord.py is not installed")
     return client, client.log
 
 

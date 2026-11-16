@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """Credentials: whose posts count, and every entry in the channel, however old.
 
-The pure half drives `discord_mb_lib._creds`. The connector half runs the REAL
-creds-list / creds-get / creds-add closures on the stand-in gateway
-(`tests/_gateway.py`), whose channel history honours `limit` and whose token
-directory is the test's own. The CLI half stubs only the meta round trip.
-Token-shaped strings are assembled at runtime from a synthetic id and random
-segments.
+Token-shaped strings are assembled at runtime from a synthetic id and random segments.
 """
 import base64
 import contextlib
@@ -47,7 +42,7 @@ def _entry(client, msg_id, author, domain="a.example"):
 
 def test_a_token_files_first_segment_names_its_bot_or_the_file_is_skipped(tmp):
     d = Path(tmp)
-    cases = {"probe": (_token(_b64(str(PROBE).encode())) + "\n", PROBE),
+    cases = {"probe": ("\n" + _token(_b64(str(PROBE).encode())) + "\n", PROBE),
              "padded": (_token(base64.b64encode(b"12").decode()), 12), "unpadded": (_token(_b64(b"12")), 12),
              "words": (_token(_b64(b"bridge-bot")), None), "underscore": (_token(_b64(b"1_2")), None),
              "spaced": (_token(_b64(b" 12")), None), "alphabet": (_token("MT!I="), None),
@@ -58,7 +53,7 @@ def test_a_token_files_first_segment_names_its_bot_or_the_file_is_skipped(tmp):
     assert got == {**{n: uid for n, (_, uid) in cases.items()}, "missing": None}, got
 
 
-def test_from_settings_reads_the_list_and_the_token_directory_and_fails_loudly(tmp):
+def test_from_settings_reads_the_list_and_the_token_directory(tmp):
     d, logs, saved = Path(tmp), [], C.setting
     junk = _token("!!!!")
     for name, text in (("probe.token", _token(_b64(str(PROBE).encode()))), ("junk.token", junk),
@@ -70,13 +65,6 @@ def test_from_settings_reads_the_list_and_the_token_directory_and_fails_loudly(t
         assert (trust.listed, trust.bots) == (None, {PROBE}), (trust.listed, trust.bots)
         C.setting = {C.TRUSTED: f" {ALICE}, 7,"}.get
         assert C._CredsTrust.from_settings(d / "none", logs.append).listed == {ALICE, 7}
-        C.setting = {C.TRUSTED: "alice"}.get
-        try:
-            C._CredsTrust.from_settings(d, logs.append)
-        except SystemExit as e:
-            assert e.code == 1 and C.TRUSTED in logs[-1], (e.code, logs)
-        else:
-            raise AssertionError("an invalid trusted-author list was accepted")
     finally:
         C.setting = saved
     assert any("junk.token" in line for line in logs), logs
@@ -93,14 +81,12 @@ def test_a_set_list_that_skips_nothing_carries_no_warning(tmp):
 
 def test_get_list_and_add_see_an_entry_older_than_five_hundred_messages(tmp):
     async def script(client):
-        chatter = [client.message(1000 + i, BOT, f"chatter {i}", client.credentials) for i in range(600)]
+        chatter = [client.message(1000 + i, BOT, "```x```" * 4, client.credentials) for i in range(600)]  # 4 blocks: no entry
         client.credentials.msgs[:] = [*chatter, _entry(client, 1, BOT)]      # newest first
         await client.ask({"list": {"op": "creds-list"}, "get": {"op": "creds-get", "domain": "a.example"},
                           "add": {"op": "creds-add", "domain": "a.example", "login": "login", "password": "x"}})
 
     client = _gateway.run(tmp, script)
-    if client is None:
-        _util.skip("discord.py is not installed")
     r = client.responses
     assert set(client.credentials.reads) == {None}, client.credentials.reads     # the whole channel
     assert [e["msg_id"] for e in r["list"]["entries"]] == ["1"], r["list"]
@@ -127,8 +113,6 @@ def test_only_trusted_authors_count_once_the_list_is_set_and_unset_marks_and_war
         (root / "tokens").mkdir(parents=True)
         (root / "tokens" / "probe.token").write_text(_token(_b64(str(PROBE).encode())), encoding="utf-8")
         client = _gateway.run(root, script, env={C.TRUSTED: listed})
-        if client is None:
-            _util.skip("discord.py is not installed")
         r = client.responses
         for op, ids in (("list", keep), ("get", [i for i in keep if i != "5"])):
             got = [(e["msg_id"], e["author_id"], e["trusted"]) for e in r[op]["entries"]]
@@ -152,8 +136,6 @@ def test_an_invalid_trusted_author_list_stops_the_connector_at_startup(tmp):
     except SystemExit as e:
         assert e.code == 1 and C.TRUSTED in (Path(tmp) / "connector.log").read_text(encoding="utf-8"), e.code
     else:
-        if not _gateway.have_discord():
-            _util.skip("discord.py is not installed")
         raise AssertionError("the connector started with an invalid setting")
 
 
@@ -173,6 +155,7 @@ def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
             ("list", {}, [entry], {"op": "creds-list"}, None, [{k: v for k, v in entry.items() if k != "password"}]),
             ("get", {"domain": "a.example"}, [entry], {"op": "creds-get", "domain": "a.example"}, None, [entry]),
             ("list", {"json": False}, [entry, twin, bare], {"op": "creds-list"}, None, shown),
+            ("list", {"json": False}, [], {"op": "creds-list"}, None, []),
             ("get", {"domain": "a.example", "json": False}, [entry, twin, bare],
              {"op": "creds-get", "domain": "a.example"}, None, shown),
             ("get", {"domain": "b.example", "login": "l"}, [],

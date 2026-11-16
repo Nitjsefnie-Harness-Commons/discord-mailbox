@@ -38,9 +38,7 @@ def test_a_message_resolves_five_distinct_links_and_only_lists_the_rest(tmp):
         client.fetch_channel = fetch_channel
         await client.handlers["on_message"](client.message(101, ALICE, body, client.dm(970000000000000099)))
 
-    client = _gateway.run(tmp, script)
-    if client is None:
-        _util.skip("discord.py is not installed")
+    _gateway.run(tmp, script)
     linked = _gateway.inbox(tmp, 101)["linked_messages"]
     url = "https://discord.com/channels/1/{}/{}".format
     assert fetched == [CHANNEL + n for n in (1, 2, 3, 4, 5)], fetched

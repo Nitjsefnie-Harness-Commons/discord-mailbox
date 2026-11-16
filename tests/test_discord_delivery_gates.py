@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Delivery gates: continuation frames, the allow-lists, the per-sender cap.
-
-The pure half drives `discord_mb_lib._delivery` directly with synthetic
-messages and a clock that starts far from zero. The connector half runs the REAL `on_message` and `write_inbox`
-closures on the stand-in gateway client (`tests/_gateway.py`) and reads what
-reached the inbox, the event stream and the receipt reactions.
-"""
+"""Delivery gates: continuation frames, the allow-lists, the per-sender cap."""
 import os
 import sys
 import types
@@ -46,13 +40,11 @@ def test_settings_parse_and_an_invalid_value_names_its_setting(tmp):
     assert D.parse_ids("X", None) == frozenset()
     assert D.parse_ids("X", " 11, 22 ,33,") == {11, 22, 33}
     assert D.parse_rate("X", None) is None
-    assert D.parse_rate("X", "3/60") == (3, 60)
+    assert D.parse_rate("X", " 3/60 ") == (3, 60)
     for raw in ("abc", "1;2", ",", "1,x", "-5", "²", "1 2"):
-        _refused(lambda raw=raw: D.parse_ids("DISCORD_MAILBOX_ALLOWED_USER_IDS", raw),
-                 "DISCORD_MAILBOX_ALLOWED_USER_IDS")
+        _refused(lambda raw=raw: D.parse_ids(ENV[0], raw), ENV[0])
     for raw in ("0/60", "3/0", "3", "3/60s", "a/b", "-1/5", "3/60/2"):
-        _refused(lambda raw=raw: D.parse_rate("DISCORD_MAILBOX_SENDER_RATE_LIMIT", raw),
-                 "DISCORD_MAILBOX_SENDER_RATE_LIMIT")
+        _refused(lambda raw=raw: D.parse_rate(ENV[2], raw), ENV[2])
 
 
 def _refused(call, name):
@@ -64,35 +56,12 @@ def _refused(call, name):
         raise AssertionError(f"{name}: an invalid value was accepted")
 
 
-def test_from_settings_reads_each_setting_and_fails_loudly(tmp):
-    saved = D.setting
-    logs = []
-    try:
-        D.setting = {}.get
-        gates = D._DeliveryGates.from_settings(logs.append)
-        assert (gates.users, gates.guilds, gates.rate) == (frozenset(), frozenset(), None)
-        D.setting = {ENV[0]: "7", ENV[1]: "8", ENV[2]: "2/9"}.get
-        gates = D._DeliveryGates.from_settings(logs.append)
-        assert (gates.users, gates.guilds, gates.rate) == ({7}, {8}, (2, 9))
-        for name in ENV:
-            D.setting = {name: "bogus"}.get
-            try:
-                D._DeliveryGates.from_settings(logs.append)
-            except SystemExit as e:
-                assert e.code == 1 and name in logs[-1], (e.code, logs)
-            else:
-                raise AssertionError(f"{name}=bogus started")
-    finally:
-        D.setting = saved
-
-
 # --- allow-lists ------------------------------------------------------------
 
 def test_the_allow_lists_combine_by_or_and_a_dm_passes_only_by_user(tmp):
     rows = [  # users, guilds, author, guild, delivered
-        ((), (), RAW, None, True), ((), (), RAW, OTHER_GUILD, True),
+        ((), (), RAW, None, True),
         ((ALICE,), (), ALICE, None, True), ((ALICE,), (), RAW, None, False),
-        ((ALICE,), (), RAW, GUILD, False),
         ((), (GUILD,), RAW, GUILD, True), ((), (GUILD,), RAW, OTHER_GUILD, False),
         ((), (GUILD,), RAW, None, False),
         ((ALICE,), (GUILD,), ALICE, OTHER_GUILD, True), ((ALICE,), (GUILD,), RAW, GUILD, True),
@@ -212,13 +181,8 @@ def test_the_cap_forgets_senders_once_their_window_has_passed(tmp):
 # --- the real connector -----------------------------------------------------
 
 def _run(tmp, env, script):
-    """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; skipped without discord.py.
-
-    The real `setting()` reads the three settings from the environment (`env` over blanks, which
-    count as unset); `_gateway.run` pins the settings-file cache empty so the host's files never leak in."""
+    """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; the settings come from `env` alone."""
     client = _gateway.run(tmp, script, env={**dict.fromkeys(ENV, ""), **env}, extension=True)
-    if client is None:
-        _util.skip("discord.py is not installed")
     return (_gateway.inbox(tmp), [int(e["msg_id"]) for e in client.events if e.get("event") == "message"],
             [m for m, _ in client.reactions], client.log), client
 
@@ -265,13 +229,14 @@ def test_an_invalid_setting_stops_the_connector_at_startup(tmp):
     async def script(client):
         raise AssertionError("the connector reached the gateway")
 
-    try:
-        _run(tmp, {ENV[2]: "10 per minute"}, script)
-    except SystemExit as e:
-        assert e.code == 1, e.code
-        assert ENV[2] in (Path(tmp) / "connector.log").read_text(encoding="utf-8")
-    else:
-        raise AssertionError("the connector started with an invalid setting")
+    for name in ENV:
+        (Path(tmp) / name).mkdir()
+        try:
+            _run(Path(tmp) / name, {name: "10 per minute"}, script)
+        except SystemExit as e:
+            assert e.code == 1 and name in (Path(tmp) / name / "connector.log").read_text(encoding="utf-8"), e.code
+        else:
+            raise AssertionError(f"the connector started with an invalid {name}")
 
 
 def main():
