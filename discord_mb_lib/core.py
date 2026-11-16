@@ -2323,14 +2323,8 @@ def read_extension_registry(identity, flavor=None):
 
 def write_extension_registry(identity, data, flavor=None):
     p = extension_registry_path(identity, flavor)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + '.tmp')
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    tmp.replace(p)          # atomic: a crash mid-write cannot truncate the live file
-    try:
-        p.chmod(0o600)
-    except OSError:
-        pass
+    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _control_files.write_private(p, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def heartbeat_due(last_date, today):

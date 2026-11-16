@@ -20,6 +20,7 @@ from ._dm import _open_dm_channel, _resolve_dm_user_id
 from . import _linked
 from ._meta_claim import _claim
 from . import _control_files
+from . import _ext_trust
 from . import _secrets
 
 
@@ -1745,6 +1746,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def _extension_start(path, *, persist):
         '''Load + setup an extension. `persist` records it in the registry so
         the next connector start reloads it; a startup reload passes False.'''
+        warning = _ext_trust.check_extension(path)
         module, setup, command = load_extension(path)
         # Drop the outgoing generation's handlers; the installed dispatchers
         # read this same dict, so they pick the new ones up with no re-setattr.
@@ -1769,15 +1771,16 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             reg = read_extension_registry(identity, flavor)
             reg['path'] = str(path)
             write_extension_registry(identity, reg, flavor)
-        log(f'extension loaded: {path}')
+        log(f'extension loaded: {path}' + (f' (warning: {warning})' if warning else ''))
+        return warning
 
     async def op_extension_set(path):
         try:
-            await _extension_start(path, persist=True)
+            warning = await _extension_start(path, persist=True)
         except Exception as e:
             state['extension_error'] = f'{type(e).__name__}: {e}'
             return {'error': state['extension_error']}
-        return {'ok': True, 'path': str(path)}
+        return {'ok': True, 'path': str(path), **({'warning': warning} if warning else {})}
 
     async def op_extension_remove():
         reg = read_extension_registry(identity, flavor)
@@ -2856,6 +2859,7 @@ __all__ = [
     '_attachments',
     '_claim',
     '_claim_ownership',
+    '_ext_trust',
     '_linked',
     '_open_dm_channel',
     '_recorded_owner',

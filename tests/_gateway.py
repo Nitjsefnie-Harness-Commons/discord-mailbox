@@ -176,7 +176,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
              "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)} if extension else {},
              "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins", "TOKEN_DIR": root / "tokens",
              "meta_in_dir": lambda identity: in_dir, "meta_out_dir": lambda identity: out_dir,
-             "outbox_dir": lambda identity: out_box}
+             "outbox_dir": lambda identity: out_box, "write_extension_registry": lambda *args: None}
     for d in (in_dir, out_dir, out_box, root / "inbox", root / "msgs", root / "locks"):
         d.mkdir(parents=True, exist_ok=True)
     saved = {n: getattr(c, n) for n in swaps}
