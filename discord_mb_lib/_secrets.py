@@ -34,11 +34,11 @@ def cli_token(token: str | None, token_file: str | None) -> str | None:
 def connector_token(token: str | None, identity: str, flavor: str | None,
                     find_in_directory: Callable[[str, str | None], tuple[str | None, str]]
                     ) -> tuple[str | None, str]:
-    """The caller passes its own directory lookup, so a facade TOKEN_DIR patch still reaches it."""
+    """The caller passes its own directory lookup, so a facade TOKEN_DIR patch reaches it."""
     token = token or os.environ.get('DISCORD_TOKEN')
     if not token:
         return find_in_directory(identity, flavor)
-    return token, flavor or 'claude'    # legacy flagless callers stay Claude-flavored
+    return token, flavor or 'claude'    # a caller that names no flavor gets Claude's
 
 
 def cli_password(password: str | None, from_stdin: bool) -> str:
