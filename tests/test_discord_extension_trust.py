@@ -99,6 +99,7 @@ def test_the_check_returns_the_bytes_it_judged_and_refuses_a_symlink_found_at_op
             module.symlink_to(decoy)
         return resolved
     assert _ext_trust.check_extension(module, euid=ME, stat_of=swap_then_stat) == (b"checked = True\n", None)
+    assert module.read_text(encoding="utf-8") == "swapped = True\n"     # the swap ran
     decoy.write_text("swapped = True\n", encoding="utf-8")
     _ext_trust._resolve = resolve_then_link
     try:
@@ -153,6 +154,7 @@ def test_the_connector_refuses_an_exposed_module_at_start_and_on_set(tmp):
         client = _gateway.run(tmp, script, extension=True)
     finally:
         _ext_trust.check_extension = check
+    assert shared.read_text(encoding="utf-8").startswith("raise RuntimeError"), "the swap never ran"
     start, refused, warned = (client.responses[k] for k in ("start", "refused", "set"))
     reason, warning = f"PermissionError: {relay} is writable by other users", f"{shared} is group-writable"
     assert (start["loaded"], start["last_error"]) == (False, reason), start
