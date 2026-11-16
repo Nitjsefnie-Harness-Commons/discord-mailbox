@@ -342,7 +342,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 f'{TOKEN_DIR}/{identity}.token')
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')
-        gates = _DeliveryGates(log)
+        gates = _DeliveryGates.from_settings(log)
 
         if claude_pid is None:
             claude_pid = find_parent_pid_from(os.getppid(), flavor)

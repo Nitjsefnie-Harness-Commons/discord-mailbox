@@ -2563,9 +2563,9 @@ class _ExtensionContext:
         the enriched inbox record, a `message` event carrying its path, the
         receipt reaction, and reply-ability.
 
-        Delivery is idempotent -- a message already in the inbox is not
-        written again -- so relaying one that also mentions the bot is safe.
-        Returns the inbox path.
+        Delivery is idempotent, so relaying a message that also mentions the
+        bot is safe. Returns the inbox path, or None when a delivery gate
+        refused it.
         '''
         if self._deliver is None:
             raise RuntimeError(

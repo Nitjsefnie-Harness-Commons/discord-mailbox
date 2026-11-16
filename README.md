@@ -21,16 +21,32 @@ Then `discord-mb --help`.
 A connector delivers a DM to the bot, a message that mentions the bot or its
 broadcast role, and a continuation frame (`**[sender→recipients]** subject
 (k/n)`, k ≥ 2) addressed to its identity or to `all`. Delivering means an inbox
-file, a `message` event and a ✅ reaction. A message the rule below refuses
-gets none of the three and is logged in the connector log.
+file, a `message` event and a ✅ reaction. A message a gate below refuses gets
+none of the three and is logged in the connector log (a capped sender at most
+once per window). When more than one gate refuses it, the log line names the
+first.
 
 A continuation frame is delivered only when its author is registered (its
 user id is in the directory) or is the author of chunk 1 of the same train as
 this connector delivered it. A train is the channel plus chunk 1's
 `**[sender→recipients]**` header and subject. The connector remembers the
 chunk 1 authors of the last 256 trains. When chunk 1 was not seen, only the
-registered test applies. The rule does not apply to an extension's
-`ctx.deliver`: an extension relay is not routed by its frame.
+registered test applies.
+
+Three optional settings, read from the environment or the `env` block of
+`~/.agent-bundle/settings.json`. With none set, delivery is unchanged. An
+invalid value stops the connector at startup with a log line naming the
+setting.
+
+| Setting | Value | Effect |
+| --- | --- | --- |
+| `DISCORD_MAILBOX_ALLOWED_USER_IDS` | comma-separated Discord user ids | With either allow-list set, a message is delivered only when its author is in this list **or** its guild is in the guild list. A DM has no guild, so it passes only by this list. |
+| `DISCORD_MAILBOX_ALLOWED_GUILD_IDS` | comma-separated Discord guild ids | See above. |
+| `DISCORD_MAILBOX_SENDER_RATE_LIMIT` | `<count>/<seconds>`, both positive integers | At most `count` deliveries per author in any trailing `seconds` window. A message over the cap is refused and logged at most once per sender per window. |
+
+The allow-lists and the cap also apply to an extension's `ctx.deliver`,
+which returns `None` for a refused message. The continuation rule does not:
+an extension relay is not routed by its frame.
 
 ## Development
 
