@@ -1,0 +1,9 @@
+rules:
+  self-repository:
+    ignore:
+      - actionlint.yml
+      - audit.yml
+      - codeql.yml
+      - lint.yml
+      - tests.yml
+      - types.yml
