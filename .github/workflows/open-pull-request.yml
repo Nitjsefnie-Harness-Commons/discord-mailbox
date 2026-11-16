@@ -1,8 +1,7 @@
 name: open pull request
 
-# Non-empty only on a push to the head of an open, mergeable pull request:
-# GitHub starts no pull_request run for a conflicted one. The text would
-# show only if GitHub evaluated a skipped job's `name:`; it does not.
+# Set on a push to the head of an open pull request whose `mergeable` is
+# true (null: computing; false: no pull_request run). Text never shown.
 
 on:
   workflow_call:
@@ -37,7 +36,6 @@ jobs:
           number="$(gh api --method GET "repos/$REPO/pulls" -f state=open -f head="$HEAD" --jq '.[0].number // empty')"
           [ -n "$number" ] || exit 0
           for attempt in 1 2 3 4; do
-            # `mergeable` is null while GitHub computes it after a push.
             state="$(gh api -H 'Cache-Control: no-cache' "repos/$REPO/pulls/$number" --jq '"\(.head.sha) \(.mergeable)"')"
             case "$state" in
               "$SHA true") echo "skip-note= (pull request #$number)" >> "$GITHUB_OUTPUT"; exit 0 ;;
