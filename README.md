@@ -23,7 +23,9 @@ python3 run_tests.py                                             # the suite
 git ls-files -co --exclude-standard '*.py' | xargs pylint        # lint
 git ls-files -co --exclude-standard '*.py' | xargs pycodestyle   # lint
 pyright                                                          # types
-pip-audit -r requirements-dev.txt -r requirements-test.txt       # audit
+for m in .github/workflows/requirements-*.txt requirements-*.txt; do
+  pip-audit --disable-pip -r "$m"                                # audit
+done
 actionlint .github/workflows/*.yml && zizmor .github/workflows/  # workflows
 ```
 
