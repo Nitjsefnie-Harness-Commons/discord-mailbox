@@ -334,7 +334,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         # Resolve the token + its flavor (which dir it came from) up front: the flavor
         # drives both the parent-CLI PID walkup and the default status plugin.
-        token, flavor = _secrets.connector_token(token, identity, flavor)
+        token, flavor = _secrets.connector_token(token, identity, flavor, resolve_token_and_flavor)
         if not token:
             log(f'No token. Pass --token-file, set DISCORD_TOKEN env or populate '
                 f'{TOKEN_DIR}/{identity}.token')
