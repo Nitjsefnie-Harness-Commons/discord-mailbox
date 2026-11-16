@@ -13,7 +13,9 @@ FORGOTTEN_MAX = 4096
 _ID = re.compile(r'[0-9]+')
 _RECORD = re.compile(r'[0-9]+\.json')
 _CACHED = re.compile(r'[0-9]+\.json(?:\.tmp)?')
-_CACHES = ('messages', 'pins')
+# The store directory names; core's writers build their paths from these.
+INBOX, MESSAGES, PINS = 'inbox', 'messages', 'pins'
+_CACHES = (MESSAGES, PINS)
 
 
 def discord_id(value) -> str:
@@ -42,7 +44,7 @@ def _records(directory: Path, pattern: re.Pattern) -> list[Path]:
 
 
 def _inboxes(root: Path) -> list[Path]:
-    return [d for identity in _subdirs(root) for d in _subdirs(identity) if d.name == 'inbox']
+    return [d for identity in _subdirs(root) for d in _subdirs(identity) if d.name == INBOX]
 
 
 def _caches(root: Path) -> list[Path]:
