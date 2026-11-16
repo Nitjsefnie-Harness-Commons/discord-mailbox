@@ -2,32 +2,22 @@ name: tag
 
 # Creates the tag that release.yml consumes.
 #
-# release.yml already does the right thing once a `v*` tag exists: it runs
-# every suite, builds the wheel, and publishes SHA256SUMS beside it. What it
-# has no way to know is WHEN to fire — someone has to remember to push a tag
-# after bumping __version__, and a forgotten tag means a version bump that
-# never ships.
+# release.yml publishes once a `v*` tag exists, but has no way to know WHEN:
+# someone has to remember to tag after bumping __version__, and a forgotten
+# tag is a version bump that never ships. So this watches the one file that
+# carries the version, creates the tag, and then STARTS release.yml by hand.
+# A tag created with the built-in GITHUB_TOKEN triggers no workflow at all:
+# GitHub suppresses runs from token-authored events so a workflow cannot loop
+# on its own pushes, and `workflow_dispatch` is one of the documented
+# exceptions. Without the dispatch the tag lands, no release is cut, and
+# nothing goes red.
 #
-# So this composes with it rather than replacing it: it watches the one file
-# that carries the version, pushes the tag, and then STARTS release.yml by
-# hand. That last part is not belt-and-braces: a `v*` tag pushed with the
-# built-in GITHUB_TOKEN does not trigger release.yml at all. GitHub suppresses
-# workflow runs from token-authored events so a workflow cannot loop on its
-# own pushes, and `workflow_dispatch` is one of the two documented exceptions
-# to that rule -- which is why the last step below dispatches rather than
-# relying on the push.
-#
-# Without it the failure is silent and total: the tag lands, the version looks
-# shipped, no release is ever cut, and nothing goes red.
-#
-# release.yml re-runs the suites itself before publishing anything, so the
-# publish path keeps its own safety net regardless of what happened here.
-#
-# It still waits for the other gates first. A tag is the one artefact that
-# outlives a mistake — a branch can be force-pushed, but a release someone
-# has pulled cannot be unpublished — so tagging a red commit is worth
-# preventing even though release.yml would catch a failing suite later. It
-# would NOT catch a lint or type regression, which never reach that job.
+# `version` holds a read-only token: it resolves the commit, checks it out and
+# builds the package to read its version. `tag` holds the write token and runs
+# no repository or third-party code, only `gh`, `jq` and shell tools: it
+# waits for the other gates, creates the tag through the API and dispatches
+# release.yml. It waits although release.yml waits again before publishing,
+# because a tag on a red commit outlives the mistake.
 
 on:
   push:
@@ -48,6 +38,12 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    # `bash -eo pipefail`, not the default `bash -e`: a `gh` failure inside a
+    # pipeline fails the step instead of handing jq a partial listing.
+    shell: bash
+
 concurrency:
   # NOT cancel-in-progress: a superseded test run teaches you nothing and is
   # worth cancelling; a superseded tag run may be midway through creating a
@@ -56,26 +52,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tag:
+  version:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    permissions:
-      # Creating the tag. release.yml holds its own write permission for the
-      # release itself.
-      contents: write
-      # Reading the other workflows' results for this SHA.
-      checks: read
-      # Dispatching release.yml. See the last step for why the tag push
-      # cannot do that on its own.
-      actions: write
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      tag: ${{ steps.version.outputs.tag }}
+      skip: ${{ steps.retag.outputs.skip }}
 
     steps:
+      - name: Resolve the commit to tag
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.sha || github.sha }}
+        # A dispatch names any commit from any branch, so the input and the
+        # default alike must be a full SHA that main contains. The shape is
+        # checked first: the compare API also resolves short and uppercase SHAs;
+        # `ahead` or `identical` means the commit is main or an ancestor of it.
+        run: |
+          if [ "${#SHA}" -ne 40 ] || [ -n "${SHA//[0-9a-f]/}" ]; then
+            echo "Not a full lowercase commit SHA: '$SHA'" >&2
+            exit 1
+          fi
+          status="$(gh api -H "Cache-Control: no-cache" \
+            "repos/$REPO/compare/$SHA...refs/heads/main" --jq .status)"
+          if [ "$status" != ahead ] && [ "$status" != identical ]; then
+            echo "$SHA is not on main (compare status: $status); refusing." >&2
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.sha || github.sha }}
-          # This job DOES push (the tag), so it keeps the token.
-          persist-credentials: true
+          ref: ${{ steps.commit.outputs.sha }}
+          persist-credentials: false
 
       - name: Read and validate the version
         id: version
@@ -89,13 +101,13 @@ jobs:
         # instead would need discord.py and psutil that this job has no reason
         # to install. `--no-deps` builds the distribution without them, and
         # importlib.metadata reads the recorded version without importing any
-        # of it.
+        # of it. Only a plain X.Y.Z is a release.
         run: |
           python3 -m pip install --quiet --require-hashes -r requirements-build.txt
           python3 -m pip install --quiet --no-deps --no-build-isolation .
           version="$(python3 -c 'import importlib.metadata as m; print(m.version("discord-mailbox"))')"
-          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([._a-z0-9-]*)$'; then
-            echo "__version__ is not a usable version: '$version'" >&2
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "__version__ is not a plain X.Y.Z release: '$version'" >&2
             exit 1
           fi
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
@@ -154,27 +166,51 @@ jobs:
           fi
           echo "$TAG is free"
 
+  tag:
+    # No `name:`, so `github.job` is this job's check-run name, which
+    # release.yml's waiter excludes by that exact name. Skipped, it passes.
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: write # creates the tag object and its ref
+      actions: write # lists this commit's workflow runs, dispatches release.yml
+      checks: read # reads the other checks on this commit
+
+    steps:
       - name: Wait for the other gates on this commit
-        if: steps.retag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.sha || github.sha }}
           REPO: ${{ github.repository }}
-        # Three details that are each a way this can be wrong:
-        #   - it excludes ITSELF, or it would wait on a job waiting on it;
-        #   - it requires at least one other check that is not `skipped`
-        #     (a skip gates nothing), so it cannot race ahead and tag
-        #     before CI has even been scheduled;
-        #   - `cancelled` counts as failure. A cancelled run means a newer
-        #     push superseded this SHA, which is not a commit to release.
+          SHA: ${{ needs.version.outputs.sha }}
+          # Matched by equality: this job, or it would wait on itself.
+          EXCLUDED: ${{ github.job }}
+        # Counts only check runs of push and pull_request workflow runs, so a
+        # comment-triggered run neither gates nor blocks. It needs at least one
+        # other check that is not `skipped`; a push run's own `version` job
+        # already counts, so only a dispatched run waits for CI to be
+        # scheduled. `cancelled` fails: a superseded commit is not released.
+        # Check runs are read first: a workflow run starting between the two
+        # reads is counted on the next poll instead of having its checks dropped.
         run: |
           deadline=$(( SECONDS + 45 * 60 ))
           while [ "$SECONDS" -lt "$deadline" ]; do
-            runs="$(gh api --paginate \
-              -H "Cache-Control: no-cache" \
-              "repos/$REPO/commits/$SHA/check-runs" \
-              --jq '.check_runs[] | select(.name | startswith("tag") | not)
-                    | "\(.status)\t\(.conclusion)\t\(.name)"')"
+            checks="$(gh api --paginate -H "Cache-Control: no-cache" \
+              "repos/$REPO/commits/$SHA/check-runs?per_page=100")"
+            suites="$(gh api --paginate -H "Cache-Control: no-cache" \
+              "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+              | jq -s '[.[].workflow_runs[]
+                        | select(.event == "push" or .event == "pull_request")
+                        | .check_suite_id]')"
+            runs="$(printf '%s' "$checks" \
+              | jq -r --argjson suites "$suites" --arg excluded "$EXCLUDED" '
+                  ($excluded | split("\n")) as $ex
+                  | .check_runs[]
+                  | select(.check_suite.id | IN($suites[]))
+                  | select(.name | IN($ex[]) | not)
+                  | "\(.status)\t\(.conclusion)\t\(.name)"')"
 
             if [ -z "$(echo "$runs" | awk -F'\t' '$2 != "skipped"')" ]; then
               echo "no other check runs reported yet, waiting..."
@@ -195,7 +231,7 @@ jobs:
             bad="$(echo "$runs" \
               | awk -F'\t' '$2 != "success" && $2 != "skipped" && $2 != "neutral"')"
             if [ -n "$bad" ]; then
-              echo "Refusing to tag: these checks did not pass:" >&2
+              echo "Refusing to proceed: these checks did not pass:" >&2
               echo "$bad" | awk '{print "    " $0}' >&2
               exit 1
             fi
@@ -205,19 +241,24 @@ jobs:
           echo "Timed out after 45 minutes waiting for checks on $SHA" >&2
           exit 1
 
-      - name: Create and push the tag
-        if: steps.retag.outputs.skip != 'true'
+      - name: Create the tag
         env:
-          TAG: ${{ steps.version.outputs.tag }}
-          SHA: ${{ inputs.sha || github.sha }}
-        # An annotated tag, not lightweight: it records who created it and
-        # when, which a lightweight tag does not.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.version.outputs.sha }}
+          TAG: ${{ needs.version.outputs.tag }}
+        # An annotated tag, which records who created it and when: the tag
+        # object first, then the ref under refs/tags that names it.
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG" "$SHA"
-          git push origin "$TAG"
-          echo "Pushed $TAG at $SHA."
+          object="$(gh api --method POST "repos/$REPO/git/tags" \
+            -f tag="$TAG" -f message="$TAG" -f object="$SHA" -f type=commit \
+            -f 'tagger[name]=github-actions[bot]' \
+            -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
+            -f "tagger[date]=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --jq .sha)"
+          gh api --method POST "repos/$REPO/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$object" >/dev/null
+          echo "Created $TAG at $SHA."
           {
             echo "### Tagged \`$TAG\`"
             echo
@@ -226,18 +267,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Start the release
-        if: steps.retag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
           REPO: ${{ github.repository }}
-        # release.yml also triggers on `push: tags: v*`, and that trigger
-        # is what fires for a tag a HUMAN pushes. It does not fire for the
-        # tag the step above just pushed, because that push was
-        # authenticated with GITHUB_TOKEN. Dispatching is the documented
-        # way through, and it composes safely with the push trigger:
-        # release.yml replaces the assets on a release that already exists
-        # rather than failing, so firing twice is not a problem.
+        # release.yml also triggers on `push: tags: v*`, which fires for a
+        # tag a HUMAN pushes but not for one created with GITHUB_TOKEN.
+        # Dispatching is the documented way through, and the two compose: on
+        # a release that already exists, release.yml uploads only missing
+        # assets and fails without uploading if one there differs.
         run: |
           gh workflow run release.yml --repo "$REPO" --ref "$TAG"
           echo "Dispatched release.yml against $TAG."
