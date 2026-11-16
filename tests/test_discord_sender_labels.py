@@ -19,13 +19,14 @@ from discord_mb_lib._directory import _Directory as D  # noqa: E402
 
 MALLORY, OTHER = 970000000000000002, 970000000000000003
 FALLBACK = "user:alice"                # MALLORY's username is `alice`, a name ALICE holds
-DOWNLOADS = (  # attachment name -> the file it is saved as, or (with a space) why it is skipped
-    ("../../escaped.txt", "escaped.txt"), ("..\\..\\win.txt", "win.txt"),
-    ("sub/escaped.txt", "an earlier attachment on this message is saved as 'escaped.txt'"),
-    ("dir/", "file name reduces to ''"), ("x/.", "file name reduces to '.'"), ("x\\..", "file name reduces to '..'"),
-    ("old.txt", "old.txt"),                                  # already there: overwritten
-    ("link.txt", "'link.txt' resolves outside dest_dir"),
-    ("alias.txt", "'alias.txt' is the file an earlier attachment on this message is saved as"))
+DOWNLOADS = (  # attachment name, the file it is saved as, why it is skipped
+    ("../../escaped.txt", "escaped.txt", None), ("..\\..\\win.txt", "win.txt", None),
+    ("sub/escaped.txt", None, "an earlier attachment on this message is saved as 'escaped.txt'"),
+    ("dir/", None, "file name reduces to ''"), ("x/.", None, "file name reduces to '.'"),
+    ("x\\..", None, "file name reduces to '..'"), ("old.txt", "old.txt", None),   # already there: overwritten
+    ("link.txt", None, "'link.txt' does not resolve inside dest_dir"),
+    ("self", None, "'self' does not resolve inside dest_dir"), ("sub", None, "'sub' is a directory"),
+    ("alias.txt", None, "'alias.txt' is the file an earlier attachment on this message is saved as"))
 
 
 def test_a_sender_is_labelled_by_its_oldest_directory_name_or_user_and_username(tmp):
@@ -164,31 +165,36 @@ def test_a_download_saves_each_attachment_directly_inside_dest_dir_or_skips_it_w
     (inside / "old.txt").write_text("stale", encoding="utf-8")
     (inside / "link.txt").symlink_to(root / "outside.txt")
     (inside / "alias.txt").symlink_to(inside / "escaped.txt")
-    dest, saves = root / "via" / "inside", {n: want for n, want in DOWNLOADS if " " not in want}
-    resp = _download(root / "gateway", [n for n, _ in DOWNLOADS], dest)
-    assert [(s["filename"], s["path"]) for s in resp["saved"]] == [(n, str(dest / w)) for n, w in saves.items()], resp
-    assert resp["skipped"] == [{"filename": n, "reason": w} for n, w in DOWNLOADS if n not in saves], resp
+    (inside / "self").symlink_to(inside, target_is_directory=True)
+    (inside / "sub").mkdir()
+    dest = root / "via" / "inside"
+    resp = _download(root / "gateway", [n for n, *_ in DOWNLOADS], dest)
+    assert [(s["filename"], s["path"]) for s in resp["saved"]] == [(n, str(dest / f)) for n, f, _ in DOWNLOADS if f], resp
+    assert resp["skipped"] == [{"filename": n, "reason": r} for n, _, r in DOWNLOADS if r], resp
     assert sorted(os.listdir(root)) == ["gateway", "real", "via"], os.listdir(root)
     resp = _download(root / "renamed", ["../../escaped.txt"], inside, rename="../renamed.txt")   # taken as given
     assert (resp["saved"][0]["path"], resp["skipped"]) == (str(inside / "../renamed.txt"), []), resp
+    fresh = root / "real" / "new"                   # created; with two attachments --rename goes unused
+    resp = _download(root / "two", ["a.txt", "b.txt"], fresh, rename="../renamed.txt")
+    assert [s["path"] for s in resp["saved"]] == [str(fresh / "a.txt"), str(fresh / "b.txt")], resp
     assert _download(root / "empty", [], inside)["skipped"] == [], "no attachments, nothing skipped"
 
 
 def test_the_download_cli_prints_every_skipped_attachment(tmp):
     del tmp
     args = types.SimpleNamespace(identity="me", timeout=1.0, att_action="download", msg_id="7", dest_dir="d", rename=None, channel=None)
-    err, original = io.StringIO(), core._meta_request
+    err, original, code = io.StringIO(), core._meta_request, None
     core._meta_request = lambda i, p, t: {"ok": True, "saved": [], "skipped": [
         {"filename": "x/..", "reason": "file name reduces to '..'"}]}
     try:
         with contextlib.redirect_stderr(err):
             core.attachments_cli(args)
     except SystemExit as e:
-        assert e.code == 2, e.code
+        code = e.code
     finally:
         core._meta_request = original
-    assert err.getvalue() == ("skipped: 'x/..'  (file name reduces to '..')\n"
-                              "(nothing saved from 7: every attachment was skipped)\n"), err.getvalue()
+    assert (code, err.getvalue()) == (2, "skipped: 'x/..'  (file name reduces to '..')\n"
+                                         "(nothing saved from 7: every attachment was skipped)\n"), err.getvalue()
 
 
 def main():

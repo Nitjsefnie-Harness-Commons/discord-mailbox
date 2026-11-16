@@ -11,9 +11,11 @@ def _target(dest: Path, filename: str, targets: list[Path]) -> Path | str:
     if any(t.name == name for t in targets):
         return f'an earlier attachment on this message is saved as {name!r}'
     target = dest / name
-    # both sides resolved, as macOS /var is a symlink
-    if not target.resolve().is_relative_to(dest.resolve()):
-        return f'{name!r} resolves outside dest_dir'
+    # both sides resolved, as macOS /var is a symlink; strictly inside, as `C:` on Windows names dest itself
+    if dest.resolve() not in target.resolve().parents:
+        return f'{name!r} does not resolve inside dest_dir'
+    if target.is_dir():
+        return f'{name!r} is a directory'
     if target.exists() and any(os.path.samefile(target, t) for t in targets):
         return f'{name!r} is the file an earlier attachment on this message is saved as'
     targets.append(target)

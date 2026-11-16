@@ -106,15 +106,16 @@ older CLI) with an error, never an unfiltered list.
 `attachments download` saves each attachment directly inside the destination
 directory, under the last component of its file name, with `/` and `\` both
 taken as separators. An attachment is not written when that name is empty,
-`.` or `..`, when its path resolves outside the destination directory (through
-a symlink already there, for example), or when an earlier attachment on the
+`.` or `..`, when its path does not resolve to a path inside the
+destination directory (through a symlink already there, for example), when a
+directory already has that name, or when an earlier attachment on the
 same message took the same name or was saved to the same file (`A.txt` and
 `a.txt` on a case-insensitive filesystem). The answer lists each such
 attachment under `skipped` with its original `filename` and a `reason`, the
 CLI prints a `skipped:` line for it on stderr, and the message's other
 attachments are still saved; with nothing saved the CLI exits 2. A file
-already at the target is overwritten. A `--rename` name is used as given,
-without this reduction.
+already at the target is overwritten. A `--rename` name applies only to a
+message with one attachment and is used as given, without this reduction.
 
 ## Credentials
 
