@@ -187,10 +187,13 @@ def _run(c, discord, tmp, world, requests):
             for out in out_dir.glob("*.json"):
                 responses[out.stem] = json.loads(out.read_text(encoding="utf-8"))
 
+    from discord_mb_lib import _directory
     saved = {n: getattr(c, n) for n in _SWAPPED}
-    saved_client = discord.Client
+    saved_client, saved_interval = discord.Client, _directory.MISS_REFRESH_INTERVAL
     saved_env = os.environ.get(LOCK_ROOT_ENV)
     try:
+        # Every lookup miss here comes after the startup scan's interval has passed.
+        _directory.MISS_REFRESH_INTERVAL = 0
         c.state_dir = lambda identity: state
         c.sweep_status_plugin = lambda identity: None
         c.default_status_plugin = lambda flavor: root / "no-such-plugin"
@@ -206,7 +209,7 @@ def _run(c, discord, tmp, world, requests):
     finally:
         for n, v in saved.items():
             setattr(c, n, v)
-        discord.Client = saved_client
+        discord.Client, _directory.MISS_REFRESH_INTERVAL = saved_client, saved_interval
         if saved_env is None:
             os.environ.pop(LOCK_ROOT_ENV, None)
         else:
