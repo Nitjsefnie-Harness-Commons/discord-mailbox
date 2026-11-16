@@ -82,6 +82,33 @@ entry only when the connector has none. The connector reads the channel at
 startup; a name it cannot resolve rereads it only when the last completed
 read is at least 15 seconds old.
 
+## Credentials
+
+A message in the credentials channel holding exactly three fenced code
+blocks (domain, login, password) is an entry, as `creds add` posts it.
+`creds list`, `creds get` and `creds add` read the whole channel, however
+old the entry.
+
+Whether an entry counts is decided by its author's Discord user id; names,
+display names and directory entries play no part. The trusted authors are
+this connector's own account, every bot whose token file is in the token
+directory (`~/.agent-bundle/discord/*.token`, read once at connector
+startup), and the accounts listed in `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS`
+(comma-separated Discord user ids, read like the delivery settings; an
+invalid value stops the connector at startup with a log line naming the
+setting). A token's first dot-separated segment encodes its bot's user id;
+a token file it cannot be decoded from is skipped, with a connector log
+line naming the file.
+
+Each entry carries `author_id` (the Discord id, as a string) and `trusted`.
+With the setting set, `creds-list` and `creds-get` answer only trusted
+entries plus `skipped_untrusted`, the number of other entries that matched,
+and `creds add` without `--upsert` counts only trusted entries as existing.
+With it unset, they answer every entry and `creds add` counts every entry.
+Whenever an untrusted entry is skipped or answered, the answer carries a
+`warning`, which the CLI prints to stderr as `warning: ...`, so `--json`
+output stays a list of entries.
+
 ## Development
 
 ```sh

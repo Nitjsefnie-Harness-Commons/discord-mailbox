@@ -1444,19 +1444,28 @@ def attachments_cli(args):
 
 
 def creds_cli(args):
-    identity = args.identity
-    timeout = args.timeout
     action = args.creds_action
     if action == 'list':
-        try:
-            resp = _meta_request(identity, {'op': 'creds-list'}, timeout)
-        except TimeoutError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        if not resp.get('ok'):
-            print(f'error: {resp.get("error", resp)}', file=sys.stderr)
-            sys.exit(1)
-        entries = resp.get('entries', [])
+        req = {'op': 'creds-list'}
+    elif action == 'get':
+        req = {'op': 'creds-get', 'domain': args.domain}
+        if args.login:
+            req['login'] = args.login
+    else:
+        req = {'op': 'creds-add', 'domain': args.domain, 'login': args.login, 'password': args.password,
+               'upsert': bool(args.upsert)}
+    try:
+        resp = _meta_request(args.identity, req, args.timeout)
+    except TimeoutError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    if not resp.get('ok'):
+        print(f'error: {resp.get("error", resp)}', file=sys.stderr)
+        sys.exit(1)
+    if resp.get('warning'):
+        print(f'warning: {resp["warning"]}', file=sys.stderr)
+    entries = resp.get('entries', [])
+    if action == 'list':
         if args.json:
             if not args.show_passwords:
                 for e in entries:
@@ -1470,18 +1479,6 @@ def creds_cli(args):
             pw = e.get('password', '') if args.show_passwords else '<hidden — pass --show-passwords>'
             print(f'{e["domain"]:<30}  login={e["login"]!r:<40}  password={pw!r}  (by {e.get("author")} {e.get("created", "")[:19]})')
     elif action == 'get':
-        req = {'op': 'creds-get', 'domain': args.domain}
-        if args.login:
-            req['login'] = args.login
-        try:
-            resp = _meta_request(identity, req, timeout)
-        except TimeoutError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        if not resp.get('ok'):
-            print(f'error: {resp.get("error", resp)}', file=sys.stderr)
-            sys.exit(1)
-        entries = resp.get('entries', [])
         if not entries:
             tgt = f'{args.domain!r}' + (f' + login {args.login!r}' if args.login else '')
             print(f'(no entry for {tgt})', file=sys.stderr)
@@ -1495,19 +1492,7 @@ def creds_cli(args):
             print(f'password: {e["password"]}')
             print(f'(by {e.get("author")} {e.get("created", "")[:19]})')
             print()
-    elif action == 'add':
-        try:
-            resp = _meta_request(identity, {
-                'op': 'creds-add',
-                'domain': args.domain, 'login': args.login, 'password': args.password,
-                'upsert': bool(args.upsert),
-            }, timeout)
-        except TimeoutError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        if not resp.get('ok'):
-            print(f'error: {resp.get("error", resp)}', file=sys.stderr)
-            sys.exit(1)
+    else:
         print(f'{resp.get("action")}: {resp.get("msg_id", "")} {resp.get("reason", "")}'.strip())
 
 
