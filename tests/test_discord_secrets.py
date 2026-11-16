@@ -149,6 +149,8 @@ def test_the_real_connector_reads_a_patched_token_directory_with_its_flavor(tmp)
                                  flavor=flavor)
         except Reached:
             pass
+        except SystemExit as e:
+            raise AssertionError(f"{identity}: the connector found no token (exit {e.code})") from None
         assert f"identity flavor: {flavor}\n" in (root / f"{identity}.log").read_text(encoding="utf-8"), identity
 
 
