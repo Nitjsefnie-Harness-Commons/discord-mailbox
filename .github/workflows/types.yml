@@ -55,15 +55,20 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: |
+            requirements-*.txt
+            .github/workflows/requirements-runtime.txt
 
       - name: Install the type checker and the runtime dependencies
         # discord.py and psutil are imported by the code being checked, so
         # without them every `import discord` is an unresolved-import error and
         # the gate fails on the environment rather than on the source.
+        # One command per manifest: Dependabot bumps a pin they share in
+        # separate pull requests, and one command refuses two pins.
         run: |
-          pip install --require-hashes -r requirements-dev.txt \
-            -r .github/workflows/requirements-runtime.txt -r requirements-build.txt
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --require-hashes -r .github/workflows/requirements-runtime.txt
+          pip install --require-hashes -r requirements-build.txt
 
       - name: Install the project
         # A step of its own: hash-checking mode refuses a local directory.
