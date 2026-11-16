@@ -92,7 +92,8 @@ jobs:
         # importlib.metadata reads the recorded version without importing any
         # of it.
         run: |
-          python3 -m pip install --quiet --no-deps .
+          python3 -m pip install --quiet --require-hashes -r requirements-build.txt
+          python3 -m pip install --quiet --no-deps --no-build-isolation .
           version="$(python3 -c 'import importlib.metadata as m; print(m.version("discord-mailbox"))')"
           if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([._a-z0-9-]*)$'; then
             echo "__version__ is not a usable version: '$version'" >&2
