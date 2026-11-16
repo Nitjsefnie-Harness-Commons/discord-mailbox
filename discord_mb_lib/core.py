@@ -1497,6 +1497,8 @@ def creds_cli(args):
 
 
 def conversation_cli(identity, n, channel_id=None, before_id=None, after_id=None, grep=None, timeout=15.0, as_json=False, dm=None):
+    from ._grep import filter_messages, pattern_or_exit
+    pattern = pattern_or_exit(grep)
     req = {'op': 'conversation', 'limit': n}
     if channel_id:
         req['channel_id'] = channel_id
@@ -1506,8 +1508,6 @@ def conversation_cli(identity, n, channel_id=None, before_id=None, after_id=None
         req['before_id'] = before_id
     if after_id:
         req['after_id'] = after_id
-    if grep:
-        req['grep'] = grep
     try:
         resp = _meta_request(identity, req, timeout)
     except TimeoutError as e:
@@ -1516,7 +1516,7 @@ def conversation_cli(identity, n, channel_id=None, before_id=None, after_id=None
     if not resp.get('ok'):
         print(f'error from connector: {resp.get("error", resp)}', file=sys.stderr)
         sys.exit(1)
-    msgs = resp.get('messages', [])
+    msgs = filter_messages(resp.get('messages', []), pattern)
     if as_json:
         print(json.dumps(msgs, indent=2))
         return

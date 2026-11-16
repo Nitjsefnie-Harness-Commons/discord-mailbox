@@ -554,12 +554,13 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 dm_user = req.get('dm_user')
                 if dm_user and req.get('channel_id'):
                     raise ValueError('dm_user and channel_id are mutually exclusive')
+                if 'grep' in req:
+                    raise ValueError('conversation filtering moved to the CLI; upgrade discord_mb.py')
                 resp['messages'] = await op_conversation(
                     int(req.get('limit', 20)),
                     channel_id=int(req.get('channel_id', 0)) or (ch('bridge').id if ch('bridge') else None),
                     before_id=req.get('before_id'),
                     after_id=req.get('after_id'),
-                    grep=req.get('grep'),
                     dm_user=dm_user,
                 )
                 resp['ok'] = True
@@ -858,9 +859,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         msg = await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
         return {'action': 'added', 'msg_id': str(msg.id)}
 
-    async def op_conversation(limit, channel_id=None, before_id=None, after_id=None, grep=None, dm_user=None):
-        'Fetch messages from any channel (or, with dm_user, the DM with that user). Defaults to #agents. Supports cursor (before/after) and optional server-side grep.'
-        import re as _re
+    async def op_conversation(limit, channel_id=None, before_id=None, after_id=None, dm_user=None):
+        'Fetch messages from any channel (or, with dm_user, the DM with that user). Defaults to #agents. Supports cursor (before/after); --grep is applied by the CLI.'
         if dm_user:
             uid = await _resolve_dm_user_id(state, dm_user, refresh_directory)
             if uid is None:
@@ -887,7 +887,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if after_id:
             kwargs['after'] = discord.Object(id=int(after_id))
             kwargs['oldest_first'] = True
-        pattern = _re.compile(grep) if grep else None
         msgs = []
         async for m in channel.history(**kwargs):
             content = m.content or ''
@@ -903,12 +902,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 'mentions': [str(u.id) for u in m.mentions],
                 'role_mentions': [str(r.id) for r in m.role_mentions],
             }, m, body_key='content')
-            # --grep matches the RENDERED text too: an embed-only or
-            # Components-V2 message has empty content, so grepping content
-            # alone silently skips exactly the messages this fix is about.
-            if pattern and not pattern.search(content) and not pattern.search(
-                    record.get('content_rendered') or ''):
-                continue
             msgs.append(record)
             try:
                 save_message(m)  # browsed => cached => reply-able (resolve_reply_target)

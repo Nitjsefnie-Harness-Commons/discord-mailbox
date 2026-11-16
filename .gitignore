@@ -81,6 +81,7 @@
 !/discord_mb_lib/_delivery.py
 !/discord_mb_lib/_directory.py
 !/discord_mb_lib/_dm.py
+!/discord_mb_lib/_grep.py
 !/discord_mb_lib/_linked.py
 !/discord_mb_lib/_meta_claim.py
 !/discord_mb_lib/_settings.py
@@ -99,6 +100,7 @@
 !/tests/test_discord_connector_lock.py
 !/tests/test_discord_creds.py
 !/tests/test_discord_conversation_dm.py
+!/tests/test_discord_conversation_grep.py
 !/tests/test_discord_delivery_gates.py
 !/tests/test_discord_directory.py
 !/tests/test_discord_event_stream.py

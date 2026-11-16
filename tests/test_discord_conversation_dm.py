@@ -276,11 +276,10 @@ def test_an_unknown_name_is_an_error_that_creates_nothing(tmp):
     assert world.bridge.calls == [] and world.alice_dm.calls == []
 
 
-def test_before_after_and_grep_reach_the_dm_history(tmp):
+def test_before_and_after_reach_the_dm_history(tmp):
     responses, world = _ask(tmp, {
         "a": _conv(dm_user="alice", before_id="5000"),
         "b": _conv(dm_user="alice", after_id="6000"),
-        "c": _conv(dm_user="alice", grep="needle"),
     })
     if responses is None:
         return
@@ -288,7 +287,6 @@ def test_before_after_and_grep_reach_the_dm_history(tmp):
     assert calls[0]["before"].id == 5000, calls
     assert "after" not in calls[0]
     assert calls[1]["after"].id == 6000 and calls[1]["oldest_first"] is True, calls
-    assert [m["content"] for m in responses["c"]["messages"]] == ["newer needle"], responses["c"]
 
 
 def test_a_dm_user_together_with_a_channel_is_refused(tmp):
@@ -354,11 +352,11 @@ def test_the_cli_forwards_the_dm_user_in_the_request(tmp):
     core._meta_request = capture
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            core.conversation_cli("me", 5, channel_id="1", dm="alice", before_id="2", after_id="3", grep="x")
+            core.conversation_cli("me", 5, channel_id="1", dm="alice", before_id="2", after_id="3")
     finally:
         core._meta_request = original
     assert sent == [{"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice",
-                     "before_id": "2", "after_id": "3", "grep": "x"}], sent
+                     "before_id": "2", "after_id": "3"}], sent
 
 
 def test_the_parser_wires_dm_and_refuses_it_with_channel(tmp):
