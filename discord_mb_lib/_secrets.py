@@ -1,11 +1,9 @@
 """Secrets supplied off the command line."""
 import os
 import sys
+from collections.abc import Callable
 from getpass import getpass
 from pathlib import Path
-from typing import Any
-
-from .core import resolve_token_and_flavor
 
 
 def _warn_argv(what: str, instead: str) -> None:
@@ -33,10 +31,13 @@ def cli_token(token: str | None, token_file: str | None) -> str | None:
     return read_token_file(token_file) if token_file else None
 
 
-def connector_token(token: str | None, identity: str, flavor: str | None) -> tuple[Any, Any]:
+def connector_token(token: str | None, identity: str, flavor: str | None,
+                    find_in_directory: Callable[[str, str | None], tuple[str | None, str]]
+                    ) -> tuple[str | None, str]:
+    """The caller passes its own directory lookup, so a facade TOKEN_DIR patch still reaches it."""
     token = token or os.environ.get('DISCORD_TOKEN')
     if not token:
-        return resolve_token_and_flavor(identity, flavor)
+        return find_in_directory(identity, flavor)
     return token, flavor or 'claude'    # legacy flagless callers stay Claude-flavored
 
 
@@ -45,10 +46,11 @@ def cli_password(password: str | None, from_stdin: bool) -> str:
         raise SystemExit('error: pass the password argument or --password-stdin, not both')
     if password is not None:
         _warn_argv('the password argument', '--password-stdin or the prompt')
-        return password
-    if from_stdin:
-        return sys.stdin.read().removesuffix('\n')
-    if sys.stdin.isatty():
-        return getpass('password: ')
-    raise SystemExit('error: no password: pass the password argument or --password-stdin '
-                     '(stdin is not a terminal, so there is no prompt)')
+    elif from_stdin:
+        password = sys.stdin.read().removesuffix('\n')
+    elif sys.stdin.isatty():
+        password = getpass('password: ')
+    else:
+        raise SystemExit('error: no password: pass the password argument or --password-stdin '
+                         '(stdin is not a terminal, so there is no prompt)')
+    return password
