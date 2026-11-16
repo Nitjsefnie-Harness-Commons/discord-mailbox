@@ -134,6 +134,14 @@ def test_a_continuation_frame_needs_a_registered_author_or_the_chunk_one_author(
         ([(RAW, CHUNK1.replace(" report", " other"), False), (RAW, CHUNK2, True)], [True, False]),
         # A delivered chunk 2+ frame is not a chunk 1, so it vouches for nothing.
         ([(RAW, CHUNK2, False), (RAW, CHUNK2.replace("(2/3)", "(3/3)"), True)], [True, False]),
+        # A chunk 1 for the key from a second author leaves no author vouching, for good;
+        # the same author posting it again keeps vouching, and a registered sender is unaffected.
+        ([(RAW, CHUNK1, False), (RAW, CHUNK1, False), (RAW, CHUNK2, True)], [True, True, True]),
+        ([(RAW, CHUNK1, False), (MALLORY, CHUNK1, False), (RAW, CHUNK2, True), (MALLORY, CHUNK2, True)],
+         [True, True, False, False]),
+        ([(RAW, CHUNK1, False), (MALLORY, CHUNK1, False), (RAW, CHUNK1, False), (RAW, CHUNK2, True)],
+         [True, True, True, False]),
+        ([(RAW, CHUNK1, False), (MALLORY, CHUNK1, False), (ALICE, CHUNK2, True)], [True, True, True]),
     ]
     for steps, expected in rows:
         got, logs = _train(steps)
