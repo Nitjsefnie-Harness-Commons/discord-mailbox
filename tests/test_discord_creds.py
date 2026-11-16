@@ -86,7 +86,15 @@ def test_get_list_and_add_see_an_entry_older_than_five_hundred_messages(tmp):
         await client.ask({"list": {"op": "creds-list"}, "get": {"op": "creds-get", "domain": "a.example"},
                           "add": {"op": "creds-add", "domain": "a.example", "login": "login", "password": "x"}})
 
+    stale = Path(tmp, "state", "out", "list.json.tmp")      # a permissive temp a crashed writer left
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale", encoding="utf-8")
+    stale.chmod(0o644)
     client = _gateway.run(tmp, script)
+    out = sorted(stale.parent.iterdir())
+    assert [p.name for p in out] == ["add.json", "get.json", "list.json", "list.json.tmp"], out
+    if _util.POSIX_MODES:
+        assert [p.stat().st_mode & 0o777 for p in out] == [0o600, 0o600, 0o600, 0o644], out
     r = client.responses
     assert set(client.credentials.reads) == {None}, client.credentials.reads     # the whole channel
     assert [e["msg_id"] for e in r["list"]["entries"]] == ["1"], r["list"]
