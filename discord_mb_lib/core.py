@@ -2325,6 +2325,7 @@ def write_extension_registry(identity, data, flavor=None):
     p = extension_registry_path(identity, flavor)
     p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _control_files.write_private(p, json.dumps(data, indent=2, ensure_ascii=False))
+    p.with_name(p.name + '.tmp').unlink(missing_ok=True)    # an older writer's fixed temp name
 
 
 def heartbeat_due(last_date, today):

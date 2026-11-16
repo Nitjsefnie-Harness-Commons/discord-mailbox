@@ -59,10 +59,16 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         except PermissionError as exc:
             outcome = (type(exc), str(exc))
         assert outcome == expected, (path, file_stat, dir_stat, link_stat, posix, outcome)
+    if link is not None and _util.POSIX_MODES:      # the real stat, through a symlinked directory
+        for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755)):
+            owned_path.chmod(mode)
+        (Path(tmp) / "alias").symlink_to(tmp, target_is_directory=True)
+        assert _ext_trust.check_extension(Path(tmp) / "alias" / "ext.py") is None
 
 
 def test_the_registry_goes_through_a_private_temp_into_a_private_directory(tmp):
-    seen, real = [], os.replace
+    seen, real, decoy = [], os.replace, Path(tmp) / "decoy"
+    decoy.write_text("legacy", encoding="utf-8")
 
     def spy(src, dst):
         seen.append(os.stat(src).st_mode & 0o777)
@@ -72,11 +78,13 @@ def test_the_registry_goes_through_a_private_temp_into_a_private_directory(tmp):
     try:
         core.write_extension_registry("bob", {"path": "/x.py"}, "claude")
         directory = core.extension_dir("claude")
+        os.link(decoy, directory / "bob.json.tmp")      # an older writer's temp; a write through it shows in decoy
+        core.write_extension_registry("bob", {"path": "/y.py"}, "claude")
     finally:
         (core.TOKEN_DIR, os.replace), _ = saved, os.umask(umask)
-    assert len(seen) == 1 and os.listdir(directory) == ["bob.json"], (seen, os.listdir(directory))
+    assert (len(seen), os.listdir(directory), decoy.read_text(encoding="utf-8")) == (2, ["bob.json"], "legacy"), seen
     if _util.POSIX_MODES:
-        assert seen == [0o600] and directory.stat().st_mode & 0o777 == 0o700, (seen, oct(directory.stat().st_mode))
+        assert seen == [0o600, 0o600] and directory.stat().st_mode & 0o777 == 0o700, (seen, oct(directory.stat().st_mode))
 
 
 def test_the_connector_refuses_an_exposed_module_at_start_and_on_set(tmp):
