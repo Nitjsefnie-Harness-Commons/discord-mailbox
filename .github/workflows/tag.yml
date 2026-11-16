@@ -35,8 +35,8 @@ on:
     paths:
       # The narrowest possible allow-list: the file that holds __version__.
       # That is core.py -- __init__.py is a docstring and defines nothing, so
-      # watching it meant a version bump touched no watched path and this
-      # workflow was never scheduled at all (issue #12).
+      # watching it would mean a version bump touches no watched path and this
+      # workflow is never scheduled at all.
       - 'discord_mb_lib/core.py'
   workflow_dispatch:
     inputs:
@@ -85,8 +85,7 @@ jobs:
         # build produced.
         #
         # Not by importing it. `import discord_mb_lib` reaches a package that
-        # defines no `__version__` at all, which is how this step came to fail
-        # with AttributeError (issue #12), and importing `discord_mb_lib.core`
+        # defines no `__version__` at all, and importing `discord_mb_lib.core`
         # instead would need discord.py and psutil that this job has no reason
         # to install. `--no-deps` builds the distribution without them, and
         # importlib.metadata reads the recorded version without importing any

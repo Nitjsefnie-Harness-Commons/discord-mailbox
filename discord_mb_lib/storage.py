@@ -61,8 +61,8 @@ class _OwnershipAccessError(_ConnectorOwnershipError):
     """The ownership lock could not be opened or inspected at all.
 
     Distinct from contention: a permission or I/O error on the state directory
-    is not another connector, and reporting it as "held" sent diagnosis after
-    a connector that did not exist (#372).
+    is not another connector, and reporting it as "held" would send diagnosis
+    after a connector that does not exist.
     """
 
 
@@ -175,8 +175,8 @@ class _ConnectorOwnership:
         directory on POSIX.  Byte-range locks are per file and mandatory for a
         second handle, so locking the alias contends with the lock this very
         acquisition already holds, and the caller reports its own lock as held
-        by someone else (issue #217).  One lock already covers every name that
-        reaches the file, so the alias is skipped rather than relocked.
+        by someone else.  One lock already covers every name that reaches the
+        file, so the alias is skipped rather than relocked.
         """
         if self._sidecar_alias_key(lock_path) in held:
             return True
@@ -1059,7 +1059,7 @@ class _ConnectorLogWriter:
         except _TornNamedClaimRecord:
             # Reported as itself so recovery can tell a half-written record
             # from a complete one that failed a check.  Every other caller
-            # still sees a FileExistsError and fails closed as before.
+            # still sees a FileExistsError and fails closed.
             raise
         except (FileExistsError, ValueError) as exc:
             raise FileExistsError(
@@ -1543,8 +1543,8 @@ class _ConnectorLogWriter:
             canonical_info = None
             # Coerced once here rather than at each use below: those uses run
             # only when a payload was read, which only happens inside this
-            # guard, and repeating int()/str() there hid that from the reader
-            # and from the type checker alike.
+            # guard, and repeating int()/str() there would hide that from the
+            # reader and from the type checker alike.
             size = 0
             digest = ''
             if expected_size is not None and expected_digest is not None:
@@ -4889,11 +4889,10 @@ class _LeechLogWriter:
         return False
 
 
-# Only what this module defines. It used to be a comprehension over
-# globals(), which re-listed everything the wildcard imports above had
-# pulled in and, being computed, told no static analyser anything at
-# all. The facade unions the four lists, so the exported set is
-# unchanged; test_module_exports_cover_the_package pins that.
+# Only what this module defines. A comprehension over globals() would re-list
+# everything the wildcard imports above had pulled in and, being computed, tells
+# no static analyser anything at all. The facade unions the four lists;
+# test_module_exports_cover_the_package pins the exported set.
 __all__ = [
     'PORTABLE_PUBLICATION_ENV',
     '_ConnectorLogWriter',

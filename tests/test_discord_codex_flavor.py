@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """discord_mb.py Codex flavor: token dir, watchdog pattern, status adapter.
 
-A connector owned by a Codex session used to have no flavor of its own, so it
-had to be started as `--flavor claude` or `--flavor kimi`. The flavor does not
-only pick a token directory — it also picks the default status plugin, so a
-Codex session running under a foreign flavor loaded that provider's adapter and
-latched presence onto that provider's transcript, reporting activity from a
-session that was not its own.
+A connector owned by a Codex session has a flavor of its own. The flavor does
+not only pick a token directory — it also picks the default status plugin, so a
+Codex session running under a foreign flavor would load that provider's adapter
+and latch presence onto that provider's transcript, reporting activity from a
+session that is not its own.
 
 These pin the three things the flavor selects, and the failure direction that
 matters most: a flavor must never fall back to another provider's adapter,

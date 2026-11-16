@@ -143,9 +143,9 @@ def ensure_owned_temp_dir(path: str | os.PathLike[str], scope: str) -> bool:
     except FileExistsError as exc:
         if owned_temp_scope(candidate) == scope:
             return True
-        # The mailbox caller historically ignored a false return and then
-        # wrote below the unsafe root anyway.  Refuse by exception so failure
-        # cannot be accidentally converted into adoption.
+        # A caller that ignores a false return would write below the unsafe root
+        # anyway. Refuse by exception so failure cannot be accidentally converted
+        # into adoption.
         raise RuntimeError(
             f"unsafe pre-existing temporary directory: {candidate}") from exc
     except OSError as exc:

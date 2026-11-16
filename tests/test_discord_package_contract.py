@@ -33,8 +33,8 @@ def _assert_child_ok(result):
     """Fail with the exit status too, not just whatever reached stderr.
 
     A child that dies during interpreter finalization, or is killed by a
-    signal, exits non-zero with nothing on stderr at all -- which used to
-    surface as an assertion carrying an empty message.
+    signal, exits non-zero with nothing on stderr at all, so the status must
+    appear in the assertion or the message is empty.
     """
     assert result.returncode == 0, (
         f"child exited {result.returncode}\n"
@@ -1554,10 +1554,9 @@ def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
 def test_facade_code_objects_name_the_installed_module(tmp):
     """A traceback must point at source the consumer actually has.
 
-    Code objects used to be projected onto the pre-package monolith's file and
-    line numbers, which required shipping a compressed copy of that deleted
-    file so linecache could agree. Installed as a wheel that names a location
-    the consumer cannot open, so provenance stays on the real module now.
+    Code objects keep their provenance on the real module. Projecting them onto
+    a monolith's file and line numbers would name a location that an installed
+    wheel's consumer cannot open.
     """
     script = (
         "import inspect, pathlib, sys, traceback\n"
@@ -1949,10 +1948,10 @@ def test_fetch_usage_resolves_helper_from_current_facade_file(tmp):
 def test_package_fetch_usage_resolves_the_helper_from_the_environment(tmp):
     """A wheel install has no sibling helper, so the path must be injectable.
 
-    site-packages is not the caller's scripts directory, so the historical
-    sibling probe finds nothing once this ships as a wheel. The installer
-    points DISCORD_MB_USAGE_QUERY at the real helper; without it the board is
-    simply not published.
+    site-packages is not the caller's scripts directory, so a sibling probe
+    finds nothing in a wheel install. The installer points
+    DISCORD_MB_USAGE_QUERY at the real helper; without it the board is simply
+    not published.
     """
     core = importlib.import_module("discord_mb_lib.core")
     helper = Path(tmp) / "usage_query.py"
@@ -2023,10 +2022,9 @@ def test_star_import_does_not_leak_facade_build_temporaries(tmp):
 def test_projected_classes_keep_working_source_locations(tmp):
     """Class introspection must resolve against the module that defines them.
 
-    The facade used to reassign __module__ onto itself, and inspect resolves a
-    class's source THROUGH __module__ -- which is why a copy of the monolith
-    had to ship. Classes now keep their real module, so getsourcelines works
-    against the installed file with no blob at all.
+    inspect resolves a class's source THROUGH __module__, so classes keep their
+    real module: getsourcelines works against the installed file with no blob
+    at all.
     """
     script = (
         "import inspect, pathlib, sys\n"
@@ -2068,14 +2066,13 @@ def test_cli_reads_the_live_facade_docstring(tmp):
 
 
 def test_core_exports_match_the_module_namespace(tmp):
-    """core.__all__ is now a literal, so nothing recomputes it on drift.
+    """core.__all__ is a literal, so nothing recomputes it on drift.
 
-    It was a comprehension over globals(), which no static analyser can
-    evaluate -- `from .core import *` therefore resolved to nothing in the
-    three modules that do it. Spelling the list out fixed that and introduced
-    the usual hazard of a hand-maintained export list: a new public name that
-    silently never reaches the facade. This recomputes the old expression and
-    requires the two to agree.
+    A comprehension over globals() is one no static analyser can evaluate, so
+    `from .core import *` would resolve to nothing in the three modules that do
+    it. A hand-maintained export list carries the usual hazard: a new public
+    name can silently never reach the facade. This recomputes the globals()
+    expression and requires the two to agree.
     """
     # Through the facade, never `from discord_mb_lib import core`: this
     # package is also installed as a wheel, so a bare import resolves to
@@ -2096,13 +2093,13 @@ def test_core_exports_match_the_module_namespace(tmp):
 
 
 def test_module_exports_cover_the_package(tmp):
-    """storage, connector and cli list only their own names now.
+    """storage, connector and cli list only their own names.
 
-    Each used to re-list everything its wildcard imports had pulled in. The
-    facade unions the four __all__ lists, so trimming them to what each module
-    defines leaves the exported set identical -- but only while every public
-    name is actually reachable from one of the four. This recomputes the old
-    per-module expression and requires the union to match.
+    The facade unions the four __all__ lists, so each module listing just what
+    it defines exports the same set as listing its whole namespace would --
+    but only while every public name is actually reachable from one of the
+    four. This recomputes each module's whole-namespace expression (wildcard
+    imports included) and requires the union to match.
     """
     facade = _util.load(MB, "mb_module_exports")
     modules = (facade._core_module, facade._storage_module,

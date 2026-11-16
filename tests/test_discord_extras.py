@@ -3,13 +3,13 @@
 
 `Message.content` is only one of the ways Discord carries text, and for
 bot/webhook/app posts it is usually the EMPTY one. These pin the flattening
-that makes those messages legible to an agent — the regression being a
-forwarded status post that arrived as `body: ""` with `forwarded: []` and
-`embed_count: 0`, i.e. with nothing to indicate any content had existed.
+that makes those messages legible to an agent, so a message whose text lives
+outside `content` never reaches it as an empty body with nothing to indicate
+any content existed.
 
-The Components-V2 fixture below is the verbatim payload from that incident.
-Objects are built with discord.py's own factories, so this exercises the real
-parsing path rather than a hand-made stand-in, and needs no network.
+The Components-V2 fixture below is a verbatim payload of a forwarded status
+post. Objects are built with discord.py's own factories, so this exercises the
+real parsing path rather than a hand-made stand-in, and needs no network.
 
 Stdlib only apart from discord.py itself, OS-agnostic (SETUP.md edit discipline).
 """
@@ -53,7 +53,7 @@ def _mod():
     """(discord_mb, discord) or (None, None) when discord.py is absent here.
 
     Loaded once and cached — not for speed, but because each load re-runs the
-    module's stdout UTF-8 wrap. That is idempotent now (a marker on `sys`), and
+    module's stdout UTF-8 wrap. That is idempotent (a marker on `sys`), and
     test_repeated_import_keeps_stdout_alive below is what keeps it that way."""
     if not _CACHE:
         try:
@@ -100,7 +100,7 @@ def _msg(data):
 
 
 def test_components_v2_inside_a_forward(_tmp):
-    """The incident: content empty, payload in a snapshot's V2 components."""
+    """Content empty, payload in a snapshot's V2 components."""
     mb, msg = _msg(FORWARDED_V2)
     if mb is None:
         return
@@ -133,7 +133,7 @@ class _Reaction:
 
 
 def test_reactions_are_readable_off_the_record(_tmp):
-    """(issue #5) Reactions were writable and had no read path at all."""
+    """Reactions have a read path, not only a write path."""
     mb, msg = _msg({"content": "hi"})
     if mb is None:
         return
@@ -203,7 +203,7 @@ def test_plain_message_record_is_unchanged(_tmp):
 
 
 def test_classic_embed_is_captured_not_counted(_tmp):
-    """Before this, an embed contributed `embed_count` and nothing else."""
+    """An embed contributes its text, not only `embed_count`."""
     mb, msg = _msg({"content": "", "embeds": [{
         "title": "Build failed", "description": "3 tests broke",
         "url": "https://ci/1", "author": {"name": "CI"},
@@ -338,9 +338,9 @@ def test_reconnect_replays_the_complete_last_presence(_tmp):
 def test_status_plugin_transport_failure_is_retried_after_reconnect(_tmp):
     """A gateway write failure is transport failure, not a broken plugin.
 
-    The incident behind #156 was aiohttp's ClientConnectionResetError.  Keep
-    that plugin installed and restart it from on_ready; ordinary plugin bugs
-    must retain the existing auto-uninstall behavior.
+    A failure such as aiohttp's ClientConnectionResetError keeps that plugin
+    installed and restarts it from on_ready; ordinary plugin bugs must retain
+    the existing auto-uninstall behavior.
     """
     mb, _ = _mod()
     if mb is None:
@@ -494,15 +494,10 @@ def test_status_plugin_transport_failure_is_retried_after_reconnect(_tmp):
 
 
 def test_a_failed_recovery_is_retried_and_then_reported(_tmp):
-    """#333: one failed attempt after a reconnect ended the plugin for good.
+    """One failed attempt after a reconnect must not end the plugin for good.
 
-    A ten-minute DNS outage killed an in-flight gateway write. The connector
-    logged "transport interrupted; retry after reconnect"; twenty minutes
-    later the gateway came back, the recovery failed, and those two lines were
-    the entire record in a 334 KB log -- no reason, no traceback, no event,
-    and no second attempt. The presence stayed empty for about 17 hours until
-    a human asked; `status-plugin set` with the same default plugin fixed it
-    instantly.
+    A failed recovery logs its reason and traceback, is retried, and is
+    then reported.
     """
     mb, _ = _mod()
     if mb is None:
@@ -564,9 +559,9 @@ def test_fixture_matches_the_shipped_parser(_tmp):
 
 
 def test_forum_create_rejects_overlong_body_before_api(_tmp):
-    """`forum create` must fail client-side on >2000 chars (issue #28): the
-    error names the limit and the actual length, and _meta_request is never
-    reached — the old behaviour lost the whole call to a raw API 400."""
+    """`forum create` must fail client-side on >2000 chars: the error names the
+    limit and the actual length, and _meta_request is never reached, so the call
+    is not lost to a raw API 400."""
     import contextlib
     import io
     import types

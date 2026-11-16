@@ -4,8 +4,8 @@
 tag.yml is the only thing that turns a version bump into a release, and it is
 invisible when wrong: it watches one path and reads one attribute, and if
 either drifts from where `__version__` actually lives the workflow simply never
-runs. Nothing goes red, the version looks shipped, and no release is cut
-(issue #12). actionlint checks the workflow's syntax; only this checks that it
+runs. Nothing goes red, the version looks shipped, and no release is cut.
+actionlint checks the workflow's syntax; only this checks that it
 is pointed at the right file.
 
 Stdlib only, no YAML parser (the suites are stdlib-only by design), OS-agnostic.

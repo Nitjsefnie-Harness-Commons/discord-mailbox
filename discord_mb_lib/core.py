@@ -417,11 +417,10 @@ def is_connector_process(pid, identity):
     True yes, False demonstrably something else, None unknown.
 
     A PID existing is not the same as that PID being who the lock says it is.
-    After a crash the connector's number goes back in the pool, and the OS hands
-    it to something unrelated — observed on a three-day-old lock whose PID had
-    been recycled into a Windows service. The identity was then locked out of
-    its own mailbox ("already running (PID 6548)"), and `leech` cheerfully
-    attached to the corpse and tailed an events file that would never grow: an
+    After a crash the connector's number goes back in the pool, and the OS can
+    hand it to something unrelated, such as a system service. The identity is
+    then locked out of its own mailbox ("already running"), and `leech`
+    attaches to the corpse and tails an events file that will never grow: an
     outage that looks healthy from outside.
 
     Unknown deliberately reads as "still a connector" at the call sites. A false
@@ -515,12 +514,8 @@ def continuation_chunk_for(content, identity):
 # `Message.content` is only ONE of the ways a Discord message carries text, and
 # for bot/webhook posts it is usually the empty one. A status bot posts an
 # embed; a modern app posts a Components-V2 container of text displays; a
-# forward carries the whole thing in a snapshot. Every one of those reached an
-# agent as `body: ""` with no hint that anything had been dropped — the record
-# said `embed_count` and nothing else, and Components V2 was not represented at
-# all. Observed 2026-07-29: a forwarded status.claude.com post (flags 16384,
-# HAS_SNAPSHOT, payload in snapshot.components) arrived with an empty body,
-# empty forwarded[] and embed_count 0, and had to be read off the raw HTTP API.
+# forward carries the whole thing in a snapshot. Each of these keeps its text
+# outside `content`, so a record that reads only `content` shows an empty body.
 #
 # So: flatten everything into text ONCE, here, and let every record-writing site
 # attach it. Structure is preserved alongside (embeds[] keeps its fields), but
@@ -1271,7 +1266,7 @@ def send(identity, to, subject, body, reply_to=None, pin=False, channel=None,
         msg['reply_to'] = reply_to
         # Best source for the reply channel: the original in OUR inbox. When it
         # isn't there, the connector resolves it from the shared caches — or
-        # fails the send LOUDLY. There is no silent #agents fallback anymore.
+        # fails the send LOUDLY. There is no silent #agents fallback.
         inbox_file = inbox_dir(identity) / f'{reply_to}.json'
         if inbox_file.exists():
             try:
@@ -1762,7 +1757,7 @@ def forum_cli(args):
         # Discord's forum starter message is capped at 2000 chars and the
         # connector does NOT auto-chunk it (unlike `send`, which chunks up to
         # MAX_BODY_TOTAL) — reject client-side so an over-long body fails with
-        # a named limit instead of the raw API 400 (issue #28).
+        # a named limit instead of the raw API 400.
         if len(args.content) > 2000:
             print(f'forum starter body too long: {len(args.content)} > 2000 '
                   f'(Discord forum starter-message limit; `send` auto-chunks but '
@@ -2169,10 +2164,10 @@ async def recover_status_plugin_after_gateway(state, *, restart, replay, clear):
 STATUS_PLUGIN_NAME = 'plugin.py'      # the installed copy inside the slot
 STATUS_MANIFEST_NAME = 'manifest.json'
 # Seconds between background retries after a reconnect recovery fails, and the
-# tuple length IS the attempt budget (#333). The first recovery attempt happens
+# tuple length IS the attempt budget. The first recovery attempt happens
 # inline on the reconnect; these come after it, so a fault that outlasts one
 # reconnect -- a DNS outage still failing getaddrinfo four minutes after the
-# retry was scheduled is the reported one -- no longer ends the plugin.
+# retry was scheduled -- does not end the plugin.
 STATUS_RECOVERY_BACKOFF = (30, 120, 600)
 
 
@@ -2535,12 +2530,11 @@ class _ExtensionContext:
         '''Hand a message to the connector's arriving-message pipeline.
 
         `emit` publishes a custom event and nothing else, so a relayed message
-        arrived with a truncated body, no attachment metadata, no inbox JSON,
-        no receipt reaction, and no record for `send --reply-to` to resolve --
-        a relay silently dropped a member's PDF (issue #220). `deliver` runs
-        the same path a mention or DM takes, making the message first-class:
-        the enriched inbox record, a `message` event carrying its path, the
-        receipt reaction, and reply-ability.
+        would arrive without its full body, attachment metadata, inbox JSON,
+        receipt reaction, or a record for `send --reply-to` to resolve.
+        `deliver` runs the same path a mention or DM takes, making the message
+        first-class: the enriched inbox record, a `message` event carrying its
+        path, the receipt reaction, and reply-ability.
 
         Delivery is idempotent, so relaying a message that also mentions the
         bot is safe. Returns the inbox path, or None when a delivery gate
@@ -2673,7 +2667,7 @@ def status_plugin_cli(args):
 
 # Spelled out rather than comprehended from globals(): a computed __all__ is
 # opaque to every static analyser, so the three modules that do
-# `from .core import *` were left with no resolvable names at all.
+# `from .core import *` would be left with no resolvable names at all.
 # test_core_exports_match_the_module_namespace pins this list against the
 # namespace it describes, so a new public name cannot drift out of it quietly.
 __all__ = [
