@@ -16,6 +16,12 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    # `bash -eo pipefail`, not the default `bash -e`: a `gh` failure inside a
+    # pipeline fails the step instead of handing jq a partial listing.
+    shell: bash
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -141,8 +147,9 @@ jobs:
             tag
         # Counts only check runs of push and pull_request workflow runs, so a
         # comment-triggered run neither gates nor blocks. It needs at least one
-        # other check that is not `skipped`, so it cannot pass before CI is
-        # scheduled; `cancelled` fails, as a superseded commit is not released.
+        # other check that is not `skipped`; a pushed tag's own `suites` and
+        # `build` already count, so only a dispatched run waits for CI to be
+        # scheduled. `cancelled` fails: a superseded commit is not released.
         # Check runs are read first: a workflow run starting between the two
         # reads is counted on the next poll instead of having its checks dropped.
         run: |
