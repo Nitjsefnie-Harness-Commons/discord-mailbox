@@ -4,8 +4,8 @@
 # requirements-dev.in gives:
 #   pip-compile --generate-hashes requirements-test.in
 #
-# The SUITE itself needs nothing: it is stdlib unittest driven by
-# run_tests.py, and the package is stdlib-only on purpose. `coverage` is
+# The SUITE itself needs nothing past the package's runtime dependencies:
+# it is stdlib unittest driven by run_tests.py. `coverage` is
 # here for the gate in tests.yml, which also calls `--format=markdown` and
 # `--fail-under` directly so the gate is a step of its own and the summary
 # still renders when it is red.
