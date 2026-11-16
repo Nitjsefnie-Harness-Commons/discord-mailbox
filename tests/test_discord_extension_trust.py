@@ -5,6 +5,7 @@ is written through a private temporary file into a private directory."""
 import os
 import sys
 import types
+from importlib.util import cache_from_source
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,12 +22,17 @@ def _loaded(path):
 
 
 def _stats(table):
-    """os.stat answering each path's (mode, uid) from `table`, and nothing else."""
-    return lambda target: types.SimpleNamespace(st_mode=table[Path(target)][0], st_uid=table[Path(target)][1])
+    """os.stat answering each path's (mode, uid) from `table`; every other path is missing."""
+    def stat_of(target):
+        if table.get(Path(target)) is None:
+            raise FileNotFoundError(target)
+        return types.SimpleNamespace(st_mode=table[Path(target)][0], st_uid=table[Path(target)][1])
+    return stat_of
 
 
 def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_write(tmp):
     module, link_dir = Path(tmp) / "ext.py", Path(tmp) / "links"
+    cache = Path(cache_from_source(str(module))).parent     # where the import keeps its bytecode
     module.write_text("", encoding="utf-8")
     link_dir.mkdir()
     link = link_dir / "ext.py"
@@ -48,12 +54,15 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         (module, owned, (0o775, ME), None, True, f"{tmp} is group-writable"),
         (module, (0o666, OTHER), (0o777, OTHER), None, False, None),
         (Path(tmp) / "missing.py", owned, owned, None, True, None),
+        (module, owned, (0o755, ME), None, True, (PermissionError, f"{cache} is writable by other users"), (0o777, ME)),
+        (module, owned, (0o755, ME), None, True,
+         (PermissionError, f"{cache} is owned by uid {OTHER}, not by this user or root"), (0o755, OTHER)),
     ]
     if link is not None:
         rows += [(link, owned, (0o755, ME), (0o777, ME), True, (PermissionError, f"{link_dir} is writable by other users")),
                  (link, owned, (0o757, ME), (0o755, ME), True, (PermissionError, f"{tmp} is writable by other users"))]
-    for path, file_stat, dir_stat, link_stat, posix, expected in rows:
-        stat_of = _stats({module: file_stat, Path(tmp): dir_stat, link_dir: link_stat})
+    for path, file_stat, dir_stat, link_stat, posix, expected, *cache_stat in rows:   # no cache_stat: no __pycache__
+        stat_of = _stats({module: file_stat, Path(tmp): dir_stat, link_dir: link_stat, cache: (cache_stat or [None])[0]})
         try:
             outcome = _ext_trust.check_extension(path, posix=posix, euid=ME, stat_of=stat_of)
         except PermissionError as exc:
