@@ -197,7 +197,7 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
     for case in refused:
         assert mb(str(Path(tmp, case)), "erase", "--user-id", str(B)).returncode == 1, case
     if _util.POSIX_MODES:
-        os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)   # stat constants set exactly the refused bits
+        os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)   # group r-x is exposed; stat constants, not a literal, keep CodeQL's chmod-mode query off this test
         assert mb(tmp, "erase", "--user-id", str(B)).returncode == 1
     assert (stored(root), stored(Path(tmp, "unmarked", "discord-mailbox"))) == (before, sorted(STORED))
 
