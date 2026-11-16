@@ -1,9 +1,12 @@
 name: release
 
-# Publishes the wheel a consumer installs. The checksum file is not optional
-# decoration: an installer that fetches "the newest release" has no other way
-# to prove it got the artifact this workflow built, so SHA256SUMS ships beside
-# the wheel and the installer verifies against it before installing.
+# Publishes the wheel a consumer installs, with SHA256SUMS beside it: an
+# installer that fetches "the newest release" has no other way to prove it got
+# the artifact this workflow built.
+#
+# Only `publish` holds a write token, and it runs no repository or third-party
+# code: `suites` and `build` run the code and install packages read-only, and
+# `publish` checks their artifact and calls `gh`.
 
 on:
   push:
@@ -11,22 +14,62 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  suites:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Nothing in this job pushes. Leaving the token in
-          # .git/config lets any later step reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the package and its declared dependencies
+        # The suites import the package, so without its runtime dependencies
+        # every suite dies at collection. tests.yml's coverage job installs
+        # it the same way.
+        run: |
+          python -m pip install --require-hashes -r .github/workflows/requirements-runtime.txt
+          python -m pip install --require-hashes -r requirements-build.txt
+          python -m pip install --no-deps --no-build-isolation .
+
+      - name: Run every suite before publishing anything
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python run_tests.py
+
+  build:
+    # Installs only the hash-pinned build backend and builds with the tagged
+    # commit's time, so rebuilding a tag gives the same wheel bytes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      sha256sums: ${{ steps.sums.outputs.sha256sums }}
+
+    steps:
+      - name: Refuse anything but a v* tag
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "Not a v* tag ($GITHUB_REF); nothing to publish." >&2
+              echo "tag.yml pushes one when __version__ changes." >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -36,58 +79,190 @@ jobs:
       - name: Install the build backend
         run: python -m pip install --require-hashes -r requirements-build.txt
 
-      - name: Install the package and its declared dependencies
-        # For the SUITES below, not for the build: they import the package,
-        # and the moment it has a runtime dependency every one of them dies at
-        # collection with ModuleNotFoundError -- taking the release with it,
-        # before anything is built. tests.yml installs it here too; the two
-        # jobs must not diverge.
-        run: |
-          pip install --require-hashes -r .github/workflows/requirements-runtime.txt
-          pip install --no-deps --no-build-isolation .
-
-      - name: Run every suite before publishing anything
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python run_tests.py
-
       - name: Build the wheel
-        run: python -m build --wheel --no-isolation
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          python -m build --wheel --no-isolation
 
-      - name: Publish checksums beside the wheel
+      - name: Match the wheel's version to the tag and record its checksum
+        id: sums
         working-directory: dist
-        # `--` so a wheel whose name starts with a dash cannot be read as
-        # an option (shellcheck SC2035).
-        run: sha256sum -- *.whl > SHA256SUMS
+        run: |
+          shopt -s nullglob
+          wheels=(*.whl)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "Expected exactly one wheel, found ${#wheels[@]}." >&2
+            exit 1
+          fi
+          version="$(python -c '
+          import sys, zipfile
+          from email.parser import HeaderParser
+          with zipfile.ZipFile(sys.argv[1]) as wheel:
+              [meta] = [n for n in wheel.namelist()
+                        if n.count("/") == 1 and n.endswith(".dist-info/METADATA")]
+              print(HeaderParser().parsestr(wheel.read(meta).decode())["Version"])
+          ' "${wheels[0]}")"
+          if [ "${GITHUB_REF#refs/tags/}" != "v$version" ]; then
+            echo "Tag ${GITHUB_REF#refs/tags/} does not name the built version $version." >&2
+            exit 1
+          fi
+          # `--` so a name starting with a dash is not read as an option.
+          sha256sum -- *.whl > SHA256SUMS
+          echo "sha256sums=$(cat SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    # No `name:`, so `github.job` is this job's check-run name.
+    needs: [suites, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: write # creates the release and uploads its assets
+      actions: read # lists this commit's workflow runs, downloads the artifact
+      checks: read # reads the other checks on this commit
+
+    steps:
+      - name: Wait for the other gates on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          # Matched by equality: this job, or it would wait on itself, and
+          # tag.yml's job, which waits on this one.
+          EXCLUDED: |-
+            ${{ github.job }}
+            tag
+        # Counts only check runs of push and pull_request workflow runs, so a
+        # comment-triggered run neither gates nor blocks. It needs at least one
+        # other check that is not `skipped`, so it cannot pass before CI is
+        # scheduled; `cancelled` fails, as a superseded commit is not released.
+        # Check runs are read first: a workflow run starting between the two
+        # reads is counted on the next poll instead of having its checks dropped.
+        run: |
+          deadline=$(( SECONDS + 45 * 60 ))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            checks="$(gh api --paginate -H "Cache-Control: no-cache" \
+              "repos/$REPO/commits/$SHA/check-runs?per_page=100")"
+            suites="$(gh api --paginate -H "Cache-Control: no-cache" \
+              "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+              | jq -s '[.[].workflow_runs[]
+                        | select(.event == "push" or .event == "pull_request")
+                        | .check_suite_id]')"
+            runs="$(printf '%s' "$checks" \
+              | jq -r --argjson suites "$suites" --arg excluded "$EXCLUDED" '
+                  ($excluded | split("\n")) as $ex
+                  | .check_runs[]
+                  | select(.check_suite.id | IN($suites[]))
+                  | select(.name | IN($ex[]) | not)
+                  | "\(.status)\t\(.conclusion)\t\(.name)"')"
+
+            if [ -z "$(echo "$runs" | awk -F'\t' '$2 != "skipped"')" ]; then
+              echo "no other check runs reported yet, waiting..."
+              sleep 20
+              continue
+            fi
+
+            pending="$(echo "$runs" | grep -cv '^completed' || true)"
+            if [ "$pending" -gt 0 ]; then
+              echo "$pending check(s) still running:"
+              echo "$runs" | grep -v '^completed' | awk '{print "    " $0}'
+              sleep 20
+              continue
+            fi
+
+            echo "All checks completed:"
+            echo "$runs" | awk '{print "    " $0}'
+            bad="$(echo "$runs" \
+              | awk -F'\t' '$2 != "success" && $2 != "skipped" && $2 != "neutral"')"
+            if [ -n "$bad" ]; then
+              echo "Refusing to proceed: these checks did not pass:" >&2
+              echo "$bad" | awk '{print "    " $0}' >&2
+              exit 1
+            fi
+            echo "Every check passed — proceeding."
+            exit 0
+          done
+          echo "Timed out after 45 minutes waiting for checks on $SHA" >&2
+          exit 1
+
+      - name: Check the built wheel against its checksum
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SUMS: ${{ needs.build.outputs.sha256sums }}
+        # The checksum comes from `build`'s output, not from the artifact it
+        # vouches for. The artifact lands in a directory made fresh here.
+        run: |
+          dir="$RUNNER_TEMP/wheel"
+          mkdir "$dir"
+          gh run download "$RUN_ID" --repo "$REPO" --name wheel --dir "$dir"
+          printf '%s\n' "$SUMS" > "$dir/SHA256SUMS"
+          cd "$dir"
+          wheel="$(awk '{print $2}' SHA256SUMS)"
+          present="$(find . -mindepth 1 -maxdepth 1 ! -name SHA256SUMS -printf '%P\n')"
+          if [ "$(wc -l < SHA256SUMS)" -ne 1 ] || [ -z "$wheel" ] \
+              || [ "$present" != "$wheel" ]; then
+            echo "The artifact holds '$present'; SHA256SUMS lists '$wheel'." >&2
+            exit 1
+          fi
+          sha256sum --strict -c SHA256SUMS
+          rest="${wheel#*-}"
+          if [ "v${rest%%-*}" != "${GITHUB_REF#refs/tags/}" ]; then
+            echo "$wheel does not carry the version ${GITHUB_REF#refs/tags/} names." >&2
+            exit 1
+          fi
+          echo "wheel=$wheel" >> "$GITHUB_OUTPUT"
 
       - name: Attach the wheel and its checksums to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        # `gh`, not a third-party action. This is the one job here holding
-        # contents: write, so every action it runs is code with permission
-        # to publish under this repo's name — and `gh` is preinstalled on
-        # the runner and maintained by GitHub. Dropping the dependency is a
-        # smaller supply chain for the step that needs it least.
-        #
-        # Both branches exist because the two triggers differ: a tag push
-        # creates the release, while a workflow_dispatch rerun finds it
-        # already there and must replace the assets rather than fail.
+          REPO: ${{ github.repository }}
+          WHEEL: ${{ steps.verify.outputs.wheel }}
+        # A published asset never changes. On an existing release each asset
+        # already there must match this build byte for byte, and only missing
+        # ones are uploaded, so a rerun against an intact release changes
+        # nothing.
         run: |
-          case "$GITHUB_REF" in
-            refs/tags/*) tag="${GITHUB_REF#refs/tags/}" ;;
-            *)
-              echo "Not a tag ref ($GITHUB_REF); nothing to publish." >&2
-              echo "Push a v* tag — .github/workflows/tag.yml does that" >&2
-              echo "automatically when __version__ changes." >&2
-              exit 1
-              ;;
-          esac
-
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag exists; replacing its assets."
-            gh release upload "$tag" dist/*.whl dist/SHA256SUMS --clobber
-          else
-            gh release create "$tag" --title "$tag" --generate-notes \
-              dist/*.whl dist/SHA256SUMS
+          tag="${GITHUB_REF#refs/tags/}"
+          cd "$RUNNER_TEMP/wheel"
+          if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$REPO" --verify-tag --title "$tag" \
+              --generate-notes "$WHEEL" SHA256SUMS
+            echo "Published $tag."
+            exit 0
           fi
-          echo "Published $tag."
+
+          names="$(gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name')"
+          published="$RUNNER_TEMP/published"
+          mkdir "$published"
+          missing=()
+          differ=()
+          for asset in "$WHEEL" SHA256SUMS; do
+            if ! printf '%s\n' "$names" | grep -Fxq -- "$asset"; then
+              missing+=("$asset")
+              continue
+            fi
+            gh release download "$tag" --repo "$REPO" --pattern "$asset" --dir "$published"
+            if [ "$(sha256sum < "$published/$asset")" != "$(sha256sum < "$asset")" ]; then
+              differ+=("$asset")
+            fi
+          done
+          if [ "${#differ[@]}" -gt 0 ]; then
+            echo "Release $tag already carries a different ${differ[*]}; uploading nothing." >&2
+            exit 1
+          fi
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "Release $tag already carries this build; nothing to upload."
+            exit 0
+          fi
+          gh release upload "$tag" --repo "$REPO" "${missing[@]}"
+          echo "Uploaded ${missing[*]} to $tag."
