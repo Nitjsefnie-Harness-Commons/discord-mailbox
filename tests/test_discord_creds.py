@@ -154,11 +154,17 @@ def test_an_invalid_trusted_author_list_stops_the_connector_at_startup(tmp):
 def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
     del tmp
     from discord_mb_lib import core
-    entry = {"domain": "a.example", "login": "l", "password": "p", "msg_id": "1", "author_id": "9", "trusted": False}
-    base = {"identity": "me", "timeout": 1.0, "json": True, "show_passwords": False, "login": None}
+    entry = {"domain": "a.example", "login": "l", "password": "p", "msg_id": "1", "author": "bridge-bot",
+             "author_id": "9", "trusted": False, "created": "2026-01-01T00:00:00+00:00"}
+    twin, base = {**entry, "author_id": "8", "trusted": True}, {
+        "identity": "me", "timeout": 1.0, "json": True, "show_passwords": False, "login": None}
+    shown = ["bridge-bot user 9 UNTRUSTED 2026-01-01T00:00:00)", "bridge-bot user 8 2026-01-01T00:00:00)"]
     for action, extra, answer, payload, code, stdout in (
             ("list", {}, [entry], {"op": "creds-list"}, None, [{k: v for k, v in entry.items() if k != "password"}]),
             ("get", {"domain": "a.example"}, [entry], {"op": "creds-get", "domain": "a.example"}, None, [entry]),
+            ("list", {"json": False}, [entry, twin], {"op": "creds-list"}, None, shown),
+            ("get", {"domain": "a.example", "json": False}, [entry, twin],
+             {"op": "creds-get", "domain": "a.example"}, None, shown),
             ("get", {"domain": "b.example", "login": "l"}, [],
              {"op": "creds-get", "domain": "b.example", "login": "l"}, 2, None),
             ("add", {"domain": "d", "login": "l", "password": "p", "upsert": True}, None,
@@ -178,7 +184,10 @@ def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
             core._meta_request = original
         assert sent == [("me", payload)], (action, sent)
         assert err.getvalue().startswith("warning: w-text\n"), (action, err.getvalue())
-        assert stdout is None or json.loads(out.getvalue()) == stdout, (action, out.getvalue())
+        if stdout is not None:      # --json parses whole; the text form is read off its `(by ...)` tails
+            got = json.loads(out.getvalue()) if extra.get("json", True) else [
+                line.split("(by ", 1)[1] for line in out.getvalue().splitlines() if "(by " in line]
+            assert got == stdout, (action, extra, out.getvalue())
     assert out.getvalue() == "added: 5\n", out.getvalue()
 
 
