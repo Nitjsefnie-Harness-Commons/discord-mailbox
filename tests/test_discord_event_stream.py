@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Source-only tests for the bounded leech streams (issue #160).
+"""Source-only tests for the bounded leech streams.
 
-Two append-only files outlived issue #157's connector-log bound: the JSON
+Two append-only files need a size bound like the connector log's: the JSON
 event stream leeches follow, and the human `leech.log` several leech processes
 share.  These tests drive the writers and the reader cursor directly -- no
 Discord client, no connector process -- and cover the Windows lock path by

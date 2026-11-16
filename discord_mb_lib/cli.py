@@ -445,11 +445,11 @@ def _run_command(args):
         _retention.erase_cli(_core.STATE_ROOT, args.user_id)
 
 
-# Only what this module defines. It used to be a comprehension over
-# globals(), which re-listed everything the wildcard imports above had
-# pulled in and, being computed, told no static analyser anything at
-# all. The facade unions the four lists, so the exported set is
-# unchanged; test_module_exports_cover_the_package pins that.
+# Only what this module defines. A comprehension over globals() would
+# re-list everything the wildcard imports above pull in and, being
+# computed, tell no static analyser anything at all. The facade unions
+# the four lists; test_module_exports_cover_the_package pins the
+# exported set.
 __all__ = [
     '_cli',
     '_core',

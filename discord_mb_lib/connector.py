@@ -43,9 +43,9 @@ def _claim_ownership(identity, pidfile):
     """-> (_ConnectorOwnership, None) or (None, the reason it cannot start).
 
     Only an OS lock refusal is "already running". A lock file that cannot be
-    opened is an access problem (#372): when the recorded PID is gone, the
-    stale lock and PID file are removed and the claim retried once; otherwise
-    the real error is reported, never as contention.
+    opened is an access problem: when the recorded PID is gone, the stale lock
+    and PID file are removed and the claim retried once; otherwise the real
+    error is reported, never as contention.
     """
     try:
         return _ConnectorOwnership(pidfile), None
@@ -1610,11 +1610,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def _restart_status_plugin_after_reconnect():
         '''Restart only a transport-interrupted installed plugin.
 
-        Every failure records WHY in state['status_reason'] (#333). The branch
-        that fired in the reported episode -- the installed slot is gone --
-        returned False without logging anything, so a 334 KB connector log held
-        two lines about a presence that stayed empty for 17 hours, no reason
-        for either, and no traceback.
+        Every failure records WHY in state['status_reason'].
         '''
         if state.get('status_state') != 'retrying':
             return False
@@ -1851,7 +1847,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         Its own cadence, not the daily heartbeat's: a heartbeat is deduped to
         one per UTC day, while an install wants reporting as soon after it
-        lands as possible. Sharing the heartbeat's 300s left an install
+        lands as possible. Sharing the heartbeat's 300s would leave an install
         undetected for up to five minutes, which is too slow to retire the
         external site-packages watch this event exists to replace.
 
@@ -1895,7 +1891,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         write_status_manifest(identity, manifest)
         # Kept in MEMORY as well as on disk: the slot lives under the temp
         # state dir, so it can be removed by something that never asked this
-        # connector, and then the manifest cannot say what was installed (#333).
+        # connector, and then the manifest cannot say what was installed.
         state['status_manifest'] = manifest
         await _start_status_plugin(run_fn)
         return {'installed': True, 'name': manifest['name'], 'source': manifest['source']}
@@ -1925,13 +1921,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         host. No live guild scan: an unresolvable id is a loud SendError, never
         a silent reroute to #agents.
 
-        The message cache holds three things, and the third used to be missing:
-        messages op_conversation returned (so anything BROWSED is reply-able),
-        messages fetched as reply/link targets, and — since perform_send caches
-        each chunk it sends — messages this host SENT. Without that last one,
-        replying to your own just-sent message failed here and the only fix was
-        to browse the channel to warm a cache the connector had already been
-        holding the message for.'''
+        The message cache holds three things: messages op_conversation returned
+        (so anything BROWSED is reply-able), messages fetched as reply/link
+        targets, and messages this host SENT (each chunk perform_send sends is
+        cached).'''
         rid = str(int(reply_to))
         for root in (msg_cache_dir(), pins_dir()):
             for p in root.glob(f'*/{rid}.json'):
@@ -2102,14 +2095,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             sent_ids.append(str(sent.id))
             # Cache our OWN sends, so a later --reply-to on one of them resolves
             # without a `conversation` round-trip first. resolve_reply_target()
-            # globs exactly the path save_message() writes, but until now that
-            # cache only ever held messages we RECEIVED or BROWSED — never ones
-            # we sent. Replying to a message this very host had just delivered
-            # therefore failed with "not found in local caches", which is a
-            # baffling thing to be told about your own message, and the
-            # documented workaround (run `conversation` on the channel to warm
-            # the cache) was pure ceremony: the connector already held the
-            # message object.
+            # globs exactly the path save_message() writes, so a sent message is
+            # found there like any received one.
             #
             # Every chunk is cached, not just the first, because a chunked send
             # produces several real message ids and any of them is a legitimate

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """discord_mb.py connector lock: a PID is not an identity.
 
-The lock recorded a PID and validated it with "does this PID exist". After a
-crash the number goes back in the pool and the OS reissues it, so three days
-later the lock pointed at an unrelated system process. The identity was locked
-out of its own mailbox ("already running (PID 6548)") and `leech` attached to
-the corpse, tailing an events file that would never grow — an outage that looks
-healthy from outside.
+A lock that records a PID and validates it with "does this PID exist" is not
+enough. After a crash the number goes back in the pool and the OS reissues it,
+so the lock can point at an unrelated system process. The identity is then
+locked out of its own mailbox and `leech` attaches to the corpse, tailing an
+events file that will never grow — an outage that looks healthy from outside.
 
 These pin the identity check that closes it, and just as importantly its
 failure direction: when the cmdline cannot be read the answer is "unknown", and
@@ -54,7 +53,7 @@ def _claim_module():
 
 
 def test_only_lock_contention_reads_as_already_running(tmp):
-    """#372: a lock file that cannot be opened is not another connector."""
+    """A lock file that cannot be opened is not another connector."""
     c = _claim_module()
     if c is None:
         return
@@ -102,7 +101,7 @@ def test_only_lock_contention_reads_as_already_running(tmp):
 
 
 def test_recycled_pid_is_not_a_connector(tmp):
-    """The reported incident: the PID now belongs to an unrelated service."""
+    """The PID now belongs to an unrelated service."""
     m = _mod()
     if m is None:
         return

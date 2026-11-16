@@ -40,8 +40,8 @@ jobs:
         # For the SUITES below, not for the build: they import the package,
         # and the moment it has a runtime dependency every one of them dies at
         # collection with ModuleNotFoundError -- taking the release with it,
-        # before anything is built. tests.yml already installs it here; this
-        # job was the one that diverged.
+        # before anything is built. tests.yml installs it here too; the two
+        # jobs must not diverge.
         run: |
           pip install --require-hashes -r .github/workflows/requirements-runtime.txt
           pip install --no-deps --no-build-isolation .
