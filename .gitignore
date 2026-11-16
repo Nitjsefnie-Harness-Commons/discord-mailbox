@@ -81,6 +81,7 @@
 !/discord_mb_lib/_delivery.py
 !/discord_mb_lib/_directory.py
 !/discord_mb_lib/_dm.py
+!/discord_mb_lib/_linked.py
 !/discord_mb_lib/_meta_claim.py
 !/discord_mb_lib/_settings.py
 !/discord_mb_lib/_temp_provenance.py
@@ -103,6 +104,7 @@
 !/tests/test_discord_event_stream.py
 !/tests/test_discord_extensions.py
 !/tests/test_discord_extras.py
+!/tests/test_discord_linked_messages.py
 !/tests/test_discord_log_rotation.py
 !/tests/test_discord_meta_claim.py
 !/tests/test_discord_move.py
