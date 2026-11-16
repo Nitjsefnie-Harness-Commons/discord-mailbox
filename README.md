@@ -107,7 +107,9 @@ and `creds add` without `--upsert` counts only trusted entries as existing.
 With it unset, they answer every entry and `creds add` counts every entry.
 Whenever an untrusted entry is skipped or answered, the answer carries a
 `warning`, which the CLI prints to stderr as `warning: ...`, so `--json`
-output stays a list of entries.
+output stays a list of entries. The text output of `creds list` and
+`creds get` shows each entry's author as `(by <label> user <author_id> ...)`
+and adds `UNTRUSTED` after the id of an untrusted one.
 
 ## Development
 
