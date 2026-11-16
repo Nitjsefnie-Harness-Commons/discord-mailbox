@@ -24,8 +24,8 @@
     1095
   ],
   ".github/workflows/release.yml": [
-    1102,
-    2393
+    1094,
+    2522
   ],
   ".github/workflows/tag.yml": [
     3313,
@@ -48,59 +48,59 @@
     2881
   ],
   "discord_mb_lib/_temp_provenance.py": [
-    1386,
-    4373
+    1367,
+    4354
   ],
   "discord_mb_lib/connector.py": [
-    23259,
-    95110
+    22547,
+    94398
   ],
   "discord_mb_lib/core.py": [
-    31868,
-    88536
+    31444,
+    88112
   ],
   "discord_mb_lib/storage.py": [
-    31035,
-    148696
+    30991,
+    148652
   ],
   "tests/_util.py": [
     1744,
     4645
   ],
   "tests/test_discord_chunk_routing.py": [
-    488,
-    1718
+    478,
+    1708
   ],
   "tests/test_discord_codex_flavor.py": [
-    879,
-    3602
+    818,
+    3541
   ],
   "tests/test_discord_connector_lock.py": [
-    1863,
-    5882
+    1812,
+    5831
   ],
   "tests/test_discord_event_stream.py": [
-    2975,
-    14728
+    2962,
+    14715
   ],
   "tests/test_discord_extensions.py": [
-    3696,
-    21567
+    3652,
+    21523
   ],
   "tests/test_discord_extras.py": [
-    3855,
-    17868
+    3444,
+    17441
   ],
   "tests/test_discord_move.py": [
     538,
     1934
   ],
   "tests/test_discord_usage_status.py": [
-    5221,
-    15910
+    5193,
+    15882
   ],
   "tests/test_release_version_source.py": [
-    1085,
-    3005
+    1075,
+    2995
   ]
 }
