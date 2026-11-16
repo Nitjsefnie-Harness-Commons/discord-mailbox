@@ -79,6 +79,7 @@
 !/discord_mb_lib/
 !/discord_mb_lib/__init__.py
 !/discord_mb_lib/_attachments.py
+!/discord_mb_lib/_control_files.py
 !/discord_mb_lib/_creds.py
 !/discord_mb_lib/_delivery.py
 !/discord_mb_lib/_directory.py

@@ -19,6 +19,7 @@ from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from . import _linked
 from ._meta_claim import _claim
+from ._control_files import sweep_stale_responses
 from . import _secrets
 
 
@@ -455,6 +456,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         out_dir = meta_out_dir(identity)
         while not client.is_closed():
             try:
+                sweep_stale_responses(out_dir)
                 for f in sorted(in_dir.glob('*.json')):
                     with _claim(f) as claimed:
                         if claimed:
@@ -657,10 +659,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 resp['error'] = f'unknown op: {op!r}'
         except Exception as e:
             resp['error'] = f'{type(e).__name__}: {e}'
-        out_path = out_dir / f.stem
-        tmp = out_path.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(resp, indent=2), encoding='utf-8')
-        tmp.replace(out_path)
+        write_private(out_dir / f.stem, json.dumps(resp, indent=2))
 
     async def op_attachment_list(limit):
         'List recent messages in #attachments that carry file attachments. Includes user uploads.'
@@ -2861,4 +2860,5 @@ __all__ = [
     '_secrets',
     'connector_main',
     'leech_main',
+    'sweep_stale_responses',
 ]
