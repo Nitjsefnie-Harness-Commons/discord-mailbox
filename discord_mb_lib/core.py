@@ -35,6 +35,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+from ._control_files import write_private
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1362,9 +1363,7 @@ def _meta_request(identity, payload, timeout):
     req_id = f'{uuid.uuid4()}.json'
     in_path = in_dir / req_id
     out_path = out_dir / req_id
-    tmp = in_path.with_suffix('.json.tmp')
-    tmp.write_text(json.dumps(payload), encoding='utf-8')
-    tmp.replace(in_path)
+    write_private(in_path, json.dumps(payload))
     deadline = time.time() + timeout
     while time.time() < deadline:
         if out_path.exists():
@@ -2851,5 +2850,6 @@ __all__ = [
     'usage_period',
     'uuid',
     'write_extension_registry',
+    'write_private',
     'write_status_manifest',
 ]

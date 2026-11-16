@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """A meta request is claimed by the connector or withdrawn by the CLI, never both,
-and a claimed one is never reported as a dead connector. Stdlib and discord.py only, OS-agnostic."""
+and a claimed one is never reported as a dead connector. Its files are private, and
+a response left past the bound is swept. Stdlib and discord.py only, OS-agnostic."""
 import contextlib
 import io
 import json
 import os
+import secrets
 import sys
+import time
 import types
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gateway  # noqa: E402
 import _util  # noqa: E402
 from test_discord_conversation_dm import BRIDGE_ID, _ask, _connector, _conv  # noqa: E402
 sys.path.insert(0, _util.SCRIPTS)
@@ -113,6 +118,74 @@ def test_the_connector_runs_only_what_it_claimed_and_clears_every_claim(tmp):
     assert responses["a"]["ok"] and not responses["c"]["ok"] and "b" not in responses, responses
     assert world.bridge.calls == [], "the withdrawn request ran"
     assert not any(in_dir.iterdir()), list(in_dir.iterdir())
+
+
+def test_a_creds_add_request_carrying_a_password_is_private(tmp):
+    password, seen = "pw" + secrets.token_urlsafe(8), []
+
+    def answer(in_dir, out_dir):
+        for p in in_dir.glob("*.json"):
+            seen.append((p.read_text(encoding="utf-8"), p.stat().st_mode & 0o777))
+            (out_dir / p.name).write_text(json.dumps({"ok": True, "action": "added"}), encoding="utf-8")
+
+    args = types.SimpleNamespace(creds_action="add", identity="me", domain="a.example", login="login",
+                                 password=password, upsert=False, timeout=1)
+    with _cli_side(tmp, answer), contextlib.redirect_stdout(io.StringIO()):
+        core.creds_cli(args)
+    assert len(seen) == 1 and password in seen[0][0], seen
+    if _util.POSIX_MODES:
+        assert seen[0][1] == 0o600, oct(seen[0][1])
+
+
+def _aged(directory, name, age):
+    path = directory / name
+    path.write_text("{}", encoding="utf-8")
+    os.utime(path, (time.time() - age, time.time() - age))
+    return path
+
+
+def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
+    out, old = Path(tmp) / "state" / "out", 15 * 60 + 30
+    out.mkdir(parents=True)
+
+    def name(first):        # a response's name with its first character fixed, to order the sweep
+        return first + str(uuid.uuid4())[1:] + ".json"
+
+    kept = [_aged(out, name("a"), 15 * 60 - 30), *(_aged(out, n, old) for n in (
+        "notes.json", "x" + name("a"), name("a") + ".old.json"))]
+    gone = [_aged(out, name(c), old) for c in "135"]
+    faults = {name("0"): ("lstat", PermissionError), name("2"): ("unlink", FileNotFoundError),
+              name("4"): ("lstat", FileNotFoundError)}           # unreadable, vanished, vanished
+    kept += [_aged(out, n, old) for n in faults]
+    real, fired, later = {op: getattr(os, op) for op in ("lstat", "unlink")}, set(), []
+
+    def faulty(op):
+        def call(path, *args, **kwargs):
+            fault = faults.get(os.path.basename(path))
+            if fault and fault[0] == op:
+                fired.add(os.path.basename(path))
+                raise fault[1](path)
+            return real[op](path, *args, **kwargs)
+        return call
+
+    async def script(client):
+        await client.ask({"first": {"op": "nope"}})
+        later.append(sorted(out.iterdir()))
+        late = _aged(out, name("b"), old)
+        await client.ask({"second": {"op": "nope"}})
+        later.append(late.exists())
+
+    for op in real:
+        setattr(os, op, faulty(op))
+    try:
+        _gateway.run(tmp, script)
+    finally:
+        for op, f in real.items():
+            setattr(os, op, f)
+    assert later[0] == sorted([*kept, out / "first.json"]), later[0]
+    assert later[1] is False, "a response gone stale after start was kept"
+    assert fired == set(faults), fired
+    assert not any(p.exists() for p in gone), gone
 
 
 def main():
