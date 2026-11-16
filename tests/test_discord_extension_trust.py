@@ -61,8 +61,9 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
                  (through, owned, owned_dir, {hops: (0o757, ME)}, True, (PermissionError, f"{hops} is writable by other users")),
                  (chain, owned, owned_dir, {hops: (0o755, OTHER)}, True, (PermissionError, f"{hops} is owned by uid {OTHER}, not by this user or root")),
                  (chain, owned, owned_dir, {hops: (0o775, ME)}, True, f"{hops} is group-writable"),
-                 (link, owned, owned_dir, {hops: (0o775, ME), cache: owned_dir, pyc: group}, True, f"{hops} is group-writable; {pyc} is group-writable"),
                  (loop, owned, owned_dir, {}, True, (OSError, f"{loop}: too many levels of symbolic links"))]
+        if sys.pycache_prefix is None:      # links/__pycache__ is on the cache path only without a prefix
+            rows.append((link, owned, owned_dir, {hops: (0o775, ME), cache: owned_dir, pyc: group}, True, f"{hops} is group-writable; {pyc} is group-writable"))
         for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755), (safe, 0o755), (hops, 0o755), (link.parent, 0o755)):
             owned_path.chmod(mode)      # the real stat accepts a trusted chain and a symlinked directory
         assert [_ext_trust.check_extension(p) for p in (Path(tmp) / "alias" / "ext.py", chain, through)] == [None] * 3
@@ -110,11 +111,10 @@ def test_the_connector_refuses_an_exposed_module_at_start_and_on_set(tmp):
 
     client = _gateway.run(tmp, script, extension=True)
     start, refused, warned = (client.responses[k] for k in ("start", "refused", "set"))
-    reason = f"PermissionError: {relay} is writable by other users"
+    reason, warning = f"PermissionError: {relay} is writable by other users", f"{shared} is group-writable"
     assert (start["loaded"], start["last_error"]) == (False, reason), start
     assert f"extension load failed: {reason}" in client.log, client.log
     assert refused["error"] == f"PermissionError: {exposed} is writable by other users", refused
-    warning = f"{shared} is group-writable"
     assert (warned["ok"], warned["path"], warned.get("warning")) == (True, str(shared), warning), warned
     assert f"extension loaded: {shared} (warning: {warning})" in client.log, client.log
     assert (_loaded(relay), _loaded(exposed), _loaded(shared)) == (False, False, True)
