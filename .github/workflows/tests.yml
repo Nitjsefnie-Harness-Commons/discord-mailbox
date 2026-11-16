@@ -114,11 +114,6 @@ jobs:
           "$RUNNER_TEMP/probe/bin/discord-mb" --version
           "$RUNNER_TEMP/probe/bin/python" -c "from discord_mb_lib.cli import _cli"
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: wheel
-          path: dist/*.whl
-
   portable:
     # macOS has no O_TMPFILE and Windows has no equivalent, so on both of them
     # every publication takes the portable named path -- a protocol the Linux
