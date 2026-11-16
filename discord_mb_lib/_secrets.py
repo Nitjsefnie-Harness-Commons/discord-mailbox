@@ -1,0 +1,54 @@
+"""Secrets supplied off the command line."""
+import os
+import sys
+from getpass import getpass
+from pathlib import Path
+from typing import Any
+
+from .core import resolve_token_and_flavor
+
+
+def _warn_argv(what: str, instead: str) -> None:
+    # stdout carries the connector's event stream
+    print(f'warning: {what} is on the command line, where other local users can read it; use {instead}',
+          file=sys.stderr, flush=True)
+
+
+def read_token_file(path: str) -> str:
+    try:
+        token = Path(path).read_text(encoding='utf-8-sig').strip()
+    except (OSError, UnicodeError) as e:
+        raise SystemExit(f'error: cannot read token file {path}: '
+                         f'{getattr(e, "strerror", None) or type(e).__name__}') from None
+    if not token:
+        raise SystemExit(f'error: token file {path} is empty')
+    return token
+
+
+def cli_token(token: str | None, token_file: str | None) -> str | None:
+    """None leaves DISCORD_TOKEN and the token directory to the command."""
+    if token:
+        _warn_argv('--token', '--token-file or DISCORD_TOKEN')
+        return token
+    return read_token_file(token_file) if token_file else None
+
+
+def connector_token(token: str | None, identity: str, flavor: str | None) -> tuple[Any, Any]:
+    token = token or os.environ.get('DISCORD_TOKEN')
+    if not token:
+        return resolve_token_and_flavor(identity, flavor)
+    return token, flavor or 'claude'    # legacy flagless callers stay Claude-flavored
+
+
+def cli_password(password: str | None, from_stdin: bool) -> str:
+    if password is not None and from_stdin:
+        raise SystemExit('error: pass the password argument or --password-stdin, not both')
+    if password is not None:
+        _warn_argv('the password argument', '--password-stdin or the prompt')
+        return password
+    if from_stdin:
+        return sys.stdin.read().removesuffix('\n')
+    if sys.stdin.isatty():
+        return getpass('password: ')
+    raise SystemExit('error: no password: pass the password argument or --password-stdin '
+                     '(stdin is not a terminal, so there is no prompt)')
