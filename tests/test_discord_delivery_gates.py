@@ -17,7 +17,7 @@ import _util  # noqa: E402
 from _gateway import ALICE, BOT, GUILD, T0  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
-from discord_mb_lib import _delivery as D, _settings  # noqa: E402
+from discord_mb_lib import _delivery as D  # noqa: E402
 
 RAW, MALLORY, OTHER = 940000000000000003, 940000000000000004, 940000000000000005
 OTHER_GUILD = 950000000000000002
@@ -215,12 +215,8 @@ def _run(tmp, env, script):
     """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; skipped without discord.py.
 
     The real `setting()` reads the three settings from the environment (`env` over blanks, which
-    count as unset); the file cache is pinned empty so the host's settings files never leak in."""
-    saved, _settings._cache = _settings._cache, {}
-    try:
-        client = _gateway.run(tmp, script, env={**dict.fromkeys(ENV, ""), **env}, extension=True)
-    finally:
-        _settings._cache = saved
+    count as unset); `_gateway.run` pins the settings-file cache empty so the host's files never leak in."""
+    client = _gateway.run(tmp, script, env={**dict.fromkeys(ENV, ""), **env}, extension=True)
     if client is None:
         _util.skip("discord.py is not installed")
     return (_gateway.inbox(tmp), [int(e["msg_id"]) for e in client.events if e.get("event") == "message"],

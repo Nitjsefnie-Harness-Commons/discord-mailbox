@@ -65,11 +65,12 @@ def inbox(tmp, msg_id=None):
 
 def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False):
     """Let `script(client)` drive the connector; `entries` is the directory history,
-    newest first. -> the client (`events`, `reactions`, `log`), None without discord.py."""
+    newest first. -> the client (`events`, `reactions`, `log`), None without discord.py.
+    The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
         return None
     import discord
-    from discord_mb_lib import _directory, connector as c
+    from discord_mb_lib import _directory, _settings, connector as c
     root, env = Path(tmp), env or {}
     state, ids = root / "state", iter(range(500000, 600000))
     in_dir, out_dir = state / "in", state / "out"
@@ -176,8 +177,10 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
         d.mkdir(parents=True, exist_ok=True)
     saved = {n: getattr(c, n) for n in swaps}
     saved_env = {n: os.environ.get(n) for n in (*env, LOCK_ROOT_ENV)}
-    saved_client, saved_clock, out, clients = discord.Client, _directory.monotonic, io.StringIO(), []
+    saved_client, saved_clock, saved_cache = discord.Client, _directory.monotonic, _settings._cache
+    out, clients = io.StringIO(), []
     try:
+        _settings._cache = {}
         for n, v in swaps.items():
             setattr(c, n, v)
         os.environ.update({LOCK_ROOT_ENV: str(root / "locks"), **env})
@@ -194,7 +197,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
                 os.environ.pop(n, None)
             else:
                 os.environ[n] = v
-        discord.Client, _directory.monotonic = saved_client, saved_clock
+        discord.Client, _directory.monotonic, _settings._cache = saved_client, saved_clock, saved_cache
     clients[0].events = [json.loads(line) for line in out.getvalue().splitlines() if line.startswith("{")]
     clients[0].log = (root / "connector.log").read_text(encoding="utf-8")
     return clients[0]
