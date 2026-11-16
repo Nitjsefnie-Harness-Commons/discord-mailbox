@@ -26,8 +26,8 @@ none of the three and is logged in the connector log (a capped sender at most
 once per window). When more than one gate refuses it, the log line names the
 first.
 
-A continuation frame is delivered only when its author is registered (its
-user id is in the directory) or is the author of chunk 1 of the same train as
+A continuation frame is delivered only when its author is registered (it
+holds a directory name, below) or is the author of chunk 1 of the same train as
 this connector delivered it. A train is the channel plus chunk 1's
 `**[sender→recipients]**` header and subject. The connector remembers the
 chunk 1 authors of the last 256 trains. When chunk 1 was not seen, only the
@@ -47,6 +47,24 @@ setting.
 The allow-lists and the cap also apply to an extension's `ctx.deliver`,
 which returns `None` for a refused message. The continuation rule does not:
 an extension relay is not routed by its frame.
+
+## Directory
+
+Each unpinned message in the directory channel that mentions a user and
+names an identity (`**name** · <@id>`, as the connector posts it) is an
+entry. An entry gives its name to the mentioned user only when that user
+also wrote it. When several such entries name one identity, the oldest
+keeps the name; each later one from another account is ignored, with a
+connector log line naming the identity and both user ids. Those names are
+what `send`, `send --dm`, a `move` to a DM and `conversation --dm` resolve,
+and what the `from` and `author_identities` fields show. `list-agents`
+still lists every entry, with its `user_id` and `author_id`.
+
+Every read sees the whole channel, however old the entry. `register` edits
+the newest unpinned message the connector wrote there, and startup posts an
+entry only when the connector has none. The connector reads the channel at
+startup; a name it cannot resolve rereads it only when the last completed
+read is at least 15 seconds old.
 
 ## Development
 
