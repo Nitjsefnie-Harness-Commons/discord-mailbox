@@ -17,12 +17,12 @@ from _gateway import ALICE, BOT, BRIDGE, GUILD  # noqa: E402
 sys.path.insert(0, _util.SCRIPTS)
 MB = os.path.join(_util.SCRIPTS, "discord_mb.py")
 
-C1, C2, A, B = BRIDGE, 960000000000000002, 980000000000000001, 980000000000000002
-MESSAGES = {701: (A, C1), 702: (B, C1), 703: (A, C2), 704: (B, C2)}
-# Message 701 reached both identities; 702 is the only DM.
-STORED = ["one/inbox/701", "one/inbox/702", "one/inbox/703", "two/inbox/701", "two/inbox/704",
+C1, C2, T, A, B = BRIDGE, 960000000000000002, 960000000000000005, 980000000000000001, 980000000000000002
+MESSAGES = {701: (A, C1), 702: (B, C1), 703: (A, C2), 704: (B, C2), 705: (A, T)}
+# Message 701 reached both identities; 702 is the only DM; 705 is in T, a thread of C2.
+STORED = ["one/inbox/701", "one/inbox/702", "one/inbox/703", "one/inbox/705", "two/inbox/701", "two/inbox/704",
           f"messages/{C1}/701", f"messages/{C1}/702", f"messages/{C2}/703", f"messages/{C2}/704",
-          f"pins/{C1}/701", f"pins/{C2}/703"]
+          f"messages/{T}/705", f"pins/{C1}/701", f"pins/{C2}/703", f"pins/{T}/705"]
 
 
 def seed(root):
@@ -30,6 +30,8 @@ def seed(root):
         author, channel = MESSAGES[int(rel.rsplit("/", 1)[1])]
         record = {"msg_id": rel[-3:], "from_user_id": str(author), "channel_id": str(channel),
                   "is_dm": rel.endswith("702")}
+        if "/inbox/" in rel:   # only the inbox writer records the channel's parent
+            record["channel"] = {"id": str(channel), "parent_id": str(C2) if channel == T else None}
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / f"{rel}.json").write_text(json.dumps(record), encoding="utf-8")
         os.utime(root / f"{rel}.json", (0, 0))   # an age rule would remove all of them
@@ -59,7 +61,7 @@ def test_a_deletion_on_discord_removes_exactly_its_local_records(tmp):
         ("raw_bulk_message_delete", lambda: discord.RawBulkMessageDeleteEvent({"ids": [701, 702], "channel_id": C1}),
          deleted(701, 702), 702, None, None),
         ("raw_thread_delete", lambda: raw_thread(C1, C2), deleted(701, 702, C1), 701, None, C1),
-        ("guild_channel_delete", lambda: types.SimpleNamespace(id=C2), deleted(703, 704, C2), 703, 702, C2)]
+        ("guild_channel_delete", lambda: types.SimpleNamespace(id=C2), deleted(703, 704, 705, C2), 705, 702, C2)]
     for event, payload, expected, gone, live, channel in rows:
         left, heard, answers = delete_on_discord(Path(tmp, event), event, payload(), {"gone": gone, "live": live})
         assert left == expected, (event, left)
@@ -155,7 +157,7 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
     for refused in ("12a", "", "١٢", f" {A}"):
         assert mb(tmp, "erase", "--user-id", refused).returncode == 2, refused
     done = mb(tmp, "erase", "--user-id", str(A))
-    assert (done.returncode, json.loads(done.stdout)) == (0, {"user_id": str(A), "removed": 7}), done
+    assert (done.returncode, json.loads(done.stdout)) == (0, {"user_id": str(A), "removed": 10}), done
     kept = [rel for rel in STORED if rel.endswith(("702", "704"))] + ["one/outbox/705"]
     assert stored(root) == sorted(kept + (["one/inbox/709"] if os.name != "nt" else [])), stored(root)
     assert stored(outside) == sorted(STORED), stored(outside)
