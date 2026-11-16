@@ -67,7 +67,9 @@ A sender's label is a directory name or, when its account holds none,
 `user:<username>`. The `message` event and the inbox record both carry
 `from` (that label) and `from_user_id` (the Discord id as a string). The
 event also carries `from_registered`, `true` when the account holds at least
-one name, which is exactly when the record's `author_identities` is not empty.
+one name, which is exactly when the record's `author_identities` is not
+empty: `from`, `from_registered` and `author_identities` all come from one
+read of the directory, taken before the message's context is resolved.
 "Registered" means "holds a directory claim", not "verified": the directory
 accepts any account's own entry, so check `from_user_id` where who is asking
 matters. The `conversation`, `attachment-list`, `pins-list`, `creds-list`,

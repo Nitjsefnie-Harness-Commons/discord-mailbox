@@ -66,6 +66,42 @@ def test_the_message_event_and_record_say_who_sent_it_and_whether_they_hold_a_na
         assert registered == bool(record["author_identities"]), "the flag is not the record's lookup"
 
 
+def test_the_flag_and_the_records_identities_come_from_one_directory_read(tmp):
+    held = [_gateway.message(7, MALLORY, f"**mallory** · <@{MALLORY}>"),
+            _gateway.message(3, BOT, f"**gate-test** · <@{BOT}>")]
+    for case, entries, rescan, breaks, registered, identities in (
+            ("a rescan binds the sender while the context is resolved", None, True, False, False, []),
+            ("the context fails after its awaits", held, False, True, True, ["mallory"])):
+        async def script(client, rescan=rescan, breaks=breaks):
+            dm = client.dm(970000000000000099)
+
+            async def pins(*, limit=50):
+                client.directory.msgs.insert(0, _gateway.message(
+                    8, MALLORY, f"**mallory** · <@{MALLORY}>", client.directory))
+                client.clock[0] += 60                       # the next name miss rescans
+                await client.ask({"miss": {"op": "send", "to": "ghost", "subject": "s", "body": "b"}})
+                return
+                yield                                       # an async generator, yielding nothing
+            if rescan:
+                dm.pins = pins
+            msg = client.message(101, MALLORY, "hi", dm, username="alice")
+            if breaks:
+                msg.stickers = 5                            # resolve_context raises on it, last
+            await client.handlers["on_message"](msg)
+
+        case_dir = Path(tmp) / str(len(case))
+        case_dir.mkdir()
+        client = _gateway.run(case_dir, script, entries)
+        if client is None:
+            return
+        event = next(e for e in client.events if e.get("event") == "message")
+        record = _gateway.inbox(case_dir, 101)
+        assert not rescan or "mallory" in client.log.rsplit("directory map", 1)[-1], (case, "no rescan", client.log)
+        assert (breaks and "resolve_context failed" in client.log) or not breaks, (case, client.log)
+        assert (event["from_registered"], record["author_identities"],
+                record["author_has_multiple_identities"]) == (registered, identities, False), (case, event, record)
+
+
 def _pair(client, channel, first_id, **fields):
     """[MALLORY's message, ALICE's message], newest first; both have the username `alice`."""
     pair = [client.message(first_id + 1, MALLORY, "from mallory", channel, username="alice"),

@@ -2364,7 +2364,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         event, which is cap-bound). Resolves channel type + human "kind", channel /
         forum-post names, topic, parent + category, guild id+name, pinned messages,
         the reply-target message (downloaded), any Discord message links in the body
-        (downloaded), forwarded snapshots, author identities/roles, and message meta
+        (downloaded), forwarded snapshots, author roles, and message meta
         (edited_at, type, jump_url, pinned, mention_everyone, stickers, embeds).
         Referenced + linked messages are saved to messages/<chan>/<msg>.json.'''
         import re as _re
@@ -2434,7 +2434,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         author = msg.author
         author_roles = ([r.name for r in author.roles if r.name != '@everyone']
                         if isinstance(author, discord.Member) else None)
-        identities = _Directory.names_held(state['identity_map'], author.id)
         return {
             'channel': info,
             'guild': guild_info,
@@ -2443,8 +2442,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             'reply_to': reply_info,
             'linked_messages': linked,
             'forwarded': forwarded,
-            'author_identities': identities,
-            'author_has_multiple_identities': len(identities) > 1,
             'author_display_name': getattr(author, 'display_name', None),
             'author_username': getattr(author, 'name', None),
             'author_roles': author_roles,
@@ -2467,8 +2464,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         }
 
     async def write_inbox(msg, source='live', continuation=False):
-        frm = _Directory.label_of(state['identity_map'], msg.author)
-        registered = bool(_Directory.names_held(state['identity_map'], msg.author.id))
+        names = _Directory.names_held(state['identity_map'], msg.author.id)
+        frm = _Directory.label_for(names, msg.author)
         body = msg.content
         inbox = inbox_dir(identity)
         path = inbox / f'{msg.id}.json'
@@ -2503,6 +2500,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             'channel_id': str(msg.channel.id),
             'is_dm': is_dm,
             **context,
+            'author_identities': names, 'author_has_multiple_identities': len(names) > 1,
         }
         tmp = path.with_suffix('.json.tmp')
         tmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -2516,7 +2514,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             'created': msg.created_at.isoformat(),
             'from': frm,
             'from_user_id': str(msg.author.id),
-            'from_registered': registered,
+            'from_registered': bool(names),
             'to': to_label if len(to_label) <= 50 else to_label[:50],
             'subject': subject,
             'msg_id': str(msg.id),
