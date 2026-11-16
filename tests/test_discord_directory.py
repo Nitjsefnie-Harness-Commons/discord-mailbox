@@ -7,8 +7,11 @@ runs the REAL connector closures on a stand-in gateway client (the
 `tests/_gateway.py`): `on_ready`, `on_message` and the `meta_watcher` answering
 send, list-agents and register requests.
 """
+import asyncio
+import json
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
@@ -64,9 +67,9 @@ def test_the_oldest_self_authored_entry_holds_a_name(tmp):
 _msg, _inbox = _gateway.message, _gateway.inbox
 
 
-def _run(tmp, entries, script):
+def _run(tmp, entries, script, outbox=False):
     """-> (client, connector log); skipped without discord.py."""
-    client = _gateway.run(tmp, script, entries, identity="dir-test")
+    client = _gateway.run(tmp, script, entries, identity="dir-test", outbox=outbox)
     if client is None:
         _util.skip("discord.py is not installed")
     return client, client.log
@@ -149,6 +152,38 @@ def test_a_miss_rescans_only_once_the_last_scan_is_old_but_startup_always_scans(
     assert client.steps == [("early", False, 3), ("due", True, 4), ("cached", True, 4),
                             ("dm-early", False, 4), ("dm-due", False, 5), ("failed", False, 6),
                             ("probe-kept", True, 6), ("after-failure", False, 7)], client.steps
+
+
+def test_an_outbox_send_is_retried_while_the_last_scan_is_fresh_and_dropped_after_a_real_miss(tmp):
+    box, log = Path(tmp) / "state" / "outbox", Path(tmp) / "connector.log"
+
+    async def until(done):                               # the watcher ticks once a second
+        for _ in range(200):
+            if done():
+                return
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"timed out: {log.read_text(encoding='utf-8')}")
+
+    async def script(client):
+        reads, client.steps = client.directory.reads, []
+        client.directory.msgs.insert(0, _msg(9, MALLORY, f"**carol** · <@{MALLORY}>", client.directory))
+        for t, files in ((1, {"dm": _send("carol", dm=True), "mention": _send("carol")}),
+                         (15, {}), (100, {"ghost": _send("ghost")})):
+            client.clock[0] = T0 + t
+            for name, payload in files.items():
+                (box / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+            if t == 1:                                   # startup scanned at T0: the miss reuses that scan
+                await until(lambda: log.read_text(encoding="utf-8").count("send retry") == 2)
+                client.steps.append((sorted(p.stem for p in box.iterdir()), len(reads)))
+            else:
+                await until(lambda: not any(box.iterdir()))
+                client.steps.append((len(reads), len(client.bridge.sent), len(client.dms[MALLORY].sent)))
+
+    client, _ = _run(tmp, [_msg(1, PROBE, f"**probe** · <@{PROBE}>")], script, outbox=True)
+    failed = [(e["to"], e["error"]) for e in client.events if e["event"] == "send_failed"]
+    # Kept inside the window; a due scan finds the name and both go out; a real scan that still misses drops.
+    assert client.steps == [(["dm", "mention"], 2), (3, 1, 1), (4, 1, 1)], client.steps
+    assert failed == [("ghost", "unknown recipient identities ['ghost']")], failed
 
 
 def test_startup_keeps_the_entry_the_bot_wrote_though_an_older_account_holds_its_name(tmp):
