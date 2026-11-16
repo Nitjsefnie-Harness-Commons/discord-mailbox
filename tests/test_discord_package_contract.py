@@ -25,7 +25,7 @@ EXPECTED_COMMANDS = {
     "send", "attachments", "creds", "conversation", "register",
     "list-agents", "topic", "pins", "context", "forum", "move",
     "message", "thread", "emoji", "servers", "channels",
-    "status-plugin", "extension", "setup", "connector", "leech",
+    "status-plugin", "extension", "setup", "connector", "leech", "erase",
 }
 
 

@@ -70,6 +70,14 @@ removes the records in `messages/<channel_id>/` and `pins/<channel_id>/`, then
 those directories, and every inbox record whose `channel_id` is that id. A
 deletion made while no connector runs is not followed.
 
+`erase --user-id <id>` removes every inbox, `messages/` and
+`pins/` record whose `from_user_id` is that Discord user id, for every
+identity on the host, and prints `{"user_id": "<id>", "removed": <n>}` with the
+number of files removed. It needs no identity and no running connector. An id
+that is not all ASCII digits exits 2. It never follows a symlink: a linked
+identity, channel directory or record is left alone, and a linked
+`discord-mailbox` directory exits 1 with nothing removed.
+
 ## Directory
 
 Each unpinned message in the directory channel that mentions a user and

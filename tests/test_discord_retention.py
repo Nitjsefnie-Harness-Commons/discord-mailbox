@@ -2,7 +2,9 @@
 """Local message records follow deletions on Discord, on the REAL connector."""
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -12,6 +14,7 @@ import _util  # noqa: E402
 from _gateway import BRIDGE, GUILD  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
+MB = os.path.join(_util.SCRIPTS, "discord_mb.py")
 
 C1, C2, A, B = BRIDGE, 960000000000000002, 980000000000000001, 980000000000000002
 MESSAGES = {701: (A, C1), 702: (B, C1), 703: (A, C2), 704: (B, C2)}
@@ -28,10 +31,12 @@ def seed(root):
                   "is_dm": rel.endswith("702")}
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / f"{rel}.json").write_text(json.dumps(record), encoding="utf-8")
+        os.utime(root / f"{rel}.json", (0, 0))   # an age rule would remove all of them
 
 
-def stored(root):
-    return sorted(str(p.relative_to(root).with_suffix("")).replace(os.sep, "/") for p in root.rglob("*.json"))
+def stored(root):   # os.walk lists a link but never descends through one
+    return sorted(os.path.relpath(os.path.join(d, f), root).replace(os.sep, "/")[:-5]
+                  for d, _, files in os.walk(root) for f in files if f.endswith(".json"))
 
 
 def deleted(*ids):
@@ -78,6 +83,46 @@ def delete_on_discord(root, event, payload, replies):
                           for name, msg in replies.items() if msg})
     client = _gateway.run(root, script, extension=True)
     return stored(root / "mailbox"), heard, client.responses
+
+
+def mb(tmp, *argv):
+    env = {**os.environ, **dict.fromkeys(("TMPDIR", "TEMP", "TMP"), tmp)}
+    return subprocess.run([sys.executable, MB, *argv], capture_output=True, text=True, env=env, check=False)
+
+
+def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
+    from discord_mb_lib import _temp_provenance
+    root, outside, saved = Path(tmp, "discord-mailbox"), Path(tmp, "outside"), tempfile.tempdir
+    try:
+        tempfile.tempdir = tmp
+        _temp_provenance.ensure_owned_temp_dir(root, "shared")   # the root `send` accepts
+    finally:
+        tempfile.tempdir = saved
+    seed(root)
+    seed(outside)
+    (root / "one/outbox").mkdir()
+    (root / "one/outbox/705.json").write_text(json.dumps({"from_user_id": str(A)}), encoding="utf-8")
+    links = {"three": "two", f"messages/{C1 + 7}": f"messages/{C1}", "one/inbox/709.json": "one/inbox/703.json"}
+    for link, target in links.items() if os.name != "nt" else ():
+        os.symlink(outside / target, root / link)
+    for refused in ("12a", "", "١٢", f" {A}"):
+        assert mb(tmp, "erase", "--user-id", refused).returncode == 2, refused
+    done = mb(tmp, "erase", "--user-id", str(A))
+    assert (done.returncode, json.loads(done.stdout)) == (0, {"user_id": str(A), "removed": 7}), done
+    kept = [rel for rel in STORED if rel.endswith(("702", "704"))] + ["one/outbox/705"]
+    assert stored(root) == sorted(kept + (["one/inbox/709"] if os.name != "nt" else [])), stored(root)
+    assert stored(outside) == sorted(STORED), stored(outside)
+    for reply_to in ("702", "701"):
+        assert mb(tmp, "send", "one", "nobody", "s", "b", "--reply-to", reply_to).returncode == 0
+    sent = sorted((json.loads(p.read_text(encoding="utf-8")) for p in (root / "one/outbox").glob("*-*.json")),
+                  key=lambda m: m["reply_to"])
+    assert [(m.get("reply_channel_id"), m.get("is_dm")) for m in sent] == [(None, None), (str(C1), True)], sent
+    if os.name != "nt":
+        before = stored(root)
+        Path(tmp, "linked").mkdir()
+        os.symlink(root, Path(tmp, "linked", "discord-mailbox"))
+        assert mb(str(Path(tmp, "linked")), "erase", "--user-id", str(B)).returncode == 1
+        assert stored(root) == before, stored(root)
 
 
 def main():
