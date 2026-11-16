@@ -14,11 +14,24 @@
 
 version: 2
 updates:
-  # requirements-dev.txt (lint/type toolchain) and requirements-test.txt
-  # (coverage). There is no runtime entry: the distributed package is
-  # stdlib-only on purpose, so these tool pins are the entire pip surface.
+  # Each root requirements-*.in, recompiled into its hash-pinned .txt: the
+  # lint, type, coverage, build and audit tools.
   - package-ecosystem: pip
     directory: "/"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+
+  # The runtime lock (discord.py, psutil and their tree). Away from
+  # pyproject.toml, so it compiles on the Python its header names.
+  - package-ecosystem: pip
+    directory: "/.github/workflows"
     schedule:
       interval: weekly
       day: wednesday
