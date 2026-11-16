@@ -34,10 +34,11 @@ chunk 1 authors of the last 256 trains. When chunk 1 was not seen, or two
 different authors posted a chunk 1 for the train, only the registered test
 applies.
 
-Three optional settings, read from the environment or the `env` block of
-`~/.agent-bundle/settings.json`. With none set, delivery is unchanged. An
-invalid value stops the connector at startup with a log line naming the
-setting.
+Three optional settings, read from the environment, then the `env` block of
+`~/.agent-bundle/settings.local.json`, `~/.agent-bundle/settings.json`, and
+the legacy `~/.claude` settings files (an empty value counts as unset). With
+none set, delivery is unchanged. An invalid value stops the connector at
+startup with a log line naming the setting.
 
 | Setting | Value | Effect |
 | --- | --- | --- |
@@ -78,8 +79,8 @@ empty: `from`, `from_registered` and `author_identities` all come from one
 read of the directory, taken before the message's context is resolved.
 "Registered" means "holds a directory claim", not "verified": the directory
 accepts any account's own entry, so check `from_user_id` where who is asking
-matters. The `conversation`, `attachment-list`, `pins-list`, `creds-list`,
-`creds-get` and `move` answers, cached messages and the pins in an inbox
+matters. The `conversation`, `attachments list`, `pins list`, `creds list`,
+`creds get` and `move` answers, cached messages and the pins in an inbox
 record use the same label.
 
 Every read sees the whole channel, however old the entry. `register` edits
@@ -91,6 +92,8 @@ within that window is kept in the outbox and retried every second until the
 window passes, then dropped as unknown if the reread still misses; `send --wait`,
 `conversation --dm` and a `move` to a DM answer an unknown-identity error, so a
 name registered in the last 15 seconds may need a retry for those.
+
+## Conversation
 
 `conversation --grep PATTERN` is applied by the CLI to the messages the
 connector returns, against `content` and `content_rendered`, so a slow pattern
@@ -119,7 +122,7 @@ file it cannot be decoded from is skipped, with a connector log line
 naming the file.
 
 Each entry carries `author_id` (the Discord id, as a string) and `trusted`.
-With the setting set, `creds-list` and `creds-get` answer only trusted
+With the setting set, `creds list` and `creds get` answer only trusted
 entries plus `skipped_untrusted`, the number of other entries that matched,
 and `creds add` without `--upsert` counts only trusted entries as existing.
 With it unset, they answer every entry and `creds add` counts every entry.
