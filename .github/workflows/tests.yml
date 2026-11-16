@@ -103,12 +103,21 @@ jobs:
           python -m build --wheel --no-isolation
 
       - name: Install it with no checkout in reach and run it
-        # pip check stands in for the resolution --no-deps skips.
+        # The runtime lock would mask a requirement the wheel dropped, so the
+        # wheel's requirements must equal pyproject.toml's, and pip check
+        # proves the lock satisfies them.
         run: |
           python -m venv "$RUNNER_TEMP/probe"
           "$RUNNER_TEMP/probe/bin/pip" install --require-hashes \
             -r .github/workflows/requirements-runtime.txt
           "$RUNNER_TEMP/probe/bin/pip" install --no-deps dist/*.whl
+          "$RUNNER_TEMP/probe/bin/python" -I -c '
+          import importlib.metadata, tomllib
+          def norm(reqs): return sorted("".join(r.split()) for r in reqs)
+          declared = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
+          shipped = importlib.metadata.requires("discord-mailbox") or []
+          assert norm(shipped) == norm(declared), (shipped, declared)
+          '
           "$RUNNER_TEMP/probe/bin/pip" check
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/probe/bin/discord-mb" --version
