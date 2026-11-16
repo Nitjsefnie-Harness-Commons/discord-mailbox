@@ -66,7 +66,7 @@ def _cli(argv, stdin=None, env=""):
 
 
 def _value():
-    return secrets.token_urlsafe(24)
+    return "v" + secrets.token_urlsafe(24)     # a leading "-" would parse as an option
 
 
 def _hide(detail, names):
