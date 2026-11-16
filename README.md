@@ -90,10 +90,11 @@ invisible to git and will NOT appear in `git status`;
 `git check-ignore -v <path>` names the rule hiding it. Never "fix" it by
 loosening the leading `*`.
 
-**The comment-share and size records** are kept by their actions, and they
-never rise. With the deploy key of the `main-push` environment, each push to
-`main` tightens `.github/comment-share.json` and `.github/size-baseline.json`
-and commits any change itself. The adoption pull request seeded
+**The comment-share and size records** are kept by their actions.
+Per-file records are never raised; the `tests/` tree budget rises only in a
+pull request carrying a `feat` commit. With the deploy key of the `main-push`
+environment, each push to `main` tightens `.github/comment-share.json` and
+`.github/size-baseline.json` and commits any change itself. The adoption pull request seeded
 `.github/comment-share.json` by running the action's tighten over its own
 head (`COMMENT_RATCHET_MODE=tighten GITHUB_WORKSPACE="$PWD" python3 -I
 <comment-ratchet checkout>/run.py`); the first push to `main` seeds the size
