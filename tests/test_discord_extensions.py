@@ -706,10 +706,9 @@ def test_cancel_is_safe_on_an_empty_or_finished_list(tmp):
 def test_deliver_hands_a_relayed_message_to_the_inbox_pipeline(tmp):
     """A relay must reach the same pipeline a mention or DM does.
 
-    `emit` was the only delivery an extension had, and it publishes a custom
-    event and nothing else: no inbox JSON, no receipt reaction, no attachment
-    metadata, and no record `send --reply-to` could resolve. A member's PDF was
-    silently dropped that way (issue #220).
+    `emit` publishes a custom event and nothing else: no inbox JSON, no receipt
+    reaction, no attachment metadata, and no record `send --reply-to` could
+    resolve, so a relay through it silently drops a member's PDF.
     """
     m = _mod(tmp)
     delivered = []

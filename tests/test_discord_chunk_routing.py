@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""discord_mb.continuation_chunk_for — routing for chunk-2+ frames (issue #10).
+"""discord_mb.continuation_chunk_for — routing for chunk-2+ frames.
 
 A chunked mailbox send mentions the recipient only on chunk 1 (the one-ping
-property), so the mention-based routing gate produced no inbox record for
-chunks 2+ — the recipient saw a message ending mid-thought. These pin the
+property), so the mention-based routing gate gives chunks 2+ no inbox record,
+and the recipient would see a message ending mid-thought. These pin the
 frame-based detection that lets continuation chunks through: shape, chunk
 index >= 2, and recipient match.
 """

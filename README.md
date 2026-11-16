@@ -298,7 +298,7 @@ not "tidy" one back to `@v4`: a tag is a moving pointer, and these jobs
 run with a repository token. Dependabot keeps the hashes current.
 
 **`.gitignore` is deny-by-default**: `*` first, then each shipped path
-named back. `build/`, `dist/` and `*.egg-info/` need no rules at all now —
+named back. `build/`, `dist/` and `*.egg-info/` need no rules at all —
 they are simply never named back. A new file of an unlisted type is
 invisible to git and will NOT appear in `git status`;
 `git check-ignore -v <path>` names the rule hiding it. Never "fix" it by

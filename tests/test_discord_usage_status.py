@@ -272,10 +272,10 @@ def test_non_lease_names_are_not_leases(_tmp):
 def test_codex_is_a_board_provider(_tmp):
     """Codex belongs on the board on the same terms as Claude and Kimi.
 
-    usage_query already reports Codex under the same `five_hour`/`weekly` keys
-    the board renders, but the provider tuple listed only Claude and Kimi, so a
-    `codex` voice channel was never matched and a Codex account's burn was
-    invisible beside the other two (issue #221).
+    usage_query reports Codex under the same `five_hour`/`weekly` keys the board
+    renders, so the provider tuple has to list it too: without that, a `codex`
+    voice channel is never matched and a Codex account's burn is invisible
+    beside the other two.
     """
     mb = _mb()
     if mb is None:
@@ -331,10 +331,10 @@ def test_a_single_dataless_period_leaves_the_board_alone(_tmp):
 
 
 def test_a_board_with_no_reading_stops_asserting_a_figure(_tmp):
-    """Issue #10: the board kept publishing its last numbers indefinitely.
+    """A reading that has gone stale must say so in the board's name.
 
-    Observed live: `7d 🟢 43%` stayed up for over twelve hours while the account
-    was actually at 68%, and nothing in the name said the reading was old.
+    Otherwise `7d 🟢 43%` can stay up for twelve hours or more while the account
+    is actually at 68%, and nothing in the name says the reading is old.
     """
     mb = _mb()
     if mb is None:
@@ -449,9 +449,9 @@ def test_an_empty_fetch_no_longer_ends_the_pass(_tmp):
     """`update_usage_status` is a closure in the connector's run scope and
     cannot be called without a live gateway, so pin the shape instead.
 
-    It used to `return` the moment `fetch_usage` came back empty, which is what
-    left every board holding its last figures. The empty read has to reach the
-    per-channel planning below it.
+    It must not `return` when `fetch_usage` comes back empty: that early return
+    leaves every board holding its last figures. The empty read has to reach
+    the per-channel planning below it.
     """
     source = (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
         encoding="utf-8")
