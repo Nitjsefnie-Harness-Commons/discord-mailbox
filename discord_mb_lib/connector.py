@@ -12,6 +12,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _ConnectorOwnershipError, _EventStreamReader,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
+from ._delivery import _DeliveryGates
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._meta_claim import _claim
 
@@ -341,6 +342,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 f'{TOKEN_DIR}/{identity}.token')
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')
+        gates = _DeliveryGates(log)
 
         if claude_pid is None:
             claude_pid = find_parent_pid_from(os.getppid(), flavor)
@@ -2232,13 +2234,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             return True
         # Continuation chunks of a train addressed to us carry no mention (it
         # rides chunk 1 for the one-ping property) — route on the frame instead.
-        return continuation_chunk_for(msg.content, identity)
+        return 'continuation' if continuation_chunk_for(msg.content, identity) else False
 
     def reverse_identity(user_id):
-        for name, uid in state['identity_map'].items():
-            if uid == user_id:
-                return name
-        return None
+        return _DeliveryGates.identity_for(state['identity_map'], user_id)
 
     async def resolve_pins(chobj):
         '''Pinned messages for a channel, TTL-cached 60s per channel id.
@@ -2486,15 +2485,15 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                               if extras['rendered'] != (msg.content or '').strip() else None),
         }
 
-    async def write_inbox(msg, source='live'):
+    async def write_inbox(msg, source='live', continuation=False):
         frm = reverse_identity(msg.author.id) or msg.author.name
         body = msg.content
         inbox = inbox_dir(identity)
         path = inbox / f'{msg.id}.json'
-        if path.exists():
-            # dedup: already seen (e.g. backfill overlap with live on_message,
-            # or an extension relaying a message that also mentions us).
-            return path
+        if path.exists() or gates.refuses(msg, continuation, state['identity_map']):
+            # dedup: already seen (an extension relaying a message that also mentions
+            # us), checked first so no gate judges it twice; or a delivery gate refused it.
+            return path if path.exists() else None
         is_dm = isinstance(msg.channel, discord.DMChannel)
         to_label, subject = parse_message_header(body, identity)
         # Resolve channel / guild / identity context. Best-effort: it enriches the
@@ -2560,10 +2559,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
     @client.event
     async def on_message(msg):
-        if not routing_match(msg):
+        if not (route := routing_match(msg)):
             return
         try:
-            await write_inbox(msg)
+            await write_inbox(msg, continuation=route == 'continuation')
         except Exception as e:
             log(f'on_message error: {e}')
 
@@ -2935,6 +2934,7 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
 
 __all__ = [
     'ConnectorApp',
+    '_DeliveryGates',
     '_claim',
     '_claim_ownership',
     '_open_dm_channel',
