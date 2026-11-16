@@ -12,6 +12,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _ConnectorOwnershipError, _EventStreamReader,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
+from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
@@ -344,6 +345,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')
         gates = _DeliveryGates.from_settings(log)
+        creds_trust = _CredsTrust.from_settings(TOKEN_DIR, log)
         directory = _Directory(log)
 
         if claude_pid is None:
@@ -538,10 +540,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 resp.update(result)
                 resp['ok'] = True
             elif op == 'creds-list':
-                resp['entries'] = await op_creds_list()
+                resp.update(await op_creds_list())
                 resp['ok'] = True
             elif op == 'creds-get':
-                resp['entries'] = await op_creds_get(req.get('domain', ''), login=req.get('login'))
+                resp.update(await op_creds_get(req.get('domain', ''), login=req.get('login')))
                 resp['ok'] = True
             elif op == 'creds-add':
                 result = await op_creds_add(req.get('domain', ''), req.get('login', ''), req.get('password', ''), upsert=bool(req.get('upsert')))
@@ -802,34 +804,18 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             saved.append({'path': str(out), 'filename': a.filename, 'size': a.size, 'url': a.url})
         return {'saved': saved}
 
-    def _parse_cred(content):
-        'Extract {domain, login, password} from a message with exactly 3 fenced code blocks.'
-        import re as _re
-        # Non-greedy capture between ``` fences, with optional language tag
-        # on the opening fence. Earlier version used .*? + DOTALL which was
-        # already non-greedy but combined badly when a message contained
-        # 4+ fenced blocks (the parser would silently misalign by treating
-        # the 4th+ blocks as continuation).
-        blocks = _re.findall(r'```(?:[^\n]*\n)?(.*?)```', content or '', _re.DOTALL)
-        if len(blocks) != 3:
-            return None
-        return {
-            'domain': blocks[0].strip(),
-            'login': blocks[1].strip(),
-            'password': blocks[2].strip(),
-        }
-
     async def _fetch_creds():
         channel = ch('credentials')
         if channel is None:
             raise RuntimeError(f'credentials channel #{CREDS_CHANNEL_NAME} not resolved')
-        entries = []
+        entries, trusted = [], creds_trust.ids(client.user and client.user.id)
         async for m in channel.history(limit=None):
-            parsed = _parse_cred(m.content or '')
+            parsed = _CredsTrust.parse_entry(m.content)
             if parsed is None:
                 continue
             parsed['msg_id'] = str(m.id)
             parsed['author'] = _Directory.label_of(state['identity_map'], m.author)
+            parsed['author_id'], parsed['trusted'] = str(m.author.id), m.author.id in trusted
             parsed['created'] = m.created_at.isoformat()
             entries.append(parsed)
         # newest-first from history; reverse for chronological
@@ -837,10 +823,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         return entries
 
     async def op_creds_list():
-        return await _fetch_creds()
+        return creds_trust.answer(await _fetch_creds())
 
     async def op_creds_get(domain, login=None):
-        'Fetch credential(s) for a domain, optionally filtered by login. Returns all matches (list).'
+        'Entries for a domain, optionally filtered by login, in the shape creds_trust.answer gives.'
         if not domain:
             raise ValueError('domain required')
         domain_lc = domain.strip().lower()
@@ -851,7 +837,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if e['domain'].lower() == domain_lc
             and (login_lc is None or e['login'].lower() == login_lc)
         ]
-        return matches
+        return creds_trust.answer(matches)
 
     async def op_creds_add(domain, login, password, upsert=False):
         if not (domain and login and password):
@@ -860,7 +846,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if channel is None:
             raise RuntimeError(f'credentials channel #{CREDS_CHANNEL_NAME} not resolved')
         # Dedup on (domain, login) pair — a single platform can have many logins.
-        existing = await op_creds_get(domain, login=login)
+        existing = (await op_creds_get(domain, login=login))['entries']
         if existing and not upsert:
             return {
                 'action': 'skipped',
@@ -2889,6 +2875,7 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
 
 __all__ = [
     'ConnectorApp',
+    '_CredsTrust',
     '_DeliveryGates',
     '_Directory',
     '_claim',
