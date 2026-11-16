@@ -33,23 +33,31 @@ def _resolve(path: Path) -> tuple[Path, list[Path]]:
 
 
 def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: int | None = None,
-                    stat_of: Callable[[Path], os.stat_result] = os.stat) -> str | None:
+                    stat_of: Callable[[Path | int], os.stat_result] = os.stat) -> tuple[bytes | None, str | None]:
     if not posix:
-        return None
+        return None, None
     euid = os.geteuid() if euid is None else euid
     real, holders = _resolve(Path(path).absolute())
     cached, cache_holders = _resolve(Path(cache_from_source(str(Path(path)))).absolute())
-    warnings = []
-    for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, *holders, *cache_holders, cached.parent, cached)):
-        try:
-            info = stat_of(target)
-        except FileNotFoundError:   # the loader refuses a missing module; the import writes a missing cache
-            continue
-        mode = stat.S_IMODE(info.st_mode)
-        if mode & 0o002:
-            raise PermissionError(f'{target} is writable by other users')
-        if info.st_uid not in (euid, 0):
-            raise PermissionError(f'{target} is owned by uid {info.st_uid}, not by this user or root')
-        if mode & 0o020:
-            warnings.append(f'{target} is group-writable')
-    return '; '.join(warnings) or None
+    try:    # `real` is resolved, so a symlink there now is a swap; O_NONBLOCK keeps a FIFO from hanging
+        fd = os.open(real, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
+    except FileNotFoundError:
+        raise FileNotFoundError(f'no such file: {path}') from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise FileNotFoundError(f'no such file: {path}')
+    with open(fd, 'rb') as module:
+        warnings = []
+        for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, *holders, *cache_holders, cached.parent, cached)):
+            try:
+                info = stat_of(fd if target == real else target)
+            except FileNotFoundError:   # the import writes a missing cache
+                continue
+            mode = stat.S_IMODE(info.st_mode)
+            if mode & 0o002:
+                raise PermissionError(f'{target} is writable by other users')
+            if info.st_uid not in (euid, 0):
+                raise PermissionError(f'{target} is owned by uid {info.st_uid}, not by this user or root')
+            if mode & 0o020:
+                warnings.append(f'{target} is group-writable')
+        return module.read(), '; '.join(warnings) or None
