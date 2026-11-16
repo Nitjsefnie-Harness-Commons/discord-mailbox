@@ -35,7 +35,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push that an open pull request's run also gates skips the jobs below;
+  # `!cancelled()` in their `if:` still runs them if this lookup fails.
+  guard:
+    uses: ./.github/workflows/open-pull-request.yml
+    permissions:
+      pull-requests: read
+
   suites:
+    # No skip-note in the name: GitHub names each leg from the matrix,
+    # which a job skipped by `if:` never expands.
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +78,9 @@ jobs:
     # Proves the published artifact, not just the checkout: an import that
     # resolves only because the source tree is on sys.path would pass the
     # suites above and still ship a wheel that cannot start.
+    name: wheel${{ needs.guard.outputs.skip-note }}
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -106,6 +120,9 @@ jobs:
     # it reached CI unnoticed. This lane forces that path on a free runner, and
     # points TMPDIR at a symlink so the macOS /var -> /private/var aliasing is
     # exercised with it.
+    name: portable${{ needs.guard.outputs.skip-note }}
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -137,6 +154,9 @@ jobs:
     # 3 OSes x 3 Pythons, and coverage of the same code nine times over
     # tells you the same number nine times. One run, on the newest Python
     # and the cheapest runner.
+    name: coverage${{ needs.guard.outputs.skip-note }}
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
