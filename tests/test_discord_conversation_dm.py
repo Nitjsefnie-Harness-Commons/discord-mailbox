@@ -356,7 +356,8 @@ def test_the_cli_forwards_the_dm_user_in_the_request(tmp):
             core.conversation_cli("me", 5, channel_id="1", dm="alice", before_id="2", after_id="3")
     finally:
         core._meta_request = original
-    assert sent == [{"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice", "before_id": "2", "after_id": "3"}], sent
+    assert sent == [{"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice",
+                     "before_id": "2", "after_id": "3"}], sent
 
 
 def test_the_parser_wires_dm_and_refuses_it_with_channel(tmp):
