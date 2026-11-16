@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from . import _control_files
+from . import _retention
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -270,13 +271,13 @@ def resolve_token_and_flavor(identity, requested_flavor=None):
 def state_dir(identity):
     _ensure_state_root()
     d = STATE_ROOT / identity
-    for sub in ('inbox', 'outbox', 'inbox-metadata', 'outbox-metadata'):
+    for sub in (_retention.INBOX, 'outbox', 'inbox-metadata', 'outbox-metadata'):
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
 
 
 def inbox_dir(identity):
-    return state_dir(identity) / 'inbox'
+    return state_dir(identity) / _retention.INBOX
 
 
 def pins_dir():
@@ -287,7 +288,7 @@ def pins_dir():
     `tempfile.gettempdir()` — `/tmp` on POSIX, `%TEMP%` on Windows; never
     hardcoded.'''
     _ensure_state_root()
-    return STATE_ROOT / 'pins'
+    return STATE_ROOT / _retention.PINS
 
 
 def msg_cache_dir():
@@ -296,7 +297,7 @@ def msg_cache_dir():
     `<tempdir>/discord-mailbox/messages/<channel_id>/<msg_id>.json`. Same
     rationale as pins_dir() — a message belongs to a channel, not an identity.'''
     _ensure_state_root()
-    return STATE_ROOT / 'messages'
+    return STATE_ROOT / _retention.MESSAGES
 
 
 def outbox_dir(identity):
@@ -2738,6 +2739,7 @@ __all__ = [
     '_flat_component',
     '_linklike',
     '_meta_request',
+    '_retention',
     '_take_response',
     '_withdraw',
     'argparse',
