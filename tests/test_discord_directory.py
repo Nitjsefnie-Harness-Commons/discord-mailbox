@@ -180,7 +180,8 @@ def test_startup_keeps_the_entry_the_bot_wrote_though_an_older_account_holds_its
 
     client, _ = _run(tmp, [_msg(2, BOT, f"**dir-test** · <@{BOT}>"),        # newest first
                            _msg(1, MALLORY, f"**dir-test** · <@{MALLORY}>")], script)
-    assert len(client.directory.reads) == 1 and client.directory.sent == [], (client.directory.reads, client.directory.sent)
+    assert len(client.directory.reads) == 1 and client.directory.sent == [], (
+        client.directory.reads, client.directory.sent)
 
 
 def main():
