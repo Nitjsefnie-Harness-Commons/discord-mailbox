@@ -13,12 +13,12 @@ def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: in
     euid = os.geteuid() if euid is None else euid
     real = Path(path).resolve()
     warnings = []
-    # Either directory lets its writer swap the module; the cache lets it swap its bytecode.
+    # Whoever can write these can swap the module or its bytecode.
     for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent,
                                  Path(cache_from_source(str(Path(path)))).parent)):
         try:
             info = stat_of(target)
-        except FileNotFoundError:   # the loader reports a missing module; the import creates its cache
+        except FileNotFoundError:
             continue
         mode = stat.S_IMODE(info.st_mode)
         if mode & 0o002:
