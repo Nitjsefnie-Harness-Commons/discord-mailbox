@@ -52,6 +52,10 @@ def test_the_oldest_self_authored_entry_holds_a_name(tmp):
     assert len(logs) == 1 and all(s in logs[0] for s in ("'probe'", str(PROBE), str(MALLORY))), logs
     assert D(logs.append).bind_names([("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE)]) == {
         "probe": MALLORY}, "the newer entry won"
+    # `user:` is refused for a bound entry only; an entry another account wrote stays silent.
+    logs.clear()
+    assert D(logs.append).bind_names([("user:eve", PROBE, MALLORY), ("USER:eve", MALLORY, MALLORY)]) == {}
+    assert len(logs) == 1 and "USER:eve" in logs[0] and str(PROBE) not in logs[0], logs
 
 
 # --- the real connector -----------------------------------------------------
