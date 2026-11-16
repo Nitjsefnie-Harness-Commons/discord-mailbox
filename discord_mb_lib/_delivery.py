@@ -52,7 +52,7 @@ class _DeliveryGates:
     def __init__(self, users: frozenset[int], guilds: frozenset[int],
                  rate: tuple[int, int] | None, log: Callable[[str], None]):
         self.users, self.guilds, self.rate, self._log = users, guilds, rate, log
-        self._train_authors: collections.OrderedDict[TrainKey, int] = collections.OrderedDict()
+        self._train_authors: collections.OrderedDict[TrainKey, int | None] = collections.OrderedDict()
         self._delivered: dict[int, collections.deque[float]] = {}
         self._warned: dict[int, float] = {}
         self._swept = -math.inf
@@ -81,7 +81,9 @@ class _DeliveryGates:
         if self.rate is not None and self._over_rate(msg, time.monotonic() if now is None else now, *self.rate):
             return True
         if train is not None and train[1] == 1:
-            self._train_authors[train[0]] = author
+            # A second author's chunk 1 for the key makes it ambiguous (None): nobody vouches for it.
+            kept = self._train_authors.get(train[0], author)
+            self._train_authors[train[0]] = author if kept == author else None
             self._train_authors.move_to_end(train[0])
             if len(self._train_authors) > TRAIN_MEMORY:
                 self._train_authors.popitem(last=False)
