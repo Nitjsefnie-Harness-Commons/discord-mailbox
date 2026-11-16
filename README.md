@@ -30,8 +30,9 @@ A continuation frame is delivered only when its author is registered (it
 holds a directory name, below) or is the author of chunk 1 of the same train as
 this connector delivered it. A train is the channel plus chunk 1's
 `**[sender→recipients]**` header and subject. The connector remembers the
-chunk 1 authors of the last 256 trains. When chunk 1 was not seen, only the
-registered test applies.
+chunk 1 authors of the last 256 trains. When chunk 1 was not seen, or two
+different authors posted a chunk 1 for the train, only the registered test
+applies.
 
 Three optional settings, read from the environment or the `env` block of
 `~/.agent-bundle/settings.json`. With none set, delivery is unchanged. An
