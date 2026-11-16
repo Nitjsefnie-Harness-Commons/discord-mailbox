@@ -157,8 +157,9 @@ jobs:
           REPO: ${{ github.repository }}
         # Three details that are each a way this can be wrong:
         #   - it excludes ITSELF, or it would wait on a job waiting on it;
-        #   - it requires at least one other check to exist, so it cannot
-        #     race ahead and tag before CI has even been scheduled;
+        #   - it requires at least one other check that is not `skipped`
+        #     (a skip gates nothing), so it cannot race ahead and tag
+        #     before CI has even been scheduled;
         #   - `cancelled` counts as failure. A cancelled run means a newer
         #     push superseded this SHA, which is not a commit to release.
         run: |
@@ -170,7 +171,7 @@ jobs:
               --jq '.check_runs[] | select(.name | startswith("tag") | not)
                     | "\(.status)\t\(.conclusion)\t\(.name)"')"
 
-            if [ -z "$runs" ]; then
+            if [ -z "$(echo "$runs" | awk -F'\t' '$2 != "skipped"')" ]; then
               echo "no other check runs reported yet, waiting..."
               sleep 20
               continue
