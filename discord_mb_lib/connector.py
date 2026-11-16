@@ -21,6 +21,7 @@ from . import _linked
 from ._meta_claim import _claim
 from . import _control_files
 from . import _ext_trust
+from . import _retention
 from . import _secrets
 
 
@@ -2513,6 +2514,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except Exception as e:
             log(f'on_message error: {e}')
 
+    _retention.watch(client, STATE_ROOT, log)
+
     async def refresh_directory(force=False):
         channel = ch('directory')
         if channel is None or not directory.scan_due(force):
@@ -2865,6 +2868,7 @@ __all__ = [
     '_open_dm_channel',
     '_recorded_owner',
     '_resolve_dm_user_id',
+    '_retention',
     '_run_connector',
     '_secrets',
     'connector_main',
