@@ -104,17 +104,17 @@ async def deliver_during_delete(client, msg_id, held, channel):
         reached.set()
         await release.wait()
 
-    async def pins(limit=50):
+    async def pins(limit=50):   # fetched before the deletion: it pins this message, which links to itself
         await hold()
-        for pinned in ()[:limit]:
-            yield pinned
+        yield msg
 
     async def reaction(emoji):
         await hold()
         raise RuntimeError(f"404 Unknown Message: {emoji}")   # a deleted message takes no reaction
-    msg = client.message(msg_id, ALICE, f"<@{BOT}> hi", channel or client.bridge, mentions=(BOT,))
+    link = f" https://discord.com/channels/{GUILD}/{BRIDGE}/{msg_id}" if held == "pins" else ""
+    msg = client.message(msg_id, ALICE, f"<@{BOT}> hi{link}", channel or client.bridge, mentions=(BOT,))
     if held == "pins":
-        client.bridge.pins = pins
+        client.bridge.pins, client.bridge.fetch_message = pins, lambda _message_id: asyncio.sleep(0, msg)
     else:
         msg.add_reaction = reaction
     task = asyncio.ensure_future(client.on_message(msg))
@@ -125,7 +125,7 @@ async def deliver_during_delete(client, msg_id, held, channel):
         await client.on_raw_message_delete(discord.RawMessageDeleteEvent({"id": msg_id, "channel_id": BRIDGE}))
     release.set()
     await task
-    vars(client.bridge).pop("pins", None)
+    vars(client.bridge).pop("pins", None)   # fetch_message stays: only the "pins" row's message links
 
 
 def test_a_message_deleted_while_its_record_is_written_leaves_no_record(tmp):
@@ -136,12 +136,13 @@ def test_a_message_deleted_while_its_record_is_written_leaves_no_record(tmp):
 
     async def script(client):
         inbox.mkdir(parents=True)
-        connector.inbox_dir = lambda identity: inbox   # the inbox the deletion handler sweeps
+        connector.inbox_dir = lambda identity: inbox   # the stores the deletion handler sweeps
+        connector.msg_cache_dir, connector.pins_dir = (lambda: inbox.parents[1] / "messages"), (lambda: inbox.parents[1] / "pins")
         for msg_id, held, channel in ((801, "pins", None), (802, "reaction", None), (804, "reaction", client.dm(98))):
             await deliver_during_delete(client, msg_id, held, channel)
         await client.on_message(client.message(803, ALICE, "kept", client.dm(970000000000000099)))
     _gateway.run(tmp, script)
-    assert sorted(p.name for p in inbox.iterdir()) == ["803.json"], list(inbox.iterdir())
+    assert (left := stored(Path(tmp, "mailbox"))) == ["gate-test/inbox/803"], left   # the inbox, messages/, pins/
 
 
 def test_the_remembered_deletions_are_bounded_and_drop_the_oldest(tmp):

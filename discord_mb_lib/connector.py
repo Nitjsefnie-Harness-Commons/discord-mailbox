@@ -2224,8 +2224,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 ptmp = ppath.with_suffix('.json.tmp')
                 ptmp.write_text(json.dumps(pin_payload, indent=2), encoding='utf-8')
                 ptmp.replace(ppath)
-                entries.append({'msg_id': str(p.id), 'from': pfrom,
-                                'created': created, 'path': str(ppath)})
+                if settle_record(ppath, p):
+                    entries.append({'msg_id': str(p.id), 'from': pfrom, 'created': created, 'path': str(ppath)})
         except Exception as e:
             log(f'pins() failed for channel {cid}: {type(e).__name__}: {e}')
             entries = hit[1] if hit else []
@@ -2252,8 +2252,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         mtmp = mpath.with_suffix('.json.tmp')
         mtmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
         mtmp.replace(mpath)
+        kept = settle_record(mpath, m)
         return {'msg_id': str(m.id), 'channel_id': str(m.channel.id),
-                'from': payload['from'], 'created': payload['created'], 'path': str(mpath)}
+                'from': payload['from'], 'created': payload['created'], 'path': kept and str(kept)}
 
     async def fetch_and_save_message(channel_id, message_id):
         'Resolve a channel by id, fetch a message, persist it. Returns summary dict or raises.'
@@ -2503,7 +2504,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         payload['receipt'] = receipt
         tmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
         tmp.replace(path)
-        return settle_inbox(path, msg)
+        return settle_record(path, msg)
 
     @client.event
     async def on_message(msg):
@@ -2514,7 +2515,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except Exception as e:
             log(f'on_message error: {e}')
 
-    settle_inbox = _retention.watch(client, STATE_ROOT, log)
+    settle_record = _retention.watch(client, STATE_ROOT, log)
 
     async def refresh_directory(force=False):
         channel = ch('directory')
