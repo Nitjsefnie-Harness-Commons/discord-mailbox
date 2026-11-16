@@ -105,7 +105,7 @@ def forget_channel(root: Path, channel_id, forgotten: dict) -> int:
         return record.get('channel_id') == cid
 
     removed = _remove_where(_inboxes(root), from_channel)
-    ids = {cid, *filter(_ID.fullmatch, threads)}
+    ids = {cid, *threads}
     _remember(forgotten, ids)
     for directory in (d for d in _caches(root) if d.name in ids):
         removed += sum(_unlink(p) for p in _records(directory, _CACHED))
