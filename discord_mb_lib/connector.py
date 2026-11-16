@@ -17,6 +17,7 @@ from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
+from ._send_errors import _send_failure
 from . import _linked
 from ._meta_claim import _claim
 from . import _control_files
@@ -1968,7 +1969,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             try:
                 channel = await _open_dm_channel(client, uid)
             except Exception as e:
-                raise SendRetry(f'DM channel for {to!r} unavailable: {e}') from e
+                raise _send_failure(e, f'DM channel for {to!r} unavailable', (404,)) from e
         elif reply_to:
             if not reply_channel_id:
                 reply_channel_id, _ = await resolve_reply_target(reply_to)
@@ -1976,7 +1977,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 channel = (client.get_channel(int(reply_channel_id))
                            or await client.fetch_channel(int(reply_channel_id)))
             except Exception as e:
-                raise SendRetry(f'fetch reply channel {reply_channel_id} failed: {e}') from e
+                raise _send_failure(e, f'fetch reply channel {reply_channel_id} failed', (403, 404)) from e
         elif data.get('channel'):
             try:
                 channel = await resolve_channel_ref(data['channel'])
@@ -2082,10 +2083,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                         raise SendRetry(f'rate limited twice: {e2}') from e2
                 elif sent_ids:
                     raise SendError(f'chunk {i + 1}/{n} failed: {e} (already sent: {sent_ids})') from e
-                elif isinstance(e, discord.Forbidden):
-                    raise SendError(f'forbidden: {e}') from e
                 else:
-                    raise SendRetry(f'send failed: {e}') from e
+                    raise _send_failure(e, 'send failed', (400, 403)) from e
             except (SendError, SendRetry):
                 raise
             except Exception as e:
@@ -2858,6 +2857,7 @@ __all__ = [
     '_resolve_dm_user_id',
     '_run_connector',
     '_secrets',
+    '_send_failure',
     'connector_main',
     'leech_main',
 ]
