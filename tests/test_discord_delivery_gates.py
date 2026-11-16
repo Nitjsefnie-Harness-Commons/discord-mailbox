@@ -3,31 +3,25 @@
 
 The pure half drives `discord_mb_lib._delivery` directly with synthetic
 messages and a clock that starts far from zero. The connector half runs the REAL `on_message` and `write_inbox`
-closures on a stand-in gateway client (the
-`tests/test_discord_conversation_dm.py` pattern) and reads what reached the
-inbox, the event stream and the receipt reactions.
+closures on the stand-in gateway client (`tests/_gateway.py`) and reads what
+reached the inbox, the event stream and the receipt reactions.
 """
-import asyncio
-import contextlib
-import datetime
-import io
-import json
 import os
 import sys
 import types
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gateway  # noqa: E402
 import _util  # noqa: E402
+from _gateway import ALICE, BOT, GUILD, T0  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
 from discord_mb_lib import _delivery as D  # noqa: E402
 
-BOT, ALICE, RAW, MALLORY, OTHER = (940000000000000001, 940000000000000002, 940000000000000003,
-                                   940000000000000004, 940000000000000005)
-GUILD, OTHER_GUILD = 950000000000000001, 950000000000000002
+RAW, MALLORY, OTHER = 940000000000000003, 940000000000000004, 940000000000000005
+OTHER_GUILD = 950000000000000002
 CHAN, OTHER_CHAN = 960000000000000001, 960000000000000002
-T0 = 1_000_000.0                      # a monotonic-looking origin, never 0
 DIRECTORY = {"bridge-bot": BOT, "alice": ALICE}
 CHUNK1 = f"<@{BOT}> **[probe→alpha]** report\nfirst part"
 CHUNK2 = "**[probe→alpha]** report (2/3)\nsecond part"
@@ -206,115 +200,13 @@ def test_the_cap_forgets_senders_once_their_window_has_passed(tmp):
 
 # --- the real connector -----------------------------------------------------
 
-def _connector():
-    try:
-        import discord
-        from discord_mb_lib import connector
-    except ImportError:
-        return None, None
-    return connector, discord
-
-
 def _run(tmp, env, script):
-    """Run the real connector on a stand-in client; `script(client, kinds)` sends
-    messages through on_message. -> (inbox records, message events, reactions, log)."""
-    c, discord = _connector()
-    if c is None:
+    """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; None without discord.py."""
+    client = _gateway.run(tmp, script, env=env, extension=True)
+    if client is None:
         return None
-    root = Path(tmp)
-    reactions, clients = [], []
-
-    # The stand-in channels skip discord.py's __init__: it needs a live gateway state.
-    class Text(discord.TextChannel):
-        def __init__(self, channel_id, name, history=()):  # pylint: disable=super-init-not-called
-            self.id, self.name, self._history = channel_id, name, list(history)
-
-        async def history(self, **kwargs):
-            for m in self._history:
-                yield m
-
-        async def send(self, *args, **kwargs):
-            return None
-
-    class DM(discord.DMChannel):
-        def __init__(self, channel_id):  # pylint: disable=super-init-not-called
-            self.id = channel_id
-
-    def message(msg_id, author, content, channel, guild=None, mentions=()):
-        async def add_reaction(emoji):
-            reactions.append((msg_id, emoji))
-        return types.SimpleNamespace(
-            id=msg_id, content=content, pinned=False, guild=guild, channel=channel,
-            author=types.SimpleNamespace(id=author, name=f"user{author}"),
-            created_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-            attachments=[], mentions=[types.SimpleNamespace(id=u) for u in mentions],
-            role_mentions=[], embeds=[], components=[], poll=None, reactions=[],
-            message_snapshots=[], add_reaction=add_reaction)
-
-    directory = [message(1, BOT, f"**bridge-bot** · <@{BOT}>", None),
-                 message(2, ALICE, f"**alice** · <@{ALICE}>", None)]
-    guild = types.SimpleNamespace(id=GUILD, name="guild", roles=[], text_channels=[
-        Text(CHAN, c.BRIDGE_CHANNEL_NAME), Text(CHAN + 1, c.DIRECTORY_CHANNEL_NAME, directory)])
-    ext = root / "relay.py"
-    ext.write_text("async def setup(ctx):\n    ctx.client.ext_ctx = ctx\n", encoding="utf-8")
-
-    class Client:
-        def __init__(self, *args, **kwargs):
-            clients.append(self)
-            self.tasks, self.handlers, self.closed = [], {}, False
-            self.user = types.SimpleNamespace(id=BOT)
-            self.guilds = [guild]
-            self.loop = types.SimpleNamespace(create_task=self.tasks.append)
-            self.kinds = types.SimpleNamespace(text=guild.text_channels[0], dm=DM, message=message,
-                                               guild=types.SimpleNamespace(id=GUILD))
-
-        def event(self, function):
-            self.handlers[function.__name__] = function
-            return function
-
-        def is_closed(self):
-            return self.closed
-
-        def run(self, *args, **kwargs):
-            asyncio.run(self.drive())
-
-        async def drive(self):
-            await self.handlers["on_ready"]()
-            for coro in self.tasks:
-                coro.close()
-            await script(self, self.kinds)
-
-    swaps = {"state_dir": lambda identity: root / "state", "inbox_dir": lambda identity: root / "inbox",
-             "sweep_status_plugin": lambda identity: None,
-             "default_status_plugin": lambda flavor: root / "no-such-plugin",
-             "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)},
-             "msg_cache_dir": lambda: root / "msgs"}
-    for d in ("state", "inbox", "msgs", "locks"):
-        (root / d).mkdir(exist_ok=True)
-    saved = {n: getattr(c, n) for n in swaps}
-    saved_env = {n: os.environ.get(n) for n in (*env, "DISCORD_MB_TEST_LOCK_ROOT")}
-    saved_client, out = discord.Client, io.StringIO()
-    try:
-        for n, v in swaps.items():
-            setattr(c, n, v)
-        os.environ.update({"DISCORD_MB_TEST_LOCK_ROOT": str(root / "locks"), **env})
-        discord.Client = Client
-        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(out):
-            c.connector_main("gate-test", claude_pid=os.getpid(), token="unused",
-                             log_path=root / "connector.log", flavor="claude")
-    finally:
-        for n, v in saved.items():
-            setattr(c, n, v)
-        for n, v in saved_env.items():
-            if v is None:
-                os.environ.pop(n, None)
-            else:
-                os.environ[n] = v
-        discord.Client = saved_client
-    events = [json.loads(line) for line in out.getvalue().splitlines() if line.startswith("{")]
-    return ({int(p.stem) for p in (root / "inbox").glob("*.json")},
-            [int(e["msg_id"]) for e in events if e.get("event") == "message"],
-            [m for m, _ in reactions], (root / "connector.log").read_text(encoding="utf-8")), clients[0]
+    return (_gateway.inbox(tmp), [int(e["msg_id"]) for e in client.events if e.get("event") == "message"],
+            [m for m, _ in client.reactions], client.log), client
 
 
 def _clear_env():
@@ -322,12 +214,12 @@ def _clear_env():
 
 
 def test_the_connector_applies_the_allow_lists_and_the_cap_to_both_writers(tmp):
-    async def script(client, k):
-        on_message, dm = client.handlers["on_message"], k.dm(970000000000000001)
+    async def script(client):
+        on_message, dm, k = client.handlers["on_message"], client.dm(970000000000000001), client
         await on_message(k.message(101, ALICE, "listed user", dm))
         await on_message(k.message(102, MALLORY, "unlisted user, no guild", dm))
         await on_message(k.message(103, ALICE, "second inside the window", dm))
-        await on_message(k.message(104, MALLORY, "listed guild", k.text, k.guild, mentions=(BOT,)))
+        await on_message(k.message(104, MALLORY, "listed guild", k.bridge, mentions=(BOT,)))
         client.relayed = [await client.ext_ctx.deliver(k.message(m, a, "relayed", dm))
                           for m, a in ((105, OTHER), (106, RAW), (106, RAW), (107, RAW))]
 
@@ -345,16 +237,16 @@ def test_the_connector_applies_the_allow_lists_and_the_cap_to_both_writers(tmp):
 
 
 def test_a_continuation_reaches_the_inbox_from_the_chunk_one_author_only(tmp):
-    async def script(client, k):
-        on_message = client.handlers["on_message"]
+    async def script(client):
+        on_message, k = client.handlers["on_message"], client
         chunk2 = CHUNK2.replace("alpha", "gate-test")
-        await on_message(k.message(201, MALLORY, chunk2, k.text, k.guild))
-        await on_message(k.message(202, RAW, CHUNK1.replace("alpha", "gate-test"), k.text, k.guild,
+        await on_message(k.message(201, MALLORY, chunk2, k.bridge))
+        await on_message(k.message(202, RAW, CHUNK1.replace("alpha", "gate-test"), k.bridge,
                                    mentions=(BOT,)))
-        await on_message(k.message(203, RAW, chunk2, k.text, k.guild))
-        await on_message(k.message(204, MALLORY, chunk2.replace("(2/3)", "(3/3)"), k.text, k.guild))
-        await on_message(k.message(205, ALICE, chunk2.replace("report", "other"), k.text, k.guild))
-        await client.ext_ctx.deliver(k.message(206, MALLORY, chunk2, k.text, k.guild))
+        await on_message(k.message(203, RAW, chunk2, k.bridge))
+        await on_message(k.message(204, MALLORY, chunk2.replace("(2/3)", "(3/3)"), k.bridge))
+        await on_message(k.message(205, ALICE, chunk2.replace("report", "other"), k.bridge))
+        await client.ext_ctx.deliver(k.message(206, MALLORY, chunk2, k.bridge))
 
     result = _run(tmp, _clear_env(), script)
     if result is None:
@@ -366,7 +258,7 @@ def test_a_continuation_reaches_the_inbox_from_the_chunk_one_author_only(tmp):
 
 
 def test_an_invalid_setting_stops_the_connector_at_startup(tmp):
-    async def script(client, k):
+    async def script(client):
         raise AssertionError("the connector reached the gateway")
 
     try:
@@ -375,7 +267,7 @@ def test_an_invalid_setting_stops_the_connector_at_startup(tmp):
         assert e.code == 1, e.code
         assert ENV[2] in (Path(tmp) / "connector.log").read_text(encoding="utf-8")
     else:
-        if _connector()[0] is not None:
+        if _gateway.have_discord():
             raise AssertionError("the connector started with an invalid setting")
 
 

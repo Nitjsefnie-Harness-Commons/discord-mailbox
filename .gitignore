@@ -90,6 +90,7 @@
 
 # ─── tests ───
 !/tests/
+!/tests/_gateway.py
 !/tests/_util.py
 !/tests/test_discord_chunk_routing.py
 !/tests/test_discord_codex_flavor.py
