@@ -5,8 +5,8 @@
   "schema_version": 1,
   "baseline": {
     "discord_mb.py": 1233,
-    "discord_mb_lib/connector.py": 2946,
-    "discord_mb_lib/core.py": 2870,
+    "discord_mb_lib/connector.py": 2880,
+    "discord_mb_lib/core.py": 2855,
     "discord_mb_lib/storage.py": 4916,
     "tests/test_discord_event_stream.py": 521,
     "tests/test_discord_extensions.py": 779,
