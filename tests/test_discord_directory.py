@@ -87,7 +87,7 @@ def test_a_newer_entry_from_another_account_does_not_take_a_name(tmp):
     client, log = _run(tmp, entries, script)
     if client is None:
         return
-    assert _inbox(tmp, 101)["from"] == f"user{MALLORY}", _inbox(tmp, 101)
+    assert _inbox(tmp, 101)["from"] == f"user:user{MALLORY}", _inbox(tmp, 101)
     assert _inbox(tmp, 102)["from"] == "probe", _inbox(tmp, 102)
     r = client.responses
     assert r["mention"]["ok"] and client.bridge.sent[0].startswith(f"<@{PROBE}> "), (r, client.bridge.sent)
