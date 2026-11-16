@@ -170,7 +170,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
              "sweep_status_plugin": lambda identity: None,
              "default_status_plugin": lambda flavor: root / "no-such-plugin",
              "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)} if extension else {},
-             "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins",
+             "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins", "TOKEN_DIR": root / "tokens",
              "meta_in_dir": lambda identity: in_dir, "meta_out_dir": lambda identity: out_dir}
     for d in (in_dir, out_dir, root / "inbox", root / "msgs", root / "locks"):
         d.mkdir(parents=True, exist_ok=True)
