@@ -32,7 +32,8 @@ def _stats(table):
 
 def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_write(tmp):
     module, link_dir = Path(tmp) / "ext.py", Path(tmp) / "links"
-    cache = Path(cache_from_source(str(module))).parent     # where the import keeps its bytecode
+    pyc = Path(cache_from_source(str(module)))     # where the import keeps its bytecode
+    cache = pyc.parent
     module.write_text("", encoding="utf-8")
     link_dir.mkdir()
     link = link_dir / "ext.py"
@@ -40,34 +41,33 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         link.symlink_to(module)
     except OSError:         # Windows without the symlink privilege
         link = None
-    owned, world, group = (0o644, ME), (0o646, ME), (0o664, ME)
-    rows = [  # (path, file stat, directory stat, link-directory stat, posix, outcome)
-        (module, owned, (0o755, ME), None, True, None),
-        (module, world, (0o755, ME), None, True, (PermissionError, f"{module} is writable by other users")),
-        (module, owned, (0o757, ME), None, True, (PermissionError, f"{tmp} is writable by other users")),
-        (module, (0o644, OTHER), (0o755, ME), None, True,
-         (PermissionError, f"{module} is owned by uid {OTHER}, not by this user or root")),
-        (module, owned, (0o755, OTHER), None, True,
-         (PermissionError, f"{tmp} is owned by uid {OTHER}, not by this user or root")),
-        (module, (0o644, 0), (0o755, 0), None, True, None),
-        (module, group, (0o755, ME), None, True, f"{module} is group-writable"),
-        (module, owned, (0o775, ME), None, True, f"{tmp} is group-writable"),
-        (module, (0o666, OTHER), (0o777, OTHER), None, False, None),
-        (Path(tmp) / "missing.py", owned, owned, None, True, None),
-        (module, owned, (0o755, ME), None, True, (PermissionError, f"{cache} is writable by other users"), (0o777, ME)),
-        (module, owned, (0o755, ME), None, True,
-         (PermissionError, f"{cache} is owned by uid {OTHER}, not by this user or root"), (0o755, OTHER)),
+    owned, world, group, owned_dir = (0o644, ME), (0o646, ME), (0o664, ME), (0o755, ME)
+    rows = [  # (path, module stat, its directory's stat, every other path's stat, posix, outcome)
+        (module, owned, (0o755, ME), {}, True, None),
+        (module, world, (0o755, ME), {}, True, (PermissionError, f"{module} is writable by other users")),
+        (module, owned, (0o757, ME), {}, True, (PermissionError, f"{tmp} is writable by other users")),
+        (module, (0o644, OTHER), (0o755, ME), {}, True, (PermissionError, f"{module} is owned by uid {OTHER}, not by this user or root")),
+        (module, owned, (0o755, OTHER), {}, True, (PermissionError, f"{tmp} is owned by uid {OTHER}, not by this user or root")),
+        (module, (0o644, 0), (0o755, 0), {}, True, None),
+        (module, group, (0o755, ME), {}, True, f"{module} is group-writable"),
+        (module, owned, (0o775, ME), {}, True, f"{tmp} is group-writable"),
+        (module, (0o666, OTHER), (0o777, OTHER), {}, False, None),
+        (Path(tmp) / "missing.py", owned, owned, {}, True, None),
+        (module, owned, (0o755, ME), {cache: (0o777, ME)}, True, (PermissionError, f"{cache} is writable by other users")),
+        (module, owned, (0o755, ME), {cache: (0o755, OTHER)}, True, (PermissionError, f"{cache} is owned by uid {OTHER}, not by this user or root")),
+        (module, owned, (0o755, ME), {cache: owned_dir, pyc: (0o644, OTHER)}, True, (PermissionError, f"{pyc} is owned by uid {OTHER}, not by this user or root")),
+        (module, owned, (0o755, ME), {cache: owned_dir, pyc: world}, True, (PermissionError, f"{pyc} is writable by other users")),
     ]
     if link is not None:
-        rows += [(link, owned, (0o755, ME), (0o777, ME), True, (PermissionError, f"{link_dir} is writable by other users")),
-                 (link, owned, (0o757, ME), (0o755, ME), True, (PermissionError, f"{tmp} is writable by other users"))]
-    for path, file_stat, dir_stat, link_stat, posix, expected, *cache_stat in rows:   # no cache_stat: no __pycache__
-        stat_of = _stats({module: file_stat, Path(tmp): dir_stat, link_dir: link_stat, cache: (cache_stat or [None])[0]})
+        rows += [(link, owned, (0o755, ME), {link_dir: (0o777, ME)}, True, (PermissionError, f"{link_dir} is writable by other users")),
+                 (link, owned, (0o757, ME), {link_dir: (0o755, ME)}, True, (PermissionError, f"{tmp} is writable by other users"))]
+    for path, file_stat, dir_stat, others, posix, expected in rows:
+        stat_of = _stats({module: file_stat, Path(tmp): dir_stat, **others})
         try:
             outcome = _ext_trust.check_extension(path, posix=posix, euid=ME, stat_of=stat_of)
         except PermissionError as exc:
             outcome = (type(exc), str(exc))
-        assert outcome == expected, (path, file_stat, dir_stat, link_stat, posix, outcome)
+        assert outcome == expected, (path, file_stat, dir_stat, others, posix, outcome)
     if link is not None and _util.POSIX_MODES:      # the real stat, through a symlinked directory
         for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755)):
             owned_path.chmod(mode)

@@ -1,4 +1,4 @@
-"""Refuse extension modules other users can rewrite."""
+"""Refuse an extension whose source or bytecode other users can rewrite."""
 import os
 import stat
 from collections.abc import Callable
@@ -12,13 +12,11 @@ def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: in
         return None
     euid = os.geteuid() if euid is None else euid
     real = Path(path).resolve()
-    warnings = []
-    # Whoever can write these can swap the module or its bytecode.
-    for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent,
-                                 Path(cache_from_source(str(Path(path)))).parent)):
+    warnings, cached = [], Path(cache_from_source(str(Path(path))))
+    for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, cached.parent, cached)):
         try:
             info = stat_of(target)
-        except FileNotFoundError:
+        except FileNotFoundError:   # the loader refuses a missing module; the import writes a missing cache
             continue
         mode = stat.S_IMODE(info.st_mode)
         if mode & 0o002:
