@@ -46,9 +46,9 @@ def test_a_name_is_held_once_and_never_as_a_user_prefix(tmp):
     logs = []
     # A holder repeating its own entry is no conflict; `user:` is refused for a bound entry only.
     entries = [("probe", PROBE, PROBE), ("probe", MALLORY, MALLORY), ("probe", PROBE, PROBE),
-               ("user:eve", PROBE, MALLORY), ("USER:eve", MALLORY, MALLORY), ("user", PROBE, PROBE)]
-    assert D(logs.append).bind_names(entries) == {"probe": PROBE, "user": PROBE}, "a `user:` name was bound"
-    assert logs[:1] == [CONFLICT] and len(logs) == 2 and "USER:eve" in logs[1] and str(PROBE) not in logs[1], logs
+               ("user:eve", PROBE, MALLORY), ("USER:eve", MALLORY, MALLORY), ("user", PROBE, PROBE), ("12", MALLORY, MALLORY)]
+    assert D(logs.append).bind_names(entries) == {"probe": PROBE, "user": PROBE}, "a `user:` or all-digit name was bound"
+    assert logs[:1] == [CONFLICT] and len(logs) == 3 and "USER:eve" in logs[1] and str(PROBE) not in logs[1] and "'12'" in logs[2], logs
 
 
 # --- the real connector -----------------------------------------------------
