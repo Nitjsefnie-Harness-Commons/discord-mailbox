@@ -32,8 +32,7 @@ def _stats(table):
 
 def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_write(tmp):
     module, link, chain, through, loop, safe, hops = (Path(tmp) / name for name in ("ext.py", "links/ext.py", "safe/a.py", "hops/up/ext.py", "safe/loop.py", "safe", "hops"))
-    pyc = Path(cache_from_source(str(module)))     # where the import keeps its bytecode
-    cache = pyc.parent
+    cache = (pyc := Path(cache_from_source(str(module)))).parent     # where the import keeps its bytecode
     module.write_text("", encoding="utf-8")
     owned, world, group, owned_dir = (0o644, ME), (0o646, ME), (0o664, ME), (0o755, ME)
     rows = [  # (path, module stat, its directory's stat, every other path's stat, posix, outcome)
@@ -51,9 +50,9 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         (module, owned, (0o755, ME), {cache: owned_dir, pyc: (0o644, OTHER)}, True, (PermissionError, f"{pyc} is owned by uid {OTHER}, not by this user or root")),
         (module, owned, (0o755, ME), {cache: owned_dir, pyc: world}, True, (PermissionError, f"{pyc} is writable by other users")),
     ]
-    if _util.POSIX_MODES:   # the symlink walk is POSIX-only; chain: safe/a.py -> safe/dir/b.py -> hops/b.py -> ext.py
-        for source, target in ((link, module), (chain, safe / "dir" / "b.py"), (safe / "dir", "../hops"), (hops / "b.py", "../ext.py"),
-                               (hops / "up", ".."), (loop, "loop.py"), (Path(tmp) / "alias", tmp)):
+    if _util.POSIX_MODES:   # the symlink walk is POSIX-only; chain: safe/a.py -> safe/dir/b.py -> hops/b.py -> links/ext.py
+        for source, target in ((link, module), (chain, safe / "dir" / "b.py"), (safe / "dir", "../hops"), (hops / "b.py", "../links/ext.py"),
+                               (hops / "up", ".."), (loop, "loop.py"), (Path(tmp) / "alias", tmp), (link.parent / "__pycache__", "../hops/up/__pycache__")):
             source.parent.mkdir(exist_ok=True)
             source.symlink_to(target)
         rows += [(link, owned, (0o755, ME), {link.parent: (0o777, ME)}, True, (PermissionError, f"{link.parent} is writable by other users")),
@@ -62,8 +61,9 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
                  (through, owned, owned_dir, {hops: (0o757, ME)}, True, (PermissionError, f"{hops} is writable by other users")),
                  (chain, owned, owned_dir, {hops: (0o755, OTHER)}, True, (PermissionError, f"{hops} is owned by uid {OTHER}, not by this user or root")),
                  (chain, owned, owned_dir, {hops: (0o775, ME)}, True, f"{hops} is group-writable"),
+                 (link, owned, owned_dir, {hops: (0o775, ME), cache: owned_dir, pyc: group}, True, f"{hops} is group-writable; {pyc} is group-writable"),
                  (loop, owned, owned_dir, {}, True, (OSError, f"{loop}: too many levels of symbolic links"))]
-        for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755), (safe, 0o755), (hops, 0o755)):
+        for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755), (safe, 0o755), (hops, 0o755), (link.parent, 0o755)):
             owned_path.chmod(mode)      # the real stat accepts a trusted chain and a symlinked directory
         assert [_ext_trust.check_extension(p) for p in (Path(tmp) / "alias" / "ext.py", chain, through)] == [None] * 3
     for path, file_stat, dir_stat, others, posix, expected in rows:
