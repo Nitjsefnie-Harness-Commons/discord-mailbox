@@ -44,3 +44,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+    # Every codeql-action step must stay on one version, so a bump may never
+    # split; a group covers one update kind only, hence one per kind.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
+      codeql-action-security:
+        applies-to: security-updates
+        patterns:
+          - "github/codeql-action/*"
