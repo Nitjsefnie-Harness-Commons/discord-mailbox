@@ -22,9 +22,7 @@ def _mod(tmp):
     """discord_mb loaded fresh with its shared Discord dir in tmp."""
     m = _util.load(MB, "discord_mb_under_test")
     shared = Path(tmp) / "shared" / "discord"
-    m.TOKEN_DIR = shared
-    m.KIMI_TOKEN_DIR = shared
-    m.CODEX_TOKEN_DIR = shared
+    m.TOKEN_DIR = m.KIMI_TOKEN_DIR = m.CODEX_TOKEN_DIR = shared
     return m
 
 
@@ -93,64 +91,42 @@ def test_unknown_flavor_falls_back_to_claude_dir(tmp):
 # ------------------------------------------------------------------ loader
 
 def test_loader_accepts_async_setup(tmp):
-    src = _write(tmp, "ok_ext.py",
-                 "async def setup(ctx):\n    return 1\n"
-                 "async def command(ctx, argv):\n    return {'ok': True}\n")
-    m = _mod(tmp)
-    module, setup, command = m.load_extension(src)
+    src = _write(tmp, "ok_ext.py", "async def setup(ctx):\n    return 1\nasync def command(ctx, argv):\n    return {'ok': True}\n")
+    module, setup, command = _mod(tmp).load_extension(src)
     assert module is not None and setup is not None and command is not None
 
 
 def test_loader_allows_a_missing_command(tmp):
-    src = _write(tmp, "setup_only.py", "async def setup(ctx):\n    return 1\n")
-    m = _mod(tmp)
-    _module, setup, command = m.load_extension(src)
+    _module, setup, command = _mod(tmp).load_extension(_write(tmp, "setup_only.py", "async def setup(ctx):\n    return 1\n"))
     assert setup is not None and command is None
 
 
-def test_loader_rejects_missing_setup(tmp):
-    src = _write(tmp, "no_setup.py", "x = 1\n")
-    m = _mod(tmp)
+def _load_error(tmp, name, body=None):
+    m, src = _mod(tmp), str(Path(tmp) / name) if body is None else _write(tmp, name, body)
     try:
         m.load_extension(src)
-    except ValueError as e:
-        assert "setup" in str(e)
-    else:
-        raise AssertionError("expected ValueError")
+    except Exception as e:
+        return e
+    raise AssertionError("expected the load to fail")
+
+
+def test_loader_rejects_missing_setup(tmp):
+    e = _load_error(tmp, "no_setup.py", "x = 1\n")
+    assert isinstance(e, ValueError) and "setup" in str(e), e
 
 
 def test_loader_rejects_sync_setup(tmp):
-    src = _write(tmp, "sync_setup.py", "def setup(ctx):\n    pass\n")
-    m = _mod(tmp)
-    try:
-        m.load_extension(src)
-    except ValueError as e:
-        assert "async def" in str(e)
-    else:
-        raise AssertionError("expected ValueError")
+    e = _load_error(tmp, "sync_setup.py", "def setup(ctx):\n    pass\n")
+    assert isinstance(e, ValueError) and "async def" in str(e), e
 
 
 def test_loader_rejects_sync_command(tmp):
-    src = _write(tmp, "sync_cmd.py",
-                 "async def setup(ctx):\n    pass\n"
-                 "def command(ctx, argv):\n    pass\n")
-    m = _mod(tmp)
-    try:
-        m.load_extension(src)
-    except ValueError as e:
-        assert "async def" in str(e)
-    else:
-        raise AssertionError("expected ValueError")
+    e = _load_error(tmp, "sync_cmd.py", "async def setup(ctx):\n    pass\ndef command(ctx, argv):\n    pass\n")
+    assert isinstance(e, ValueError) and "async def" in str(e), e
 
 
 def test_loader_reports_missing_file(tmp):
-    m = _mod(tmp)
-    try:
-        m.load_extension(str(Path(tmp) / "nope.py"))
-    except FileNotFoundError:
-        pass
-    else:
-        raise AssertionError("expected FileNotFoundError")
+    assert isinstance(_load_error(tmp, "nope.py"), FileNotFoundError)
 
 
 def _assert_no_leak(before):
@@ -158,29 +134,15 @@ def _assert_no_leak(before):
 
 
 def test_unparseable_module_does_not_leak_into_sys_modules(tmp):
-    src = _write(tmp, "broken_syntax.py", "def (:\n")
-    m = _mod(tmp)
     before = set(sys.modules)
-    try:
-        m.load_extension(src)
-    except SyntaxError:
-        pass
-    else:
-        raise AssertionError("expected SyntaxError")
+    assert isinstance(_load_error(tmp, "broken_syntax.py", "def (:\n"), SyntaxError)
     _assert_no_leak(before)
 
 
 def test_module_raising_at_import_does_not_leak_into_sys_modules(tmp):
     """Parses fine, explodes on exec -- the more common real failure."""
-    src = _write(tmp, "broken_runtime.py", "raise RuntimeError('boom')\n")
-    m = _mod(tmp)
     before = set(sys.modules)
-    try:
-        m.load_extension(src)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("expected RuntimeError")
+    assert isinstance(_load_error(tmp, "broken_runtime.py", "raise RuntimeError('boom')\n"), RuntimeError)
     _assert_no_leak(before)
 
 
@@ -227,15 +189,13 @@ def test_context_store_survives_a_corrupt_store_value(tmp):
 
 
 def test_context_emit_is_forwarded_verbatim(tmp):
-    m = _mod(tmp)
-    seen = []
+    m, seen = _mod(tmp), []
     _ctx(m, tmp, emit=seen.append).emit({"event": "x"})
     assert seen == [{"event": "x"}]
 
 
 def test_context_log_is_prefixed(tmp):
-    m = _mod(tmp)
-    seen = []
+    m, seen = _mod(tmp), []
     _ctx(m, tmp, log=seen.append).log("hello")
     assert seen and seen[0].startswith("[ext] ")
 
@@ -421,8 +381,7 @@ def test_stat_signature_of_an_unreadable_root_is_unknown(tmp):
 
 
 def _connector_source():
-    return (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
-        encoding="utf-8")
+    return (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(encoding="utf-8")
 
 
 def _heartbeat_watcher_source():
@@ -454,8 +413,7 @@ def test_the_connector_does_not_restart_itself_when_the_install_moves(_tmp):
 
 def _version_watcher_source():
     """The body of the task that watches the install, whatever it is called."""
-    src = _connector_source()
-    parts = src.split("async def version_watcher", 1)
+    parts = _connector_source().split("async def version_watcher", 1)
     assert len(parts) == 2, "connector no longer runs a dedicated version watcher"
     return parts[1].split("\n    async def ", 1)[0]
 
@@ -510,10 +468,8 @@ def _run(coro):
 
 
 def test_on_subscribes_without_add_listener(tmp):
-    m = _mod(tmp)
-    ctx = _ctx(m, tmp)
+    ctx, seen = _ctx(_mod(tmp), tmp), []
     ctx.client = _FakeClient()
-    seen = []
 
     async def handler(payload):
         seen.append(payload)
@@ -525,10 +481,8 @@ def test_on_subscribes_without_add_listener(tmp):
 
 
 def test_two_handlers_on_one_event_both_fire(tmp):
-    m = _mod(tmp)
-    ctx = _ctx(m, tmp)
+    ctx, seen = _ctx(_mod(tmp), tmp), []
     ctx.client = _FakeClient()
-    seen = []
 
     async def a(p):
         seen.append("a")
@@ -544,10 +498,8 @@ def test_two_handlers_on_one_event_both_fire(tmp):
 
 def test_existing_connector_handler_is_preserved(tmp):
     """Installing over on_message must not unhook the mailbox."""
-    m = _mod(tmp)
-    ctx = _ctx(m, tmp)
+    ctx, seen = _ctx(_mod(tmp), tmp), []
     ctx.client = _FakeClient()
-    seen = []
 
     async def connector_handler(msg):
         seen.append("connector")
@@ -733,8 +685,7 @@ def test_deliver_hands_a_relayed_message_to_the_inbox_pipeline(tmp):
 
 def test_deliver_without_a_connector_writer_fails_loudly(tmp):
     """A context with no writer must say so, not fail as a None call."""
-    m = _mod(tmp)
-    ctx = _ctx(m, tmp)
+    ctx = _ctx(_mod(tmp), tmp)
 
     async def body():
         return await ctx.deliver("msg-7")
@@ -753,8 +704,7 @@ def test_connector_supplies_its_real_inbox_writer_to_extensions(_tmp):
     The pipeline itself cannot be exercised here -- it needs a live gateway --
     so pin the wiring and the return value that makes `deliver` reportable.
     """
-    source = (Path(_util.SCRIPTS) / "discord_mb_lib" / "connector.py").read_text(
-        encoding="utf-8")
+    source = _connector_source()
     start = source.split("async def _extension_start", 1)
     assert len(start) == 2, "connector no longer starts extensions here"
     construction = start[1].split("await setup(ctx)", 1)[0]
