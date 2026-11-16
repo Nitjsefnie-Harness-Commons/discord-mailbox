@@ -57,6 +57,7 @@
 !/.github/comment-share.json
 !/.github/dependabot.yml
 !/.github/size-baseline.json
+!/.github/zizmor.yml
 !/.github/workflows/actionlint.yml
 !/.github/workflows/audit.yml
 !/.github/workflows/claim.yml
