@@ -140,11 +140,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          # Matched by equality: tag.yml's job, which waits on this one, and
-          # this job, though the workflow id below already drops its run.
+          # Matched by equality: `tag` and `version`, tag.yml's two jobs, whose
+          # own waiter gates the commit before it tags; and this job, though
+          # the workflow id below already drops its run.
           EXCLUDED: |-
             ${{ github.job }}
             tag
+            version
         # Counts only check runs of other workflows' push and pull_request
         # runs: a comment-triggered run neither gates nor blocks, and no run of
         # this workflow, an earlier failed one included, counts either way. It
