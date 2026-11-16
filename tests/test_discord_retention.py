@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -196,9 +197,8 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
     for case in refused:
         assert mb(str(Path(tmp, case)), "erase", "--user-id", str(B)).returncode == 1, case
     if _util.POSIX_MODES:
-        os.chmod(root, 0o750)
+        os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)   # stat constants set exactly the refused bits
         assert mb(tmp, "erase", "--user-id", str(B)).returncode == 1
-        os.chmod(root, 0o700)
     assert (stored(root), stored(Path(tmp, "unmarked", "discord-mailbox"))) == (before, sorted(STORED))
 
 
