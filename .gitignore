@@ -35,8 +35,16 @@
 !/discord_mb.py
 !/pyproject.toml
 !/pyrightconfig.json
+!/requirements-build.in
+!/requirements-build.txt
+!/requirements-dev.in
 !/requirements-dev.txt
+!/requirements-pip-audit.in
+!/requirements-pip-audit.txt
+!/requirements-test.in
 !/requirements-test.txt
+!/requirements-zizmor.in
+!/requirements-zizmor.txt
 !/run_tests.py
 !/setup.cfg
 
@@ -59,6 +67,8 @@
 !/.github/workflows/pin-guard.yml
 !/.github/workflows/pr-gate.yml
 !/.github/workflows/release.yml
+!/.github/workflows/requirements-runtime.in
+!/.github/workflows/requirements-runtime.txt
 !/.github/workflows/size-baseline.yml
 !/.github/workflows/tag.yml
 !/.github/workflows/tests.yml

@@ -1,0 +1,8 @@
+# pip-audit, the dependency audit audit.yml runs; it audits this file's own
+# tree with the rest. Pinned so a tool release cannot turn CI red on an
+# unchanged commit. Compiled into requirements-pip-audit.txt with hashes on
+# Python 3.11, for the reason requirements-dev.in gives:
+#   pip-compile --generate-hashes requirements-pip-audit.in
+# pip, which pip-api needs, stays out of the lock: the runner's pip
+# satisfies it, so installing the auditor never replaces the installer.
+pip-audit==2.10.1
