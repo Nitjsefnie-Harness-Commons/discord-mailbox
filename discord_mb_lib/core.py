@@ -2438,26 +2438,23 @@ def package_change_event(identity, running, installed, reported=None):
     return event
 
 
-def load_extension(path):
-    '''Import an extension .py by path; return (module, setup, command).
-
-    Raises FileNotFoundError (missing), ValueError (no setup / wrong shape), or
-    the underlying exception for a broken module. The module name is derived
-    from the resolved path so re-loading the same file reuses its sys.modules
-    entry rather than leaking one per load.'''
-    import importlib.util
+def load_extension(path, source=None):
+    '''Run `source` (the checked bytes, else the file read once) as the extension
+    at `path`; return (module, setup, command). Raises FileNotFoundError
+    (missing), ValueError (no setup / wrong shape), or what a broken module
+    raises. Its sys.modules name comes from the resolved path, so a reload reuses it.'''
     import inspect as _inspect
+    import types
     p = Path(path)
-    if not p.is_file():
-        raise FileNotFoundError(f'no such file: {path}')
+    if source is None:
+        if not p.is_file():
+            raise FileNotFoundError(f'no such file: {path}')
+        source = p.read_bytes()
     mod_name = f'_mb_extension_{abs(hash(str(p.resolve())))}'
-    spec = importlib.util.spec_from_file_location(mod_name, str(p))
-    if spec is None or spec.loader is None:
-        raise ValueError(f'cannot load module spec from {path!r}')
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = module
+    sys.modules[mod_name] = module = types.ModuleType(mod_name)
+    module.__file__ = str(p)
     try:
-        spec.loader.exec_module(module)
+        exec(compile(source, str(p), 'exec', dont_inherit=True), module.__dict__)  # pylint: disable=exec-used
     except BaseException:
         sys.modules.pop(mod_name, None)
         raise

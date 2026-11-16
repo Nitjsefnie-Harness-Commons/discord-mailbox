@@ -2,6 +2,7 @@
 """An extension module another local user can rewrite is refused by `extension set`
 and by the startup reload; a group-writable one loads with a warning. The registry
 is written through a private temporary file into a private directory."""
+import errno
 import os
 import sys
 import types
@@ -14,7 +15,7 @@ import _util  # noqa: E402
 sys.path.insert(0, _util.SCRIPTS)
 from discord_mb_lib import _ext_trust, core  # noqa: E402
 
-ME, OTHER = 1000, 1001
+ME, OTHER, FD = 1000, 1001, "descriptor"
 
 
 def _loaded(path):
@@ -22,11 +23,12 @@ def _loaded(path):
 
 
 def _stats(table):
-    """os.stat answering each path's (mode, uid) from `table`; every other path is missing."""
+    """os.stat answering each path's (mode, uid) from `table`, a descriptor's from its FD entry; every other path is missing."""
     def stat_of(target):
-        if table.get(Path(target)) is None:
+        key = FD if isinstance(target, int) else Path(target)
+        if table.get(key) is None:
             raise FileNotFoundError(target)
-        return types.SimpleNamespace(st_mode=table[Path(target)][0], st_uid=table[Path(target)][1])
+        return types.SimpleNamespace(st_mode=table[key][0], st_uid=table[key][1])
     return stat_of
 
 
@@ -44,7 +46,9 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         (module, group, (0o755, ME), {}, True, f"{module} is group-writable"),
         (module, owned, (0o775, ME), {}, True, f"{tmp} is group-writable"),
         (module, (0o666, OTHER), (0o777, OTHER), {}, False, None),
-        (Path(tmp) / "missing.py", owned, owned, {}, True, None),
+        (Path(tmp) / "missing.py", owned, owned, {}, True, (FileNotFoundError, f"no such file: {Path(tmp) / 'missing.py'}")),
+        (module, world, (0o755, ME), {module: owned}, True, (PermissionError, f"{module} is writable by other users")),  # the descriptor's stat decides,
+        (module, owned, (0o755, ME), {module: world}, True, None),                                                     # not the path's
         (module, owned, (0o755, ME), {cache: (0o777, ME)}, True, (PermissionError, f"{cache} is writable by other users")),
         (module, owned, (0o755, ME), {cache: (0o755, OTHER)}, True, (PermissionError, f"{cache} is owned by uid {OTHER}, not by this user or root")),
         (module, owned, (0o755, ME), {cache: owned_dir, pyc: (0o644, OTHER)}, True, (PermissionError, f"{pyc} is owned by uid {OTHER}, not by this user or root")),
@@ -61,18 +65,49 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
                  (through, owned, owned_dir, {hops: (0o757, ME)}, True, (PermissionError, f"{hops} is writable by other users")),
                  (chain, owned, owned_dir, {hops: (0o755, OTHER)}, True, (PermissionError, f"{hops} is owned by uid {OTHER}, not by this user or root")),
                  (chain, owned, owned_dir, {hops: (0o775, ME)}, True, f"{hops} is group-writable"),
-                 (loop, owned, owned_dir, {}, True, (OSError, f"{loop}: too many levels of symbolic links"))]
+                 (loop, owned, owned_dir, {}, True, (OSError, f"{loop}: too many levels of symbolic links")),
+                 (safe, owned, owned_dir, {}, True, (FileNotFoundError, f"no such file: {safe}"))]
         if sys.pycache_prefix is None:      # links/__pycache__ is on the cache path only without a prefix
             rows.append((link, owned, owned_dir, {hops: (0o775, ME), cache: owned_dir, pyc: group}, True, f"{hops} is group-writable; {pyc} is group-writable"))
         for owned_path, mode in ((module, 0o644), (Path(tmp), 0o755), (safe, 0o755), (hops, 0o755), (link.parent, 0o755)):
             owned_path.chmod(mode)      # the real stat accepts a trusted chain and a symlinked directory
-        assert [_ext_trust.check_extension(p) for p in (Path(tmp) / "alias" / "ext.py", chain, through)] == [None] * 3
+        assert [_ext_trust.check_extension(p) for p in (Path(tmp) / "alias" / "ext.py", chain, through)] == [(b"", None)] * 3
     for path, file_stat, dir_stat, others, posix, expected in rows:
         try:
-            outcome = _ext_trust.check_extension(path, posix=posix, euid=ME, stat_of=_stats({module: file_stat, Path(tmp): dir_stat, **others}))
+            outcome = _ext_trust.check_extension(path, posix=posix, euid=ME, stat_of=_stats({FD: file_stat, module: file_stat, Path(tmp): dir_stat, **others}))[1]
         except OSError as exc:
             outcome = (type(exc), str(exc))
         assert outcome == expected, (path, file_stat, dir_stat, others, posix, outcome)
+
+
+def test_the_check_returns_the_bytes_it_judged_and_refuses_a_symlink_found_at_open(tmp):
+    if not _util.POSIX_MODES:
+        _util.skip("the module is judged by its descriptor only on POSIX")
+    module, decoy, owned, resolve = Path(tmp) / "ext.py", Path(tmp) / "decoy.py", _stats({FD: (0o644, ME)}), _ext_trust._resolve
+    module.write_text("checked = True\n", encoding="utf-8")
+    decoy.write_text("swapped = True\n", encoding="utf-8")
+
+    def swap_then_stat(target):     # the module is replaced while it is judged
+        if decoy.exists():
+            os.replace(decoy, module)
+        return owned(target)
+
+    def resolve_then_link(path):    # the resolved module becomes a symlink before it is opened
+        resolved = resolve(path)
+        if resolved[0].name == module.name:     # not the bytecode-cache path, resolved second
+            module.unlink()
+            module.symlink_to(decoy)
+        return resolved
+    assert _ext_trust.check_extension(module, euid=ME, stat_of=swap_then_stat) == (b"checked = True\n", None)
+    decoy.write_text("swapped = True\n", encoding="utf-8")
+    _ext_trust._resolve = resolve_then_link
+    try:
+        outcome = _ext_trust.check_extension(module, euid=ME, stat_of=owned)
+    except OSError as exc:
+        outcome = exc.errno
+    finally:
+        _ext_trust._resolve = resolve
+    assert outcome == errno.ELOOP, outcome
 
 
 def test_the_registry_goes_through_a_private_temp_into_a_private_directory(tmp):
@@ -109,13 +144,21 @@ def test_the_connector_refuses_an_exposed_module_at_start_and_on_set(tmp):
         await client.ask({"refused": {"op": "extension-set", "path": str(exposed)}})
         await client.ask({"set": {"op": "extension-set", "path": str(shared)}})
 
-    client = _gateway.run(tmp, script, extension=True)
+    def swap_after_check(path):     # the module is rewritten between the check and the load
+        checked = check(path)
+        Path(path).write_text("raise RuntimeError('swapped after the check')\n", encoding="utf-8")
+        return checked
+    check, _ext_trust.check_extension = _ext_trust.check_extension, swap_after_check
+    try:
+        client = _gateway.run(tmp, script, extension=True)
+    finally:
+        _ext_trust.check_extension = check
     start, refused, warned = (client.responses[k] for k in ("start", "refused", "set"))
     reason, warning = f"PermissionError: {relay} is writable by other users", f"{shared} is group-writable"
     assert (start["loaded"], start["last_error"]) == (False, reason), start
     assert f"extension load failed: {reason}" in client.log, client.log
     assert refused["error"] == f"PermissionError: {exposed} is writable by other users", refused
-    assert (warned["ok"], warned["path"], warned.get("warning")) == (True, str(shared), warning), warned
+    assert (warned["ok"], warned.get("path"), warned.get("warning")) == (True, str(shared), warning), warned
     assert f"extension loaded: {shared} (warning: {warning})" in client.log, client.log
     assert (_loaded(relay), _loaded(exposed), _loaded(shared)) == (False, False, True)
 
