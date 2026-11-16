@@ -344,6 +344,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')
         gates = _DeliveryGates.from_settings(log)
+        directory = _Directory(log)
 
         if claude_pid is None:
             claude_pid = find_parent_pid_from(os.getppid(), flavor)
@@ -944,7 +945,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if len(content) > 2000:
             raise ValueError(f'profile too long: {len(content)} > 2000')
         existing = None
-        async for msg in channel.history(limit=200):
+        async for msg in channel.history(limit=None):
             if msg.pinned:
                 continue
             if msg.author.id == self_user_id:
@@ -965,7 +966,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if channel is None:
             raise RuntimeError(f'directory channel #{DIRECTORY_CHANNEL_NAME} not resolved')
         agents = []
-        async for msg in channel.history(limit=200):
+        async for msg in channel.history(limit=None):
             if msg.pinned:
                 continue
             content = msg.content or ''
@@ -2549,29 +2550,23 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except Exception as e:
             log(f'on_message error: {e}')
 
-    async def refresh_directory():
+    async def refresh_directory(force=False):
         channel = ch('directory')
-        if channel is None:
+        if channel is None or not directory.scan_due(force):
             return
-        new_map = {}
-        self_has_entry = False
         self_user_id = client.user.id if client.user is not None else None
+        entries = []
         try:
-            async for msg in channel.history(limit=200):
-                if msg.pinned:
-                    continue
-                if (entry := _Directory.parse_entry(msg.content, _Directory.MAP_SEPARATORS)) is None:
-                    continue
-                name, uid = entry
-                # Last-writer-wins isn't right since history is newest-first; keep first seen.
-                new_map.setdefault(name, uid)
-                if self_user_id is not None and msg.author.id == self_user_id:
-                    self_has_entry = True
+            async for msg in channel.history(limit=None):
+                if not msg.pinned and (entry := _Directory.parse_entry(msg.content, _Directory.MAP_SEPARATORS)):
+                    entries.append((*entry, msg.author.id))
         except Exception as e:
             log(f'refresh_directory failed: {e}')
             return
+        directory.scan_completed()
+        new_map = directory.bind_names(reversed(entries))  # history is newest-first
         state['identity_map'] = new_map
-        state['self_has_entry'] = self_has_entry
+        state['self_has_entry'] = any(author == self_user_id for _, _, author in entries)
         if new_map:
             log(f'directory map: {list(new_map.keys())}')
 
@@ -2580,7 +2575,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if channel is None:
             log(f'directory channel #{DIRECTORY_CHANNEL_NAME} not resolved; skipping self-register')
             return
-        await refresh_directory()
+        await refresh_directory(force=True)
         if state.get('self_has_entry'):
             return
         if client.user is None:
@@ -2597,7 +2592,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         try:
             await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
             log(f'self-registered as {identity} → {self_user_id}')
-            await refresh_directory()
+            await refresh_directory(force=True)
         except Exception as e:
             log(f'self-register failed: {e}')
 
