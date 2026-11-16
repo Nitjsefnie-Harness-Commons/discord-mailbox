@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from ._temp_provenance import _linklike
+from ._temp_provenance import _linklike, owned_temp_scope
 
 FORGOTTEN_MAX = 4096
 _ID = re.compile(r'[0-9]+')
@@ -119,8 +119,9 @@ def erase_author(root: Path, user_id) -> int:
 
 
 def erase_cli(root: Path, user_id: str) -> None:
-    if _linklike(root):
-        sys.exit(f'error: {root} is a link; nothing erased')
+    if os.path.lexists(root) and owned_temp_scope(root) != 'shared':
+        sys.exit(f'error: {root} is not a private mailbox root this user created (a link, another '
+                 f"user's, open to other users or unmarked); nothing erased")
     print(json.dumps({'user_id': user_id, 'removed': erase_author(root, user_id)}))
 
 

@@ -166,12 +166,22 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
     sent = sorted((json.loads(p.read_text(encoding="utf-8")) for p in (root / "one/outbox").glob("*-*.json")),
                   key=lambda m: m["reply_to"])
     assert [(m.get("reply_channel_id"), m.get("is_dm")) for m in sent] == [(None, None), (str(C1), True)], sent
+    before, gone = stored(root), mb(str(Path(tmp, "outside")), "erase", "--user-id", str(B))
+    assert (gone.returncode, json.loads(gone.stdout)["removed"]) == (0, 0), gone   # no root yet
+    Path(tmp, "unmarked", "discord-mailbox").mkdir(parents=True)
+    seed(Path(tmp, "unmarked", "discord-mailbox"))
+    refused = ["unmarked"]
     if os.name != "nt":
-        before = stored(root)
         Path(tmp, "linked").mkdir()
         os.symlink(root, Path(tmp, "linked", "discord-mailbox"))
-        assert mb(str(Path(tmp, "linked")), "erase", "--user-id", str(B)).returncode == 1
-        assert stored(root) == before, stored(root)
+        refused.append("linked")
+    for case in refused:
+        assert mb(str(Path(tmp, case)), "erase", "--user-id", str(B)).returncode == 1, case
+    if _util.POSIX_MODES:
+        os.chmod(root, 0o777)
+        assert mb(tmp, "erase", "--user-id", str(B)).returncode == 1
+        os.chmod(root, 0o700)
+    assert (stored(root), stored(Path(tmp, "unmarked", "discord-mailbox"))) == (before, sorted(STORED))
 
 
 def main():
