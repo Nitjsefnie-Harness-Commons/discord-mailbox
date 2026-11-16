@@ -42,7 +42,7 @@ def _withdraw(request: Path, response: Path, timeout: float, identity: Any) -> A
         raise MetaRequestPending(
             f'the connector accepted the request and had not answered it after {timeout}s '
             f'(Discord may be rate-limiting it); this does not mean it failed: any result the '
-            f'connector writes goes to {response}') from None
+            f'connector writes goes to {response}, which the connector removes once it is 15 minutes old') from None
     except OSError:
         pass
     raise TimeoutError(f'connector did not respond within {timeout}s (is it running for {identity!r}?)')
