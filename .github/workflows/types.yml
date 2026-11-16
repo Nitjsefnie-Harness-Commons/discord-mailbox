@@ -62,12 +62,13 @@ jobs:
         # without them every `import discord` is an unresolved-import error and
         # the gate fails on the environment rather than on the source.
         run: |
-          python -m pip install --upgrade pip
-          # `.` rather than naming discord.py and psutil unpinned here:
-          # pyproject.toml already declares them, and installing the
-          # project means pyright resolves the same versions a user
-          # would get instead of whatever floats today.
-          pip install -r requirements-dev.txt .
+          pip install --require-hashes -r requirements-dev.txt \
+            -r .github/workflows/requirements-runtime.txt -r requirements-build.txt
+
+      - name: Install the project
+        # A step of its own: hash-checking mode refuses a local directory.
+        # No build isolation, so the backend is requirements-build.txt's.
+        run: pip install --no-deps --no-build-isolation .
 
       - name: pyright
         run: pyright

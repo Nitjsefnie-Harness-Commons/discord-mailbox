@@ -69,7 +69,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install runtime dependencies
-        run: python -m pip install --upgrade pip discord.py psutil
+        run: python -m pip install --require-hashes -r .github/workflows/requirements-runtime.txt
 
       - name: Run every mailbox suite
         env:
@@ -99,13 +99,17 @@ jobs:
 
       - name: Build the wheel
         run: |
-          python -m pip install --upgrade pip build
-          python -m build --wheel
+          python -m pip install --require-hashes -r requirements-build.txt
+          python -m build --wheel --no-isolation
 
       - name: Install it with no checkout in reach and run it
+        # pip check stands in for the resolution --no-deps skips.
         run: |
           python -m venv "$RUNNER_TEMP/probe"
-          "$RUNNER_TEMP/probe/bin/pip" install dist/*.whl
+          "$RUNNER_TEMP/probe/bin/pip" install --require-hashes \
+            -r .github/workflows/requirements-runtime.txt
+          "$RUNNER_TEMP/probe/bin/pip" install --no-deps dist/*.whl
+          "$RUNNER_TEMP/probe/bin/pip" check
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/probe/bin/discord-mb" --version
           "$RUNNER_TEMP/probe/bin/python" -c "from discord_mb_lib.cli import _cli"
@@ -140,7 +144,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install runtime dependencies
-        run: python -m pip install --upgrade pip discord.py psutil
+        run: python -m pip install --require-hashes -r .github/workflows/requirements-runtime.txt
 
       - name: Run every mailbox suite on the portable publication path
         env:
@@ -174,15 +178,15 @@ jobs:
 
       - name: Install the coverage toolchain and the project
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-test.txt
-          # `.` too, for the project's own runtime dependencies. Without it a
+          # The runtime lock too: without the project's dependencies a
           # suite that IMPORTS the package cannot import it at all, every
           # suite dies on ModuleNotFoundError, and the job goes on to report
           # the resulting 1% as though it were a measurement. The tests put
           # the repo root on sys.path themselves, so the source tree is still
-          # what gets measured — this install is here for the deps.
-          python -m pip install .
+          # what gets measured.
+          python -m pip install --require-hashes -r requirements-test.txt \
+            -r .github/workflows/requirements-runtime.txt -r requirements-build.txt
+          python -m pip install --no-deps --no-build-isolation .
 
       - name: Measure
         id: measure
