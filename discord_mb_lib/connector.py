@@ -1968,12 +1968,15 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         reply_channel_id = data.get('reply_channel_id')
         attach = data.get('attach') or []
 
+        # A miss under MISS_REFRESH_INTERVAL after the last scan was coalesced: the name may be newer, so retry.
+        unknown_name = SendError if directory.scan_due(False) else SendRetry
+
         # --- resolve the target channel ---
         channel = None
         if data.get('dm') and not reply_to:
             uid = await _resolve_dm_user_id(state, to, refresh_directory)
             if uid is None:
-                raise SendError(f'unknown identity {to!r} for --dm')
+                raise unknown_name(f'unknown identity {to!r} for --dm')
             try:
                 channel = await _open_dm_channel(client, uid)
             except Exception as e:
@@ -2016,24 +2019,20 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 mention = f'<@&{rid}>'
             else:
                 tos = [t.strip() for t in to.split(',') if t.strip()]
-                mentions, unknown, refreshed = [], [], False
+                mentions, unknown = [], []
                 for t in tos:
                     if t.isdigit():
                         # Raw Discord user id — mention directly, no directory
                         # lookup (reaches non-registered humans).
                         mentions.append(f'<@{t}>')
                         continue
-                    uid = state['identity_map'].get(t)
-                    if uid is None and not refreshed:
-                        await refresh_directory()
-                        refreshed = True
-                        uid = state['identity_map'].get(t)
+                    uid = await _resolve_dm_user_id(state, t, refresh_directory)
                     if uid is None:
                         unknown.append(t)
                     else:
                         mentions.append(f'<@{uid}>')
                 if unknown:
-                    raise SendError(f'unknown recipient identities {unknown!r}')
+                    raise unknown_name(f'unknown recipient identities {unknown!r}')
                 mention = ' '.join(mentions)
             frame = (f'**[{identity}→{to}]** {subject}'.rstrip() if subject
                      else f'**[{identity}→{to}]**')

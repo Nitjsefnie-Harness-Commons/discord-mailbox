@@ -86,7 +86,11 @@ Every read sees the whole channel, however old the entry. `register` edits
 the newest unpinned message the connector wrote there, and startup posts an
 entry only when the connector has none. The connector reads the channel at
 startup; a name it cannot resolve rereads it only when the last completed
-read is at least 15 seconds old.
+read is at least 15 seconds old. A `send` or `send --dm` to a name registered
+within that window is kept in the outbox and retried every second until the
+window passes, then dropped as unknown if the reread still misses; `send --wait`,
+`conversation --dm` and a `move` to a DM answer an unknown-identity error, so a
+name registered in the last 15 seconds may need a retry for those.
 
 `conversation --grep PATTERN` is applied by the CLI to the messages the
 connector returns, against `content` and `content_rendered`, so a slow pattern
