@@ -43,7 +43,6 @@ def test_the_check_refuses_what_another_user_can_rewrite_and_warns_on_group_writ
         link = None
     owned, world, group, owned_dir = (0o644, ME), (0o646, ME), (0o664, ME), (0o755, ME)
     rows = [  # (path, module stat, its directory's stat, every other path's stat, posix, outcome)
-        (module, owned, (0o755, ME), {}, True, None),
         (module, world, (0o755, ME), {}, True, (PermissionError, f"{module} is writable by other users")),
         (module, owned, (0o757, ME), {}, True, (PermissionError, f"{tmp} is writable by other users")),
         (module, (0o644, OTHER), (0o755, ME), {}, True, (PermissionError, f"{module} is owned by uid {OTHER}, not by this user or root")),

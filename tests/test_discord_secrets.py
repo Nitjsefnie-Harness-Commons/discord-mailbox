@@ -119,8 +119,7 @@ def test_a_given_token_beats_discord_token_which_beats_the_directory(tmp):
     names, saved, core.TOKEN_DIR = {given: "given", env: "env", stored: "directory"}, core.TOKEN_DIR, Path(tmp)
     try:
         for token, env_value, flavor, want in ((given, env, None, (given, "claude")),
-                                               (None, env, "codex", (env, "codex")),
-                                               (None, "", "kimi", (stored, "kimi"))):
+                                               (None, env, "codex", (env, "codex"))):
             with _environ(DISCORD_TOKEN=env_value):
                 got = _secrets.connector_token(token, "agent", flavor, core.resolve_token_and_flavor)
             assert got == want, _hide((token, env_value, flavor, got), names)

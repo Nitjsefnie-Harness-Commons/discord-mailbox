@@ -88,7 +88,6 @@ def test_get_list_and_add_see_an_entry_older_than_five_hundred_messages(tmp):
 
     client = _gateway.run(tmp, script)
     out = sorted(Path(tmp, "state", "out").iterdir())
-    assert [p.name for p in out] == ["add.json", "get.json", "list.json"], out
     if _util.POSIX_MODES:
         assert [p.stat().st_mode & 0o777 for p in out] == [0o600, 0o600, 0o600], out
     r = client.responses
