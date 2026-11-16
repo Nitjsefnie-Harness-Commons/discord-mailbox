@@ -53,4 +53,6 @@ def cli_password(password: str | None, from_stdin: bool) -> str:
     else:
         raise SystemExit('error: no password: pass the password argument or --password-stdin '
                          '(stdin is not a terminal, so there is no prompt)')
+    if not password:
+        raise SystemExit('error: the password is empty')
     return password
