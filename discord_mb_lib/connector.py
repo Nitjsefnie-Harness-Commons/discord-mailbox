@@ -2868,7 +2868,6 @@ __all__ = [
     '_open_dm_channel',
     '_recorded_owner',
     '_resolve_dm_user_id',
-    '_retention',
     '_run_connector',
     '_secrets',
     'connector_main',
