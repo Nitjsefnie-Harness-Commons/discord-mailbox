@@ -138,7 +138,7 @@ def test_a_creds_add_request_carrying_a_password_is_private(tmp):
 
 
 def test_write_private_publishes_a_fresh_private_inode_and_leaves_nothing_when_it_fails(tmp):
-    target, twin, seen, refused = Path(tmp) / "r.json", Path(tmp) / "twin", [], []
+    target, twin, seen, refused, raised = Path(tmp) / "r.json", Path(tmp) / "twin", [], [], []
     target.write_text("old", encoding="utf-8")
     target.chmod(0o644)
     os.link(target, twin)       # a write through the old inode would show here
@@ -158,9 +158,11 @@ def test_write_private_publishes_a_fresh_private_inode_and_leaves_nothing_when_i
         try:
             _control_files.write_private(target, text)
         except (OSError, UnicodeError):
-            assert text != "two" and sorted(os.listdir(tmp)) == ["r.json", "twin"], (attr, os.listdir(tmp))
+            raised.append(text)
         finally:
             setattr(os, attr, real[attr])
+    assert raised == ["three", "three", "\udc80"], raised
+    assert sorted(os.listdir(tmp)) == ["r.json", "twin"], os.listdir(tmp)
     assert len(seen) == 2 and seen[0][0] != seen[1][0], seen
     assert (target.read_text(encoding="utf-8"), twin.read_text(encoding="utf-8")) == ("two", "old")
     assert len(refused) == 2, refused
@@ -188,7 +190,7 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     def name(first):        # a response's name with its first character fixed, to order the sweep
         return first + str(uuid.uuid4())[1:] + ".json"
 
-    def temps(first):       # the old writer's temp and write_private's
+    def temps(first):       # a plain-suffix temp and write_private's
         return name(first) + ".tmp", "." + name(first) + ".k2j_x9a1.tmp"
 
     kept = [*(_aged(out, n, 15 * 60 - 30) for n in (name("a"), *temps("a"))), *(_aged(out, n, old) for n in (
@@ -197,12 +199,14 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     faults = {name("0"): ("lstat", PermissionError), name("2"): ("unlink", FileNotFoundError),
               name("4"): ("lstat", FileNotFoundError)}           # unreadable, vanished, vanished
     kept += [_aged(out, n, old) for n in faults]
+    once = _aged(out, name("f"), old)           # raises once, past the sweep's own catch, at start
+    faults[once.name] = ("lstat", RuntimeError)
     real, fired, later = {op: getattr(os, op) for op in ("lstat", "unlink")}, set(), []
 
     def faulty(op):
         def call(path, *args, **kwargs):
             fault = faults.get(os.path.basename(path))
-            if fault and fault[0] == op:
+            if fault and fault[0] == op and not (fault[1] is RuntimeError and once.name in fired):
                 fired.add(os.path.basename(path))
                 raise fault[1](path)
             return real[op](path, *args, **kwargs)
@@ -223,7 +227,7 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     finally:
         for op, f in real.items():
             setattr(os, op, f)
-    assert later[0] == sorted(kept), later[0]
+    assert later[0] == sorted([*kept, once]), later[0]
     assert later[1] == sorted([*kept, out / "first.json"]), later[1]
     assert later[2] is False, "a response gone stale after start was kept"
     assert fired == set(faults), fired
