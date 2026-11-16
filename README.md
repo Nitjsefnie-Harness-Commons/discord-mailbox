@@ -55,6 +55,21 @@ message. The inbox record's `linked_messages` still lists every distinct link; e
 past the fifth carries `msg_id`, `channel_id`, `url` and `not_fetched` (`over the
 5-link cap`), and no fetch is made for it.
 
+## Local records
+
+A connector keeps a copy of each message it delivers in its identity's inbox,
+`<temp>/discord-mailbox/<identity>/inbox/<msg_id>.json`. Shared by every
+identity on the host, it also keeps copies of the messages it fetches, sends
+or lists in `messages/<channel_id>/<msg_id>.json`, and of pinned messages in
+`pins/<channel_id>/<msg_id>.json`. Nothing is pruned by age.
+
+When a connector receives Discord's event for a deleted message, alone or in a
+bulk delete, it removes that message's record from every identity's inbox on
+the host and from `messages/` and `pins/`. For a deleted thread or channel it
+removes the records in `messages/<channel_id>/` and `pins/<channel_id>/`, then
+those directories, and every inbox record whose `channel_id` is that id. A
+deletion made while no connector runs is not followed.
+
 ## Directory
 
 Each unpinned message in the directory channel that mentions a user and

@@ -129,8 +129,9 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
             self.reactions, self.events, self.log = [], [], ""
             self.message = functools.partial(message, reactions=self.reactions)
 
-        def event(self, function):
+        def event(self, function):    # discord.Client.event binds the attribute an extension wraps
             self.handlers[function.__name__] = function
+            setattr(self, function.__name__, function)
             return function
 
         def is_closed(self):
@@ -171,7 +172,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
                 await asyncio.gather(*watchers)
 
     swaps = {"state_dir": lambda identity: state, "inbox_dir": lambda identity: root / "inbox",
-             "sweep_status_plugin": lambda identity: None,
+             "sweep_status_plugin": lambda identity: None, "STATE_ROOT": root / "mailbox",
              "default_status_plugin": lambda flavor: root / "no-such-plugin",
              "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)} if extension else {},
              "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins", "TOKEN_DIR": root / "tokens",
