@@ -5,6 +5,7 @@ from .core import *
 from .core import __version__
 from .storage import *
 from .connector import *
+from . import _retention
 from . import _secrets
 
 # --- CLI ---
@@ -359,6 +360,11 @@ def _cli():
     le.add_argument('--flavor', choices=('claude', 'kimi', 'codex'), default=None,
                     help='Native harness owner for token-directory and parent-watchdog selection')
 
+    er = sub.add_parser('erase', help="Delete every local inbox, message and pin record a Discord user wrote, for "
+                                      "every identity on this host; prints the number of files removed")
+    er.add_argument('--user-id', dest='user_id', required=True, type=_retention.discord_id,
+                    help='The author\'s Discord user id (digits only)')
+
     args = p.parse_args()
     if not args.command:
         p.print_help()
@@ -435,6 +441,8 @@ def _run_command(args):
             log_path=args.log_path, flavor=args.flavor).run()
     elif args.command == 'leech':
         leech_main(args.identity, claude_pid=args.claude_pid, flavor=args.flavor)
+    elif args.command == 'erase':
+        _retention.erase_cli(_core.STATE_ROOT, args.user_id)
 
 
 # Only what this module defines. It used to be a comprehension over

@@ -1,8 +1,9 @@
-"""Local message records that follow deletions on Discord."""
+"""Local message records: removed when deleted on Discord, or erased by author."""
 import contextlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -23,8 +24,6 @@ def discord_id(value) -> str:
 
 
 def _scan(directory: Path, keep: Callable[[os.DirEntry], bool]) -> list[Path]:
-    if _linklike(directory):
-        return []
     try:
         with os.scandir(directory) as entries:
             return [Path(e.path) for e in entries if keep(e)]
@@ -45,8 +44,12 @@ def _inboxes(root: Path) -> list[Path]:
     return [d for identity in _subdirs(root) for d in _subdirs(identity) if d.name == 'inbox']
 
 
+def _caches(root: Path) -> list[Path]:
+    return [d for cache in _subdirs(root) if cache.name in _CACHES for d in _subdirs(cache)]
+
+
 def _channel_dirs(root: Path, channel_id: str) -> list[Path]:
-    return [d for cache in _CACHES for d in _subdirs(root / cache) if d.name == channel_id]
+    return [d for d in _caches(root) if d.name == channel_id]
 
 
 def _unlink(path: Path) -> int:
@@ -70,14 +73,14 @@ def _remove_where(directories: Iterable[Path], field: str, value: str) -> int:
 
 
 def forget_messages(root: Path, channel_id, message_ids: Iterable) -> int:
-    '''Remove the messages from every identity's inbox and the channel's message and pin caches.'''
+    '''Remove the messages from every inbox and the channel's caches.'''
     names = [f'{discord_id(m)}.json' for m in message_ids]
     stores = [*_channel_dirs(root, discord_id(channel_id)), *_inboxes(root)]
     return sum(_unlink(d / name) for d in stores for name in names)
 
 
 def forget_channel(root: Path, channel_id) -> int:
-    '''Remove a channel's or thread's message and pin caches and every inbox record from it.'''
+    '''Remove a channel's or thread's caches and every inbox record from it.'''
     cid = discord_id(channel_id)
     removed = 0
     for directory in _channel_dirs(root, cid):
@@ -87,8 +90,19 @@ def forget_channel(root: Path, channel_id) -> int:
     return removed + _remove_where(_inboxes(root), 'channel_id', cid)
 
 
+def erase_author(root: Path, user_id) -> int:
+    '''Remove every inbox and cache record whose author is `user_id`.'''
+    return _remove_where([*_inboxes(root), *_caches(root)], 'from_user_id', discord_id(user_id))
+
+
+def erase_cli(root: Path, user_id: str) -> None:
+    if _linklike(root):
+        sys.exit(f'error: {root} is a link; nothing erased')
+    print(json.dumps({'user_id': user_id, 'removed': erase_author(root, user_id)}))
+
+
 def watch(client, root: Path, log: Callable[[str], None]) -> None:
-    '''Register the connector's handlers for messages, threads and channels deleted on Discord.'''
+    '''Register the handlers for messages, threads and channels deleted on Discord.'''
     def handle(name: str, forget: Callable) -> None:
         async def handler(event):
             try:
