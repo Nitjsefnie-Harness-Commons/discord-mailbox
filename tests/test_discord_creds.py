@@ -83,6 +83,12 @@ def test_from_settings_reads_the_list_and_the_token_directory_and_fails_loudly(t
     assert not any(part in line for line in logs for part in junk.split(".")[1:]), "token text was logged"
 
 
+def test_a_set_list_that_skips_nothing_carries_no_warning(tmp):
+    del tmp
+    kept = [{"msg_id": "1", "trusted": True}]
+    assert C._CredsTrust(frozenset({ALICE}), frozenset()).answer(kept) == {"entries": kept, "skipped_untrusted": 0}
+
+
 # --- the real connector ---------------------------------------------------------
 
 def test_get_list_and_add_see_an_entry_older_than_five_hundred_messages(tmp):
@@ -94,8 +100,9 @@ def test_get_list_and_add_see_an_entry_older_than_five_hundred_messages(tmp):
 
     client = _gateway.run(tmp, script)
     if client is None:
-        return
+        _util.skip("discord.py is not installed")
     r = client.responses
+    assert set(client.credentials.reads) == {None}, client.credentials.reads     # the whole channel
     assert [e["msg_id"] for e in r["list"]["entries"]] == ["1"], r["list"]
     assert [e["msg_id"] for e in r["get"]["entries"]] == ["1"], r["get"]
     assert (r["add"]["action"], r["add"]["existing_msg_ids"]) == ("skipped", ["1"]), r["add"]
@@ -121,7 +128,7 @@ def test_only_trusted_authors_count_once_the_list_is_set_and_unset_marks_and_war
         (root / "tokens" / "probe.token").write_text(_token(_b64(str(PROBE).encode())), encoding="utf-8")
         client = _gateway.run(root, script, env={C.TRUSTED: listed})
         if client is None:
-            return
+            _util.skip("discord.py is not installed")
         r = client.responses
         for op, ids in (("list", keep), ("get", [i for i in keep if i != "5"])):
             got = [(e["msg_id"], e["author_id"], e["trusted"]) for e in r[op]["entries"]]
@@ -145,8 +152,9 @@ def test_an_invalid_trusted_author_list_stops_the_connector_at_startup(tmp):
     except SystemExit as e:
         assert e.code == 1 and C.TRUSTED in (Path(tmp) / "connector.log").read_text(encoding="utf-8"), e.code
     else:
-        if _gateway.have_discord():
-            raise AssertionError("the connector started with an invalid setting")
+        if not _gateway.have_discord():
+            _util.skip("discord.py is not installed")
+        raise AssertionError("the connector started with an invalid setting")
 
 
 # --- the CLI --------------------------------------------------------------------

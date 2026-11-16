@@ -54,11 +54,12 @@ def test_the_message_event_and_record_say_who_sent_it_and_whether_they_hold_a_na
 
     client = _gateway.run(tmp, script, entries)
     if client is None:
-        return
+        _util.skip("discord.py is not installed")
     events = {int(e["msg_id"]): e for e in client.events if e.get("event") == "message"}
-    for msg_id, author, label, registered, identities in (
-            (101, MALLORY, FALLBACK, False, []), (102, ALICE, "alice", True, ["alice", "alice-2"])):
+    for msg_id, author, label, registered, identities, multiple in (
+            (101, MALLORY, FALLBACK, False, [], False), (102, ALICE, "alice", True, ["alice", "alice-2"], True)):
         record = _gateway.inbox(tmp, msg_id)
+        assert record["author_has_multiple_identities"] is multiple, record
         assert (events[msg_id]["from"], events[msg_id]["from_user_id"], events[msg_id]["from_registered"]) == (
             label, str(author), registered), events[msg_id]
         assert (record["from"], record["from_user_id"], record["author_identities"]) == (
@@ -69,9 +70,9 @@ def test_the_message_event_and_record_say_who_sent_it_and_whether_they_hold_a_na
 def test_the_flag_and_the_records_identities_come_from_one_directory_read(tmp):
     held = [_gateway.message(7, MALLORY, f"**mallory** · <@{MALLORY}>"),
             _gateway.message(3, BOT, f"**gate-test** · <@{BOT}>")]
-    for case, entries, rescan, breaks, registered, identities in (
+    for n, (case, entries, rescan, breaks, registered, identities) in enumerate((
             ("a rescan binds the sender while the context is resolved", None, True, False, False, []),
-            ("the context fails after its awaits", held, False, True, True, ["mallory"])):
+            ("the context fails after its awaits", held, False, True, True, ["mallory"]))):
         async def script(client, rescan=rescan, breaks=breaks):
             dm = client.dm(970000000000000099)
 
@@ -89,15 +90,15 @@ def test_the_flag_and_the_records_identities_come_from_one_directory_read(tmp):
                 msg.stickers = 5                            # resolve_context raises on it, last
             await client.handlers["on_message"](msg)
 
-        case_dir = Path(tmp) / str(len(case))
+        case_dir = Path(tmp) / str(n)
         case_dir.mkdir()
         client = _gateway.run(case_dir, script, entries)
         if client is None:
-            return
+            _util.skip("discord.py is not installed")
         event = next(e for e in client.events if e.get("event") == "message")
         record = _gateway.inbox(case_dir, 101)
         assert not rescan or "mallory" in client.log.rsplit("directory map", 1)[-1], (case, "no rescan", client.log)
-        assert (breaks and "resolve_context failed" in client.log) or not breaks, (case, client.log)
+        assert not breaks or "resolve_context failed" in client.log, (case, client.log)
         assert (event["from_registered"], record["author_identities"],
                 record["author_has_multiple_identities"]) == (registered, identities, False), (case, event, record)
 
@@ -131,7 +132,7 @@ def test_every_author_label_in_a_listing_follows_the_same_rule(tmp):
 
     client = _gateway.run(tmp, script)
     if client is None:
-        return
+        _util.skip("discord.py is not installed")
     r, newest_first, oldest_first = client.responses, [FALLBACK, "alice"], ["alice", FALLBACK]
     for op, key, field in (("attachments", "entries", "from"), ("creds", "entries", "author"),
                            ("conversation", "messages", "from"), ("pins", "entries", "from"),

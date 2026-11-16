@@ -17,5 +17,6 @@ def pattern_or_exit(grep: str | None) -> re.Pattern[str] | None:
 def filter_messages(msgs: list[dict[str, Any]], pattern: re.Pattern[str] | None) -> list[dict[str, Any]]:
     if pattern is None:
         return msgs
+    # embeds and Components V2 leave content empty
     return [m for m in msgs
             if pattern.search(m.get('content') or '') or pattern.search(m.get('content_rendered') or '')]

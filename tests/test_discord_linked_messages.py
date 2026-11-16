@@ -40,7 +40,7 @@ def test_a_message_resolves_five_distinct_links_and_only_lists_the_rest(tmp):
 
     client = _gateway.run(tmp, script)
     if client is None:
-        return
+        _util.skip("discord.py is not installed")
     linked = _gateway.inbox(tmp, 101)["linked_messages"]
     url = "https://discord.com/channels/1/{}/{}".format
     assert fetched == [CHANNEL + n for n in (1, 2, 3, 4, 5)], fetched
@@ -49,6 +49,8 @@ def test_a_message_resolves_five_distinct_links_and_only_lists_the_rest(tmp):
     assert [e["url"] for e in linked] == [url(CHANNEL + n, n) for n in range(1, 8)], linked
     assert [("path" in e, "error" in e) for e in linked[:5]] == [(True, False)] * 2 + [(False, True)] + [
         (True, False)] * 2, linked
+    assert linked[2] == {"msg_id": "3", "channel_id": str(CHANNEL + 3), "url": url(CHANNEL + 3, 3),
+                         "error": "RuntimeError: Missing Access"}, linked[2]
     assert linked[5:] == [{"msg_id": str(n), "channel_id": str(CHANNEL + n), "url": url(CHANNEL + n, n), **CAPPED}
                           for n in (6, 7)], linked
 
