@@ -1374,9 +1374,7 @@ def _meta_request(identity, payload, timeout):
 
 
 def attachments_cli(args):
-    identity = args.identity
-    timeout = args.timeout
-    action = args.att_action
+    identity, timeout, action = args.identity, args.timeout, args.att_action
     if action == 'list':
         try:
             resp = _meta_request(identity, {'op': 'attachment-list', 'limit': args.limit}, timeout)
@@ -1436,8 +1434,10 @@ def attachments_cli(args):
             print(f'error: {resp.get("error", resp)}', file=sys.stderr)
             sys.exit(1)
         saved = resp.get('saved', [])
+        for s in resp.get('skipped', []):
+            print(f'skipped: {s["filename"]!r}  ({s["reason"]})', file=sys.stderr)
         if not saved:
-            print(f'(no attachments in {args.msg_id}: {resp.get("reason", "")})', file=sys.stderr)
+            print(f'(nothing saved from {args.msg_id}: {resp.get("reason", "every attachment was skipped")})', file=sys.stderr)
             sys.exit(2)
         for s in saved:
             print(f'saved: {s["path"]}  ({s["size"]} bytes, {s["filename"]})')

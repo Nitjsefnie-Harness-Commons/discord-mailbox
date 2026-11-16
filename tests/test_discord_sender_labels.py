@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Sender labels: a name from the directory, or visibly `user:<username>`."""
+"""Sender labels: a name from the directory, or visibly `user:<username>`; and the attachment ops' answers."""
+import contextlib
+import io
 import json
 import os
 import sys
@@ -12,10 +14,18 @@ import _util  # noqa: E402
 from _gateway import ALICE, BOT  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
+from discord_mb_lib import core  # noqa: E402
 from discord_mb_lib._directory import _Directory as D  # noqa: E402
 
 MALLORY, OTHER = 970000000000000002, 970000000000000003
 FALLBACK = "user:alice"                # MALLORY's username is `alice`, a name ALICE holds
+DOWNLOADS = (  # attachment name -> the file it is saved as, or (with a space) why it is skipped
+    ("../../escaped.txt", "escaped.txt"), ("..\\..\\win.txt", "win.txt"),
+    ("sub/escaped.txt", "an earlier attachment on this message is saved as 'escaped.txt'"),
+    ("dir/", "file name reduces to ''"), ("x/.", "file name reduces to '.'"), ("x\\..", "file name reduces to '..'"),
+    ("old.txt", "old.txt"),                                  # already there: overwritten
+    ("link.txt", "'link.txt' resolves outside dest_dir"),
+    ("alias.txt", "'alias.txt' is the file an earlier attachment on this message is saved as"))
 
 
 def test_a_sender_is_labelled_by_its_oldest_directory_name_or_user_and_username(tmp):
@@ -126,6 +136,59 @@ def test_every_author_label_in_a_listing_follows_the_same_rule(tmp):
     assert [p["from"] for p in pinned] == newest_first, pinned
     saved = {p.stem: json.loads(p.read_text(encoding="utf-8"))["from"] for p in (Path(tmp) / "pins").glob("*/*.json")}
     assert saved == {"40": "alice", "41": FALLBACK}, saved
+
+
+def _download(tmp, filenames, dest, **extra):
+    """-> the attachment-download answer for one #attachments message carrying `filenames`."""
+    def attachment(filename):
+        async def save(fp):
+            Path(fp).write_text(f"from {filename}", encoding="utf-8")
+        return types.SimpleNamespace(filename=filename, size=1, url="u", save=save)
+
+    async def script(client):
+        async def fetch_message(msg_id):
+            msg = client.message(msg_id, ALICE, "", client.attachments)
+            msg.attachments = [attachment(f) for f in filenames]
+            return msg
+        client.attachments.fetch_message = fetch_message
+        await client.ask({"dl": {"op": "attachment-download", "msg_id": "7", "dest_dir": str(dest), **extra}})
+    tmp.mkdir()
+    return _gateway.run(tmp, script).responses["dl"]
+
+
+def test_a_download_saves_each_attachment_directly_inside_dest_dir_or_skips_it_with_a_reason(tmp):
+    root = Path(tmp)
+    inside = root / "real" / "inside"
+    inside.mkdir(parents=True)
+    (root / "via").symlink_to(root / "real", target_is_directory=True)   # dest_dir differs from its resolved form
+    (inside / "old.txt").write_text("stale", encoding="utf-8")
+    (inside / "link.txt").symlink_to(root / "outside.txt")
+    (inside / "alias.txt").symlink_to(inside / "escaped.txt")
+    dest, saves = root / "via" / "inside", {n: want for n, want in DOWNLOADS if " " not in want}
+    resp = _download(root / "gateway", [n for n, _ in DOWNLOADS], dest)
+    assert [(s["filename"], s["path"]) for s in resp["saved"]] == [(n, str(dest / w)) for n, w in saves.items()], resp
+    assert resp["skipped"] == [{"filename": n, "reason": w} for n, w in DOWNLOADS if n not in saves], resp
+    assert sorted(os.listdir(root)) == ["gateway", "real", "via"], os.listdir(root)
+    resp = _download(root / "renamed", ["../../escaped.txt"], inside, rename="../renamed.txt")   # taken as given
+    assert (resp["saved"][0]["path"], resp["skipped"]) == (str(inside / "../renamed.txt"), []), resp
+    assert _download(root / "empty", [], inside)["skipped"] == [], "no attachments, nothing skipped"
+
+
+def test_the_download_cli_prints_every_skipped_attachment(tmp):
+    del tmp
+    args = types.SimpleNamespace(identity="me", timeout=1.0, att_action="download", msg_id="7", dest_dir="d", rename=None, channel=None)
+    err, original = io.StringIO(), core._meta_request
+    core._meta_request = lambda i, p, t: {"ok": True, "saved": [], "skipped": [
+        {"filename": "x/..", "reason": "file name reduces to '..'"}]}
+    try:
+        with contextlib.redirect_stderr(err):
+            core.attachments_cli(args)
+    except SystemExit as e:
+        assert e.code == 2, e.code
+    finally:
+        core._meta_request = original
+    assert err.getvalue() == ("skipped: 'x/..'  (file name reduces to '..')\n"
+                              "(nothing saved from 7: every attachment was skipped)\n"), err.getvalue()
 
 
 def main():
