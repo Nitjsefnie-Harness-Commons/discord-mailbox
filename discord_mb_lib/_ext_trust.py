@@ -1,10 +1,12 @@
 """Refuse extension modules other users can rewrite."""
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 
-def check_extension(path, *, posix=os.name != 'nt', euid=None, stat_of=os.stat):
+def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: int | None = None,
+                    stat_of: Callable[[Path], os.stat_result] = os.stat) -> str | None:
     if not posix or not Path(path).is_file():
         return None
     euid = os.geteuid() if euid is None else euid
