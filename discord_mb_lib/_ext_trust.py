@@ -43,15 +43,14 @@ def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: in
         fd = os.open(real, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
     except FileNotFoundError:
         raise FileNotFoundError(f'no such file: {path}') from None
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        raise FileNotFoundError(f'no such file: {path}')
-    with open(fd, 'rb') as module:
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise FileNotFoundError(f'no such file: {path}')
         warnings = []
         for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, *holders, *cache_holders, cached.parent, cached)):
             try:
                 info = stat_of(fd if target == real else target)
-            except FileNotFoundError:   # the import writes a missing cache
+            except FileNotFoundError:   # nothing exists there to judge
                 continue
             mode = stat.S_IMODE(info.st_mode)
             if mode & 0o002:
@@ -60,4 +59,6 @@ def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: in
                 raise PermissionError(f'{target} is owned by uid {info.st_uid}, not by this user or root')
             if mode & 0o020:
                 warnings.append(f'{target} is group-writable')
-        return module.read(), '; '.join(warnings) or None
+        return b''.join(iter(lambda: os.read(fd, 1 << 16), b'')), '; '.join(warnings) or None
+    finally:
+        os.close(fd)
