@@ -63,9 +63,10 @@ def inbox(tmp, msg_id=None):
     return json.loads((root / f"{msg_id}.json").read_text(encoding="utf-8"))
 
 
-def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False):
+def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False):
     """Let `script(client)` drive the connector; `entries` is the directory history,
-    newest first. -> the client (`events`, `reactions`, `log`), None without discord.py.
+    newest first; `outbox` also runs its outbox watcher (ticks once a second, files in
+    `tmp/state/outbox`). -> the client (`events`, `reactions`, `log`), None without discord.py.
     The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
         return None
@@ -73,7 +74,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
     from discord_mb_lib import _directory, _settings, connector as c
     root, env = Path(tmp), env or {}
     state, ids = root / "state", iter(range(500000, 600000))
-    in_dir, out_dir = state / "in", state / "out"
+    in_dir, out_dir, out_box = state / "in", state / "out", state / "outbox"
     guild = types.SimpleNamespace(id=GUILD, name="guild", roles=[], text_channels=[])
 
     # The stand-in channels skip discord.py's __init__: it needs a live gateway state.
@@ -155,25 +156,26 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
 
         async def drive(self):
             await self.handlers["on_ready"]()
-            meta = None
+            kept, watchers = ("meta_watcher", "outbox_watcher") if outbox else ("meta_watcher",), []
             for coro in self.tasks:
-                if coro.cr_code.co_name == "meta_watcher":
-                    meta = asyncio.ensure_future(coro)
+                if coro.cr_code.co_name in kept:
+                    watchers.append(asyncio.ensure_future(coro))
                 else:
                     coro.close()
             try:
                 await script(self)
             finally:
                 self.closed = True
-                await meta
+                await asyncio.gather(*watchers)
 
     swaps = {"state_dir": lambda identity: state, "inbox_dir": lambda identity: root / "inbox",
              "sweep_status_plugin": lambda identity: None,
              "default_status_plugin": lambda flavor: root / "no-such-plugin",
              "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)} if extension else {},
              "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins", "TOKEN_DIR": root / "tokens",
-             "meta_in_dir": lambda identity: in_dir, "meta_out_dir": lambda identity: out_dir}
-    for d in (in_dir, out_dir, root / "inbox", root / "msgs", root / "locks"):
+             "meta_in_dir": lambda identity: in_dir, "meta_out_dir": lambda identity: out_dir,
+             "outbox_dir": lambda identity: out_box}
+    for d in (in_dir, out_dir, out_box, root / "inbox", root / "msgs", root / "locks"):
         d.mkdir(parents=True, exist_ok=True)
     saved = {n: getattr(c, n) for n in swaps}
     saved_env = {n: os.environ.get(n) for n in (*env, LOCK_ROOT_ENV)}
