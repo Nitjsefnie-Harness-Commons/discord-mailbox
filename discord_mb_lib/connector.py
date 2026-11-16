@@ -1744,8 +1744,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         '''Load + setup an extension. `persist` records it in the registry so
         the next connector start reloads it; a startup reload passes False.'''
         # Before the outgoing generation is torn down, so a refusal leaves it running.
-        warning = _ext_trust.check_extension(path)
-        module, setup, command = load_extension(path)
+        source, warning = _ext_trust.check_extension(path)
+        module, setup, command = load_extension(path, source)
         # Drop the outgoing generation's handlers; the installed dispatchers
         # read this same dict, so they pick the new ones up with no re-setattr.
         for _handlers in state['ext_listeners'].values():
