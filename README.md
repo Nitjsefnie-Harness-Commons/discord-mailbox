@@ -86,6 +86,14 @@ not create (a symlink, another user's, open to other users, or without its
 ownership marker) exits 1 with nothing removed. Inside the directory it never
 follows a symlink: a linked identity, channel directory or record is left alone.
 
+A control request the CLI writes to `<temp>/discord-mailbox/<identity>/inbox-metadata/`
+and the connector's answer in `outbox-metadata/` are created readable and
+writable only by the user that wrote them (mode 0600 on POSIX). The connector
+removes its answers, and the temp files an interrupted write left there, once
+they are 15 minutes old, at startup and on every pass of its request watcher,
+so an answer no CLI collected outlives 15 minutes only while no connector for
+that identity runs.
+
 ## Directory
 
 Each unpinned message in the directory channel that mentions a user and
@@ -99,7 +107,11 @@ and what the `from` and `author_identities` fields show. `list-agents`
 still lists every entry, with its `user_id` and `author_id`.
 
 An account that holds several names is labelled with its oldest bound name.
-A name beginning with `user:` (any case) is never bound.
+A name beginning with `user:` (any case) is never bound, and neither is a name
+made only of ASCII digits, which reads as a user id. An all-digit `send --dm`,
+`conversation --dm` or DM `move` argument, and each all-digit `send`
+recipient, is always taken as that Discord user id, whatever the directory
+holds.
 
 A sender's label is a directory name or, when its account holds none,
 `user:<username>`. The `message` event and the inbox record both carry
@@ -179,6 +191,18 @@ Whenever an untrusted entry is skipped or answered, the answer carries a
 output stays a list of entries. The text output of `creds list` and
 `creds get` shows each entry's author as `(by <label> user <author_id> ...)`
 and adds `UNTRUSTED` after the id of an untrusted one.
+
+## Extensions
+
+On POSIX, `extension <identity> set` and the connector's startup reload of the
+registered extension refuse a module when other users can write to it, to its
+directory (as named or with symlinks resolved), to its `__pycache__` directory
+or to its cached `.pyc`, or when any of these is owned by a user other than
+this one or root. A refused `set` leaves any running extension loaded and
+registers nothing, and the CLI prints the reason as an error. Either refusal's
+reason is the `last_error` that `extension <identity> list` shows. A module
+only group-writable in one of those places still loads: the `set` answer
+carries a `warning` naming it, and so does the connector's load log line.
 
 ## Secrets off the command line
 
