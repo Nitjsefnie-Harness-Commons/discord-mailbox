@@ -30,7 +30,7 @@ def seed(root):
         author, channel = MESSAGES[int(rel.rsplit("/", 1)[1])]
         record = {"msg_id": rel[-3:], "from_user_id": str(author), "channel_id": str(channel),
                   "is_dm": rel.endswith("702")}
-        if "/inbox/" in rel:   # only the inbox writer records the channel's parent
+        if "/inbox/" in rel and not rel.endswith("702"):   # the inbox writer's context; the DM's failed to resolve
             record["channel"] = {"id": str(channel), "parent_id": str(C2) if channel == T else None}
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / f"{rel}.json").write_text(json.dumps(record), encoding="utf-8")
@@ -94,8 +94,8 @@ def delete_on_discord(root, event, payload, replies):
     return stored(root / "mailbox"), heard, client
 
 
-async def deliver_during_delete(client, msg_id, held):
-    """Deliver `msg_id` and delete it on Discord while `held` ("pins" or "reaction") is awaited."""
+async def deliver_during_delete(client, msg_id, held, whole_channel):
+    """Deliver `msg_id` and delete it, or its channel, on Discord while `held` ("pins" or "reaction") is awaited."""
     import discord
     reached, release = asyncio.Event(), asyncio.Event()
 
@@ -118,7 +118,10 @@ async def deliver_during_delete(client, msg_id, held):
         msg.add_reaction = reaction
     task = asyncio.ensure_future(client.on_message(msg))
     await reached.wait()
-    await client.on_raw_message_delete(discord.RawMessageDeleteEvent({"id": msg_id, "channel_id": BRIDGE}))
+    if whole_channel:
+        await client.on_guild_channel_delete(types.SimpleNamespace(id=BRIDGE))
+    else:
+        await client.on_raw_message_delete(discord.RawMessageDeleteEvent({"id": msg_id, "channel_id": BRIDGE}))
     release.set()
     await task
     vars(client.bridge).pop("pins", None)
@@ -133,11 +136,18 @@ def test_a_message_deleted_while_its_record_is_written_leaves_no_record(tmp):
     async def script(client):
         inbox.mkdir(parents=True)
         connector.inbox_dir = lambda identity: inbox   # the inbox the deletion handler sweeps
-        for msg_id, held in ((801, "pins"), (802, "reaction")):
-            await deliver_during_delete(client, msg_id, held)
-        await client.on_message(client.message(803, ALICE, f"<@{BOT}> kept", client.bridge, mentions=(BOT,)))
+        for msg_id, held, whole_channel in ((801, "pins", False), (802, "reaction", False), (804, "reaction", True)):
+            await deliver_during_delete(client, msg_id, held, whole_channel)
+        await client.on_message(client.message(803, ALICE, "kept", client.dm(970000000000000099)))
     _gateway.run(tmp, script)
     assert sorted(p.name for p in inbox.iterdir()) == ["803.json"], list(inbox.iterdir())
+
+
+def test_the_remembered_deletions_are_bounded_and_drop_the_oldest(tmp):
+    from discord_mb_lib import _retention
+    forgotten = dict.fromkeys(map(str, range(_retention.FORGOTTEN_MAX)))
+    _retention._remember(forgotten, ["0", "new"])   # "0" is refreshed, so "1" is the oldest
+    assert (len(forgotten), next(iter(forgotten)), "new" in forgotten) == (_retention.FORGOTTEN_MAX, "2", True)
 
 
 def mb(tmp, *argv):
