@@ -17,7 +17,7 @@ import _util  # noqa: E402
 from _gateway import ALICE, BOT, GUILD, T0  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
-from discord_mb_lib import _delivery as D  # noqa: E402
+from discord_mb_lib import _delivery as D, _settings  # noqa: E402
 
 RAW, MALLORY, OTHER = 940000000000000003, 940000000000000004, 940000000000000005
 OTHER_GUILD = 950000000000000002
@@ -214,12 +214,13 @@ def test_the_cap_forgets_senders_once_their_window_has_passed(tmp):
 def _run(tmp, env, script):
     """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; skipped without discord.py.
 
-    `env` is the whole settings view: the host's settings files are never read."""
-    saved, D.setting = D.setting, env.get
+    The real `setting()` reads the three settings from the environment (`env` over blanks, which
+    count as unset); the file cache is pinned empty so the host's settings files never leak in."""
+    saved, _settings._cache = _settings._cache, {}
     try:
-        client = _gateway.run(tmp, script, extension=True)
+        client = _gateway.run(tmp, script, env={**dict.fromkeys(ENV, ""), **env}, extension=True)
     finally:
-        D.setting = saved
+        _settings._cache = saved
     if client is None:
         _util.skip("discord.py is not installed")
     return (_gateway.inbox(tmp), [int(e["msg_id"]) for e in client.events if e.get("event") == "message"],
