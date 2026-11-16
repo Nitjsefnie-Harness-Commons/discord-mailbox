@@ -80,7 +80,7 @@ it still caches; an archived thread is not cached). A deletion made while no con
 identity on the host, and prints `{"user_id": "<id>", "removed": <n>}` with the
 number of files removed. It needs no identity and no running connector. An id
 that is not all ASCII digits exits 2. With no `discord-mailbox` directory it
-prints `"removed": 0`. A `discord-mailbox` directory this user's connector did
+prints `"removed": 0`. A `discord-mailbox` directory this user's mailbox did
 not create (a symlink, another user's, open to other users, or without its
 ownership marker) exits 1 with nothing removed. Inside the directory it never
 follows a symlink: a linked identity, channel directory or record is left alone.
