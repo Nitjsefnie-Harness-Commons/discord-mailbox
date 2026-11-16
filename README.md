@@ -56,7 +56,7 @@ never lower it to turn a build green.
 
 | Workflow | What it does |
 | --- | --- |
-| `tests` | `run_tests.py` across 3 OSes × 3 Pythons, plus a single-run coverage job — the matrix would otherwise report the same coverage number nine times. |
+| `tests` | `run_tests.py` across 3 OSes × every supported Python, plus a single-run coverage job — the matrix would otherwise report the same coverage number once per leg. |
 | `lint` / `types` | pylint + pycodestyle, and pyright. |
 | `codeql` | Security analysis (Python only — no JS here). Findings go to the Security tab, never the build. Weekly cron on top of push, because a query published today would otherwise only ever run against files touched after it shipped. |
 | `audit` | `pip-audit` over both requirements files, resolving the full transitive tree. **Daily** cron: this answers "is a version we froze months ago still safe", and that answer changes with no commit here to hang it on. |
@@ -94,8 +94,9 @@ loosening the leading `*`.
 Per-file records are never raised; the `tests/` tree budget rises only in a
 pull request carrying a `feat` commit. With the deploy key of the `main-push`
 environment, each push to `main` tightens `.github/comment-share.json` and
-`.github/size-baseline.json` and commits any change itself. The adoption pull request seeded
-`.github/comment-share.json` by running the action's tighten over its own
-head (`COMMENT_RATCHET_MODE=tighten GITHUB_WORKSPACE="$PWD" python3 -I
+`.github/size-baseline.json` and commits any change itself. The adoption pull
+request seeded `.github/comment-share.json` by running the action's tighten
+over its own head
+(`COMMENT_RATCHET_MODE=tighten GITHUB_WORKSPACE="$PWD" python3 -I
 <comment-ratchet checkout>/run.py`); the first push to `main` seeds the size
 records.
