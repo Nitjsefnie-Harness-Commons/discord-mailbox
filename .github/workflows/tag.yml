@@ -102,16 +102,46 @@ jobs:
           echo "Version is $version"
 
       - name: Refuse to re-tag an existing version
+        id: retag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         # An existing tag means either a mistaken edit or a rerun after a
         # partial failure. Both want a human, and both are silent if this
         # step is a no-op instead of an error.
+        #
+        # One exception: a push whose __version__ line is the one it found.
+        # The path filter watches all of core.py, so such a push is only a
+        # code edit and released nothing. Both lines must be read and equal
+        # to skip; a failed read leaves the refusal in force. A missing tag
+        # never skips, so a bump whose tagging failed still gets tagged.
         run: |
           if gh api -H "Cache-Control: no-cache" \
                "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            pat='^__version__ *='
+            now="$(grep -E "$pat" discord_mb_lib/core.py || true)"
+            before=""
+            if [ "$EVENT" = push ]; then
+              # An empty ref= would read the default branch.
+              if [ -n "$BEFORE" ]; then
+                before="$(gh api -H "Cache-Control: no-cache" \
+                    -H "Accept: application/vnd.github.raw+json" \
+                    "repos/$REPO/contents/discord_mb_lib/core.py?ref=$BEFORE" \
+                    2>/dev/null | grep -E "$pat" || true)"
+              fi
+              if [ -z "$before" ]; then
+                echo "Could not read __version__ at $BEFORE; refusing as usual." >&2
+              fi
+            fi
+            if [ -n "$now" ] && [ "$now" = "$before" ]; then
+              echo "$TAG already exists and this push left the version alone:"
+              echo "nothing to release."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "Tag $TAG already exists — __version__ was set to a version" >&2
             echo "that has already shipped. Bump it further, or delete that" >&2
             echo "tag and its release if it was cut in error." >&2
@@ -120,6 +150,7 @@ jobs:
           echo "$TAG is free"
 
       - name: Wait for the other gates on this commit
+        if: steps.retag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha || github.sha }}
@@ -169,6 +200,7 @@ jobs:
           exit 1
 
       - name: Create and push the tag
+        if: steps.retag.outputs.skip != 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ inputs.sha || github.sha }}
@@ -188,6 +220,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Start the release
+        if: steps.retag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
