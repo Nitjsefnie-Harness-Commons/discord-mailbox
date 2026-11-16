@@ -25,7 +25,7 @@ name: actionlint
 # other gate is a supply-chain position worth defending.
 #
 # Suppressions belong at the offending line as a `# zizmor: ignore[rule]`
-# comment WITH a justification (see eslint.yml), never as a raised
+# comment WITH a justification, or in zizmor.yml, never as a raised
 # --min-severity here: a threshold silences the next finding too, and the
 # next one is the one nobody has thought about yet.
 

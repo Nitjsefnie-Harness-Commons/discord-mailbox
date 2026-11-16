@@ -3,4 +3,4 @@
 # requirements-zizmor.txt with hashes on Python 3.11, for the reason
 # requirements-dev.in gives:
 #   pip-compile --generate-hashes requirements-zizmor.in
-zizmor==1.29.0
+zizmor==1.32.0
