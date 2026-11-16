@@ -363,7 +363,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             _events['writer'] = _EventStreamWriter(sd)
         except OSError as e:
             log(f'event stream unavailable ({e}) — leeches will see no stream')
-        _control_files.sweep_stale_responses(meta_out_dir(identity))
+        try:
+            _control_files.sweep_stale_responses(meta_out_dir(identity))
+        except Exception as e:
+            log(f'control-response startup sweep failed: {type(e).__name__}: {e}')
 
         # Status plugins are session-scoped: a fresh connector must never inherit one
         # a predecessor left behind (e.g. after kill -9). Sweep the slot before doing
