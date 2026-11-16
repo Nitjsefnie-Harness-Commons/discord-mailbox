@@ -246,15 +246,16 @@ def test_a_registered_identity_reads_its_dm_without_sending(tmp):
 
 
 def test_a_raw_user_id_opens_a_dm_that_is_not_open_yet(tmp):
-    responses, world = _ask(tmp, {"r": _conv(dm_user=str(RAW_ID))})
-    if responses is None:
-        return
-    resp = responses["r"]
-    assert resp["ok"], resp
-    assert [m["content"] for m in resp["messages"]] == ["reply", "first contact"], resp
-    assert world.created_dms == [RAW_ID], world.created_dms
-    assert world.sent == [], world.sent
-    assert world.directory_reads == 1, "a raw id needs no directory lookup"
+    for row, entries in enumerate(([], [_message(4, ALICE_ID, 5, f"**{RAW_ID}** · <@{ALICE_ID}>")])):  # row 1: a member's entry named with the id
+        responses, world = _ask(os.path.join(tmp, str(row)), {"r": _conv(dm_user=str(RAW_ID))}, lambda w, e=entries: w.directory.extend(e))
+        if responses is None:
+            return
+        resp = responses["r"]
+        assert resp["ok"], (row, resp)
+        assert [m["content"] for m in resp["messages"]] == ["reply", "first contact"], (row, resp)
+        assert world.created_dms == [RAW_ID], (row, world.created_dms)
+        assert world.sent == [], (row, world.sent)
+        assert world.directory_reads == 1, (row, "a raw id needs no directory lookup")
 
 
 def test_a_later_registration_is_found_by_one_directory_refresh(tmp):
@@ -355,8 +356,7 @@ def test_the_cli_forwards_the_dm_user_in_the_request(tmp):
             core.conversation_cli("me", 5, channel_id="1", dm="alice", before_id="2", after_id="3")
     finally:
         core._meta_request = original
-    assert sent == [{"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice",
-                     "before_id": "2", "after_id": "3"}], sent
+    assert sent == [{"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice", "before_id": "2", "after_id": "3"}], sent
 
 
 def test_the_parser_wires_dm_and_refuses_it_with_channel(tmp):
