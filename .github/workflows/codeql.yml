@@ -1,10 +1,9 @@
 name: codeql
 
 # Static security analysis (advanced setup, not the repo-settings "default
-# setup" — the config lives here so it is reviewable in a diff like every
-# other gate). Free on this public repository; findings land in the
-# Security tab rather than turning the build red, so a new query shipping
-# upstream cannot block an unrelated push.
+# setup": the config lives here, reviewable in a diff). Free on this public
+# repository; findings land in the Security tab rather than turning the
+# build red, so a new upstream query cannot block an unrelated push.
 #
 # TRIGGER DIFFERS FROM THE OTHER WORKFLOWS ON PURPOSE. The rest of the
 # suite builds on `pull_request_review` once an approving review lands.
@@ -13,12 +12,13 @@ name: codeql
 # `pull_request.head.sha`. On a review event those two are different
 # commits, so the alerts would be filed against a tree that was never the
 # one analysed. A mergeable same-repo PR's head is analysed, merged onto its
-# base, by its `pull_request` run (its push run skips); `push` covers the rest.
+# base, by its `pull_request` run (its push run skips once the lookup sees
+# it mergeable); `push` covers the rest.
 #
 # The weekly cron is not redundant with push: CodeQL's query packs are
 # updated continuously, and a new query only ever runs against code that
-# has changed since it shipped. Without the cron, a rule published today
-# would never be applied to a file last touched last year.
+# has changed since it shipped. Without it, a rule published today would
+# never reach a file last touched last year.
 
 on:
   push:
@@ -38,10 +38,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A push a mergeable open pull request's run also gates skips the jobs
-  # below. A skipped check shows `name:` unevaluated: the `${{ }}` in each
-  # keeps it off the gate's check name. `!cancelled()` runs them if this
-  # lookup fails.
+  # A push to a branch whose open, mergeable pull request runs these gates
+  # skips the jobs below; a skipped check passes. A skipped job's `name:`
+  # shows unevaluated, so its `${{ }}` keeps it off the gate's required
+  # check name: keep it. `!cancelled()` runs them if this lookup fails.
   guard:
     uses: ./.github/workflows/open-pull-request.yml
     permissions:

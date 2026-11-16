@@ -114,16 +114,21 @@ jobs:
         # partial failure. Both want a human, and both are silent if this
         # step is a no-op instead of an error.
         #
-        # One exception: a push whose __version__ line is the one it found.
-        # The path filter watches all of core.py, so such a push is only a
-        # code edit and released nothing. Both lines must be read and equal
-        # to skip; a failed read leaves the refusal in force. A missing tag
-        # never skips, so a bump whose tagging failed still gets tagged.
+        # One exception: a push whose __version__ line matches the one at the
+        # push's `before` commit. The path filter watches all of core.py, so
+        # such a push is only a code edit and released nothing. Both lines
+        # must be read and equal to skip; a failed read leaves the refusal in
+        # force. A missing tag never skips, so a bump whose tagging failed
+        # still gets tagged.
         run: |
           if gh api -H "Cache-Control: no-cache" \
                "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
             pat='^__version__ *='
             now="$(grep -E "$pat" discord_mb_lib/core.py || true)"
+            if [ -z "$now" ]; then
+              echo "No line matching $pat in discord_mb_lib/core.py; refusing." >&2
+              exit 1
+            fi
             before=""
             if [ "$EVENT" = push ]; then
               # An empty ref= would read the default branch.
