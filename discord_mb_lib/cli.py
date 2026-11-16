@@ -102,7 +102,7 @@ def _cli():
                             "(resolved as `send --dm` does; sends nothing)")
     cv.add_argument('--before', dest='before_id', default=None, help='Fetch messages strictly before this message ID (for pagination)')
     cv.add_argument('--after', dest='after_id', default=None, help='Fetch messages strictly after this message ID (oldest-first)')
-    cv.add_argument('--grep', default=None, help='Regex filter applied server-side to message content')
+    cv.add_argument('--grep', default=None, help='Regex filter applied by this CLI to message content and rendered content')
     cv.add_argument('--timeout', type=float, default=15.0)
     cv.add_argument('--json', action='store_true')
 
