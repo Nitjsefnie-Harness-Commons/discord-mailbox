@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Local message records follow deletions on Discord, on the REAL connector."""
+import asyncio
 import json
 import os
 import subprocess
@@ -11,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from _gateway import BRIDGE, GUILD  # noqa: E402
+from _gateway import ALICE, BOT, BRIDGE, GUILD  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
 MB = os.path.join(_util.SCRIPTS, "discord_mb.py")
@@ -83,6 +84,52 @@ def delete_on_discord(root, event, payload, replies):
                           for name, msg in replies.items() if msg})
     client = _gateway.run(root, script, extension=True)
     return stored(root / "mailbox"), heard, client.responses
+
+
+async def deliver_during_delete(client, msg_id, held):
+    """Deliver `msg_id` and delete it on Discord while `held` ("pins" or "reaction") is awaited."""
+    import discord
+    reached, release = asyncio.Event(), asyncio.Event()
+
+    async def hold():
+        reached.set()
+        await release.wait()
+
+    async def pins(limit=50):
+        await hold()
+        for pinned in ()[:limit]:
+            yield pinned
+
+    async def reaction(emoji):
+        await hold()
+        raise RuntimeError(f"404 Unknown Message: {emoji}")   # a deleted message takes no reaction
+    msg = client.message(msg_id, ALICE, f"<@{BOT}> hi", client.bridge, mentions=(BOT,))
+    if held == "pins":
+        client.bridge.pins = pins
+    else:
+        msg.add_reaction = reaction
+    task = asyncio.ensure_future(client.on_message(msg))
+    await reached.wait()
+    await client.on_raw_message_delete(discord.RawMessageDeleteEvent({"id": msg_id, "channel_id": BRIDGE}))
+    release.set()
+    await task
+    vars(client.bridge).pop("pins", None)
+
+
+def test_a_message_deleted_while_its_record_is_written_leaves_no_record(tmp):
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    from discord_mb_lib import connector
+    inbox = Path(tmp, "mailbox", "gate-test", "inbox")
+
+    async def script(client):
+        inbox.mkdir(parents=True)
+        connector.inbox_dir = lambda identity: inbox   # the inbox the deletion handler sweeps
+        for msg_id, held in ((801, "pins"), (802, "reaction")):
+            await deliver_during_delete(client, msg_id, held)
+        await client.on_message(client.message(803, ALICE, f"<@{BOT}> kept", client.bridge, mentions=(BOT,)))
+    _gateway.run(tmp, script)
+    assert sorted(p.name for p in inbox.iterdir()) == ["803.json"], list(inbox.iterdir())
 
 
 def mb(tmp, *argv):
