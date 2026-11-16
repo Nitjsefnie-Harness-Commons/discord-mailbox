@@ -49,7 +49,7 @@ def test_the_connector_refuses_a_request_that_still_carries_grep(tmp):
     responses, world = _ask(tmp, {"slow": _conv(dm_user="alice", grep="^(a+)+$"),
                                   "bad": _conv(dm_user="alice", grep="(")})
     if responses is None:
-        return
+        _util.skip("discord.py is not installed")
     for name in ("slow", "bad"):
         resp = responses[name]
         assert not resp["ok"] and "moved to the CLI" in resp["error"], resp
@@ -60,15 +60,16 @@ def test_the_connector_refuses_a_request_that_still_carries_grep(tmp):
 def test_the_connector_still_serves_a_conversation_without_grep(tmp):
     responses, _ = _ask(tmp, {"r": _conv(dm_user="alice")})
     if responses is None:
-        return
+        _util.skip("discord.py is not installed")
     assert responses["r"]["ok"] and len(responses["r"]["messages"]) == 2, responses["r"]
 
 
 def test_the_cli_filters_content_and_content_rendered_and_sends_no_grep(tmp):
     del tmp
     if _connector()[0] is None:
-        return
-    for grep, expected in (("needle", ["1", "2"]), ("embed$", ["3"]), ("^plain", ["1"]), ("absent", [])):
+        _util.skip("discord.py is not installed")
+    for grep, expected in (("needle", ["1", "2"]), ("embed$", ["3"]), ("^plain", ["1"]), ("absent", []),
+                           ("NEEDLE", [])):     # no flags: the match is case-sensitive
         code, out, _, sent = _cli(grep=grep, as_json=True)
         assert code is None and [m["msg_id"] for m in json.loads(out)] == expected, (grep, out)
         assert sent == [{"op": "conversation", "limit": 5}], sent
@@ -83,7 +84,7 @@ def test_the_cli_filters_content_and_content_rendered_and_sends_no_grep(tmp):
 def test_an_invalid_pattern_fails_in_the_cli_before_any_request(tmp):
     del tmp
     if _connector()[0] is None:
-        return
+        _util.skip("discord.py is not installed")
     code, out, err, sent = _cli(grep="(")
     assert code == 2 and out == "" and sent == [], (code, out, sent)
     assert "invalid --grep pattern '('" in err, err

@@ -134,6 +134,9 @@ def test_a_continuation_frame_needs_a_registered_author_or_the_chunk_one_author(
         ([(RAW, CHUNK1.replace(" report", " other"), False), (RAW, CHUNK2, True)], [True, False]),
         # A delivered chunk 2+ frame is not a chunk 1, so it vouches for nothing.
         ([(RAW, CHUNK2, False), (RAW, CHUNK2.replace("(2/3)", "(3/3)"), True)], [True, False]),
+        # The send path's other chunk-1 prefixes: a role mention (`all`) and several user mentions.
+        ([(RAW, CHUNK1.replace("<@", "<@&"), False), (RAW, CHUNK2, True)], [True, True]),
+        ([(RAW, CHUNK1.replace(" **", f" <@{ALICE}> **"), False), (RAW, CHUNK2, True)], [True, True]),
         # A chunk 1 for the key from a second author leaves no author vouching, for good;
         # the same author posting it again keeps vouching, and a registered sender is unaffected.
         ([(RAW, CHUNK1, False), (RAW, CHUNK1, False), (RAW, CHUNK2, True)], [True, True, True]),
@@ -209,16 +212,18 @@ def test_the_cap_forgets_senders_once_their_window_has_passed(tmp):
 # --- the real connector -----------------------------------------------------
 
 def _run(tmp, env, script):
-    """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; None without discord.py."""
-    client = _gateway.run(tmp, script, env=env, extension=True)
+    """-> (inbox ids, message-event msg_ids, reacted msg_ids, log), client; skipped without discord.py.
+
+    `env` is the whole settings view: the host's settings files are never read."""
+    saved, D.setting = D.setting, env.get
+    try:
+        client = _gateway.run(tmp, script, extension=True)
+    finally:
+        D.setting = saved
     if client is None:
-        return None
+        _util.skip("discord.py is not installed")
     return (_gateway.inbox(tmp), [int(e["msg_id"]) for e in client.events if e.get("event") == "message"],
             [m for m, _ in client.reactions], client.log), client
-
-
-def _clear_env():
-    return {n: "" for n in ENV}
 
 
 def test_the_connector_applies_the_allow_lists_and_the_cap_to_both_writers(tmp):
@@ -231,11 +236,8 @@ def test_the_connector_applies_the_allow_lists_and_the_cap_to_both_writers(tmp):
         client.relayed = [await client.ext_ctx.deliver(k.message(m, a, "relayed", dm))
                           for m, a in ((105, OTHER), (106, RAW), (106, RAW), (107, RAW))]
 
-    result = _run(tmp, {**_clear_env(), ENV[0]: f"{ALICE},{RAW}", ENV[1]: str(GUILD),
-                        ENV[2]: "1/3600"}, script)
-    if result is None:
-        return
-    (inbox, events, reactions, log), client = result
+    (inbox, events, reactions, log), client = _run(
+        tmp, {ENV[0]: f"{ALICE},{RAW}", ENV[1]: str(GUILD), ENV[2]: "1/3600"}, script)
     assert inbox == {101, 104, 106}, inbox
     assert events == [101, 104, 106] and reactions == [101, 104, 106], (events, reactions)
     assert [p and Path(p).name for p in client.relayed] == [None, "106.json", "106.json", None], (
@@ -256,10 +258,7 @@ def test_a_continuation_reaches_the_inbox_from_the_chunk_one_author_only(tmp):
         await on_message(k.message(205, ALICE, chunk2.replace("report", "other"), k.bridge))
         await client.ext_ctx.deliver(k.message(206, MALLORY, chunk2, k.bridge))
 
-    result = _run(tmp, _clear_env(), script)
-    if result is None:
-        return
-    (inbox, events, reactions, log), _ = result
+    (inbox, events, reactions, log), _ = _run(tmp, {}, script)
     assert inbox == {202, 203, 205, 206}, inbox
     assert events == [202, 203, 205, 206] and reactions == events, (events, reactions)
     assert log.count("not delivered") == 2 and "continuation" in log, log
@@ -270,13 +269,12 @@ def test_an_invalid_setting_stops_the_connector_at_startup(tmp):
         raise AssertionError("the connector reached the gateway")
 
     try:
-        _run(tmp, {**_clear_env(), ENV[2]: "10 per minute"}, script)
+        _run(tmp, {ENV[2]: "10 per minute"}, script)
     except SystemExit as e:
         assert e.code == 1, e.code
         assert ENV[2] in (Path(tmp) / "connector.log").read_text(encoding="utf-8")
     else:
-        if _gateway.have_discord():
-            raise AssertionError("the connector started with an invalid setting")
+        raise AssertionError("the connector started with an invalid setting")
 
 
 def main():
