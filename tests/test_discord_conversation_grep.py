@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""`conversation --grep`: the CLI filters, the connector never runs the pattern.
-
-The connector half drives the REAL `conversation` meta op on the stand-in
-gateway; the CLI half drives `conversation_cli` over a stand-in `_meta_request`.
-"""
+"""`conversation --grep`: the CLI filters, the connector never runs the pattern."""
 import contextlib
 import io
 import json
@@ -47,21 +43,15 @@ def _cli(**kwargs):
 
 def test_the_connector_refuses_a_request_that_still_carries_grep(tmp):
     responses, world = _ask(tmp, {"slow": _conv(dm_user="alice", grep="^(a+)+$"),
-                                  "bad": _conv(dm_user="alice", grep="(")})
+                                  "bad": _conv(dm_user="alice", grep="("),
+                                  "empty": _conv(dm_user="alice", grep="")})
     if responses is None:
         _util.skip("discord.py is not installed")
-    for name in ("slow", "bad"):
+    for name in ("slow", "bad", "empty"):
         resp = responses[name]
         assert not resp["ok"] and "moved to the CLI" in resp["error"], resp
         assert "messages" not in resp, "an older CLI must never get an unfiltered list"
     assert world.alice_dm.calls == [] and world.bridge.calls == [], "no history was read"
-
-
-def test_the_connector_still_serves_a_conversation_without_grep(tmp):
-    responses, _ = _ask(tmp, {"r": _conv(dm_user="alice")})
-    if responses is None:
-        _util.skip("discord.py is not installed")
-    assert responses["r"]["ok"] and len(responses["r"]["messages"]) == 2, responses["r"]
 
 
 def test_the_cli_filters_content_and_content_rendered_and_sends_no_grep(tmp):

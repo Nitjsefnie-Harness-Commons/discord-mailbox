@@ -14,6 +14,8 @@ import os
 import types
 from pathlib import Path
 
+import _util
+
 BOT, ALICE = 940000000000000001, 940000000000000002
 GUILD, BRIDGE, DIRECTORY, ATTACHMENTS, CREDENTIALS = (950000000000000001 + i for i in range(5))
 T0 = 1_000_000.0                      # a monotonic-looking origin, never 0
@@ -66,10 +68,10 @@ def inbox(tmp, msg_id=None):
 def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False):
     """Let `script(client)` drive the connector; `entries` is the directory history,
     newest first; `outbox` also runs its outbox watcher (ticks once a second, files in
-    `tmp/state/outbox`). -> the client (`events`, `reactions`, `log`), None without discord.py.
+    `tmp/state/outbox`). -> the client (`events`, `reactions`, `log`); skipped without discord.py.
     The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
-        return None
+        _util.skip("discord.py is not installed")
     import discord
     from discord_mb_lib import _directory, _settings, connector as c
     root, env = Path(tmp), env or {}
