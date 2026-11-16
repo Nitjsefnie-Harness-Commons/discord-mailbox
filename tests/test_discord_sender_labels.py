@@ -22,7 +22,7 @@ FALLBACK = "user:alice"                # MALLORY's username is `alice`, a name A
 DOWNLOADS = (  # attachment name, the file it is saved as, why it is skipped
     ("../../escaped.txt", "escaped.txt", None), ("..\\..\\win.txt", "win.txt", None),
     ("sub/escaped.txt", None, "an earlier attachment on this message is saved as 'escaped.txt'"),
-    ("dir/", None, "file name reduces to ''"), ("x/.", None, "file name reduces to '.'"),
+    ("dir/", None, "file name reduces to ''"), ("x/.", None, "file name reduces to '.'"), ("loop.txt", None, "'loop.txt' does not resolve"),
     ("x\\..", None, "file name reduces to '..'"), ("old.txt", "old.txt", None),   # already there: overwritten
     ("link.txt", None, "'link.txt' does not resolve inside dest_dir"),
     ("self", None, "'self' does not resolve inside dest_dir"), ("sub", None, "'sub' is a directory"),
@@ -165,8 +165,8 @@ def test_a_download_saves_each_attachment_directly_inside_dest_dir_or_skips_it_w
     inside.mkdir(parents=True)
     (root / "via").symlink_to(root / "real", target_is_directory=True)   # dest_dir differs from its resolved form
     (inside / "old.txt").write_text("stale", encoding="utf-8")
-    (inside / "link.txt").symlink_to(root / "outside.txt")
-    (inside / "alias.txt").symlink_to(inside / "escaped.txt")
+    for link, to in (("link.txt", root / "outside.txt"), ("alias.txt", inside / "escaped.txt"), ("loop.txt", inside / "loop.txt")):
+        (inside / link).symlink_to(to)
     (inside / "self").symlink_to(inside, target_is_directory=True)
     (inside / "sub").mkdir()
     dest = root / "via" / "inside"
