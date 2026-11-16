@@ -48,6 +48,11 @@ The allow-lists and the cap also apply to an extension's `ctx.deliver`,
 which returns `None` for a refused message. The continuation rule does not:
 an extension relay is not routed by its frame.
 
+The connector fetches at most 5 distinct Discord message links per delivered
+message. The inbox record's `linked_messages` still lists every distinct link; each one
+past the fifth carries `msg_id`, `channel_id`, `url` and `not_fetched` (`over the
+5-link cap`), and no fetch is made for it.
+
 ## Directory
 
 Each unpinned message in the directory channel that mentions a user and

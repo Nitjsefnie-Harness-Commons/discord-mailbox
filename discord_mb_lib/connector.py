@@ -16,6 +16,7 @@ from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
+from . import _linked
 from ._meta_claim import _claim
 
 
@@ -2353,7 +2354,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         (downloaded), forwarded snapshots, author roles, and message meta
         (edited_at, type, jump_url, pinned, mention_everyone, stickers, embeds).
         Referenced + linked messages are saved to messages/<chan>/<msg>.json.'''
-        import re as _re
         chobj = msg.channel
         info = channel_info(chobj)
 
@@ -2384,17 +2384,15 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         # Linked messages — any Discord message links in the body get downloaded too.
         linked = []
-        seen = set()
-        for gpart, lchan, lmsg in _re.findall(
-                r'https?://(?:\w+\.)?discord(?:app)?\.com/channels/(@me|\d+)/(\d+)/(\d+)', msg.content or ''):
-            if lmsg in seen:
-                continue
-            seen.add(lmsg)
-            url = f'https://discord.com/channels/{gpart}/{lchan}/{lmsg}'
-            try:
-                entry = await fetch_and_save_message(lchan, lmsg)
-            except Exception as e:
-                entry = {'msg_id': lmsg, 'channel_id': lchan, 'error': f'{type(e).__name__}: {e}'}
+        for n, (lchan, lmsg, url) in enumerate(_linked.linked_message_refs(msg.content or '')):
+            entry = {'msg_id': lmsg, 'channel_id': lchan}
+            if n >= _linked.LINKED_MESSAGE_FETCH_LIMIT:  # listed, never fetched
+                entry['not_fetched'] = _linked.NOT_FETCHED
+            else:
+                try:
+                    entry = await fetch_and_save_message(lchan, lmsg)
+                except Exception as e:
+                    entry['error'] = f'{type(e).__name__}: {e}'
             entry['url'] = url
             linked.append(entry)
 
@@ -2880,6 +2878,7 @@ __all__ = [
     '_Directory',
     '_claim',
     '_claim_ownership',
+    '_linked',
     '_open_dm_channel',
     '_recorded_owner',
     '_resolve_dm_user_id',
