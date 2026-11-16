@@ -61,14 +61,14 @@ def _unlink(path: Path) -> int:
     return 1
 
 
-def _remove_where(directories: Iterable[Path], field: str, value: str) -> int:
+def _remove_where(directories: Iterable[Path], matches: Callable[[dict], bool]) -> int:
     removed = 0
     for path in (p for d in directories for p in _records(d, _RECORD)):
         try:
             record = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             continue
-        if isinstance(record, dict) and record.get(field) == value:
+        if isinstance(record, dict) and matches(record):
             removed += _unlink(path)
     return removed
 
@@ -91,20 +91,31 @@ def forget_messages(root: Path, channel_id, message_ids: Iterable, forgotten: di
 
 
 def forget_channel(root: Path, channel_id, forgotten: dict) -> int:
-    '''Remove a channel's or thread's caches and every inbox record from it.'''
+    '''Remove a channel's caches and inbox records, and those of each thread an inbox record names.'''
     cid = discord_id(channel_id)
-    _remember(forgotten, [cid])
-    removed = 0
-    for directory in _channel_dirs(root, cid):
+    threads: set[str] = set()
+
+    def from_channel(record: dict) -> bool:
+        channel = record.get('channel')
+        if isinstance(channel, dict) and channel.get('parent_id') == cid:
+            threads.add(str(record.get('channel_id')))
+            return True
+        return record.get('channel_id') == cid
+
+    removed = _remove_where(_inboxes(root), from_channel)
+    ids = {cid, *filter(_ID.fullmatch, threads)}
+    _remember(forgotten, ids)
+    for directory in (d for d in _caches(root) if d.name in ids):
         removed += sum(_unlink(p) for p in _records(directory, _CACHED))
         with contextlib.suppress(OSError):
             os.rmdir(directory)
-    return removed + _remove_where(_inboxes(root), 'channel_id', cid)
+    return removed
 
 
 def erase_author(root: Path, user_id) -> int:
     '''Remove every inbox and cache record whose author is `user_id`.'''
-    return _remove_where([*_inboxes(root), *_caches(root)], 'from_user_id', discord_id(user_id))
+    uid = discord_id(user_id)
+    return _remove_where([*_inboxes(root), *_caches(root)], lambda record: record.get('from_user_id') == uid)
 
 
 def erase_cli(root: Path, user_id: str) -> None:

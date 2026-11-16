@@ -68,7 +68,12 @@ bulk delete, it removes that message's record from every identity's inbox on
 the host and from `messages/` and `pins/`. For a deleted thread or channel it
 removes the records in `messages/<channel_id>/` and `pins/<channel_id>/`, then
 those directories, and every inbox record whose `channel_id` is that id. A
-deletion made while no connector runs is not followed.
+deleted channel's threads are found through the inbox records' `channel.parent_id`:
+each such record goes, and so do those threads' `messages/` and `pins/`
+directories. A thread no inbox record names cannot be traced to its channel,
+so its `messages/` and `pins/` records stay unless the connector also receives
+that thread's deletion (discord.py reports one for each of the channel's threads
+it still caches; an archived thread is not cached). A deletion made while no connector runs is not followed.
 
 `erase --user-id <id>` removes every inbox, `messages/` and
 `pins/` record whose `from_user_id` is that Discord user id, for every
