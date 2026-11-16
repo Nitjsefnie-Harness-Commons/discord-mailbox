@@ -19,6 +19,7 @@ from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from . import _linked
 from ._meta_claim import _claim
+from . import _secrets
 
 
 def _recorded_owner(pidfile, identity):
@@ -333,16 +334,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         # Resolve the token + its flavor (which dir it came from) up front: the flavor
         # drives both the parent-CLI PID walkup and the default status plugin.
+        token, flavor = _secrets.connector_token(token, identity, flavor)
         if not token:
-            token = os.environ.get('DISCORD_TOKEN')
-        if not token:
-            token, flavor = resolve_token_and_flavor(identity, flavor)
-        else:
-            # Composed watcher calls always pass this explicitly. Legacy invocations
-            # with an env/flag token remain Claude-flavored for compatibility.
-            flavor = flavor or 'claude'
-        if not token:
-            log(f'No token. Set DISCORD_TOKEN env or populate '
+            log(f'No token. Pass --token-file, set DISCORD_TOKEN env or populate '
                 f'{TOKEN_DIR}/{identity}.token')
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')
@@ -2864,6 +2858,7 @@ __all__ = [
     '_recorded_owner',
     '_resolve_dm_user_id',
     '_run_connector',
+    '_secrets',
     'connector_main',
     'leech_main',
 ]

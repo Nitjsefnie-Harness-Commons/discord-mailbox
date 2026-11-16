@@ -5,6 +5,7 @@ from .core import *
 from .core import __version__
 from .storage import *
 from .connector import *
+from . import _secrets
 
 # --- CLI ---
 
@@ -88,7 +89,12 @@ def _cli():
     cr_add = cr_sub.add_parser('add', help='Post a new credential (skips if domain already present unless --upsert)')
     cr_add.add_argument('domain')
     cr_add.add_argument('login')
-    cr_add.add_argument('password')
+    cr_add.add_argument('password', nargs='?', default=None,
+                        help='Other local users can read it while the command runs: prefer --password-stdin '
+                             'or the prompt (prints a warning on stderr)')
+    cr_add.add_argument('--password-stdin', action='store_true',
+                        help='Read the password from stdin, less one trailing newline. With neither this nor the '
+                             'argument, prompt when stdin is a terminal')
     cr_add.add_argument('--upsert', action='store_true', help='Post anyway if an entry exists; latest post wins on get')
     cr.add_argument('--timeout', type=float, default=30.0)
 
@@ -318,14 +324,20 @@ def _cli():
 
     u = sub.add_parser('setup', help='One-time server setup: create missing channels')
     u.add_argument('--token', default=None,
-                   help='Bot token (needs Manage Channels perm)')
+                   help='Bot token (needs Manage Channels perm); other local users can read it, so this prints '
+                        'a warning on stderr: prefer --token-file or DISCORD_TOKEN')
+    u.add_argument('--token-file', default=None, metavar='PATH',
+                   help='Read the bot token from this file (used when --token is absent, before DISCORD_TOKEN)')
 
     c = sub.add_parser('connector', help='Long-lived gateway connector (one per identity)')
     c.add_argument('identity')
     c.add_argument('--claude-pid', dest='claude_pid', type=int, default=None,
                    help='Parent harness CLI PID. When dead, connector exits.')
     c.add_argument('--token', default=None,
-                   help='Bot token (else DISCORD_TOKEN env or the shared Discord directory)')
+                   help='Bot token (else --token-file, DISCORD_TOKEN env or the shared Discord directory); other '
+                        'local users can read it, so this prints a warning on stderr')
+    c.add_argument('--token-file', default=None, metavar='PATH',
+                   help='Read the bot token from this file (used when --token is absent, before DISCORD_TOKEN)')
     c.add_argument('--log', dest='log_path', default=None,
                    help='Human log path (default: <temp>/discord-mailbox/<identity>/connector.log)')
     c.add_argument('--flavor', choices=('claude', 'kimi', 'codex'), default=None,
@@ -369,6 +381,8 @@ def _run_command(args):
     elif args.command == 'attachments':
         attachments_cli(args)
     elif args.command == 'creds':
+        if args.creds_action == 'add':
+            args.password = _secrets.cli_password(args.password, args.password_stdin)
         creds_cli(args)
     elif args.command == 'conversation':
         conversation_cli(args.identity, args.n,
@@ -414,10 +428,10 @@ def _run_command(args):
     elif args.command == 'list-agents':
         list_agents_cli(args.identity, timeout=args.timeout, as_json=args.json, short=args.short)
     elif args.command == 'setup':
-        setup_main(token=args.token)
+        setup_main(token=_secrets.cli_token(args.token, args.token_file))
     elif args.command == 'connector':
         ConnectorApp(
-            args.identity, claude_pid=args.claude_pid, token=args.token,
+            args.identity, claude_pid=args.claude_pid, token=_secrets.cli_token(args.token, args.token_file),
             log_path=args.log_path, flavor=args.flavor).run()
     elif args.command == 'leech':
         leech_main(args.identity, claude_pid=args.claude_pid, flavor=args.flavor)

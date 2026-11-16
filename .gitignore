@@ -86,6 +86,7 @@
 !/discord_mb_lib/_grep.py
 !/discord_mb_lib/_linked.py
 !/discord_mb_lib/_meta_claim.py
+!/discord_mb_lib/_secrets.py
 !/discord_mb_lib/_settings.py
 !/discord_mb_lib/_temp_provenance.py
 !/discord_mb_lib/cli.py
@@ -113,6 +114,7 @@
 !/tests/test_discord_meta_claim.py
 !/tests/test_discord_move.py
 !/tests/test_discord_package_contract.py
+!/tests/test_discord_secrets.py
 !/tests/test_discord_sender_labels.py
 !/tests/test_discord_usage_status.py
 !/tests/test_release_version_source.py

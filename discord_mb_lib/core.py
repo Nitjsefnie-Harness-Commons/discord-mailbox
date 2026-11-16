@@ -1311,7 +1311,7 @@ def setup_main(token=None):
 
     token = token or os.environ.get('DISCORD_TOKEN')
     if not token:
-        print('No token. Set DISCORD_TOKEN or pass --token.', file=sys.stderr)
+        print('No token. Pass --token-file or set DISCORD_TOKEN.', file=sys.stderr)
         sys.exit(1)
 
     intents = discord.Intents.default()
