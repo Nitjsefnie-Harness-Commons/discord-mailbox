@@ -4,9 +4,9 @@ from typing import Any, Awaitable, Callable
 
 async def _resolve_dm_user_id(state: dict[str, Any], name: Any,
                               refresh: Callable[[], Awaitable[None]]) -> int | None:
-    uid = state['identity_map'].get(name)
-    if uid is None and str(name).isdigit():
+    if str(name).isdigit():
         return int(name)
+    uid = state['identity_map'].get(name)
     if uid is None:
         await refresh()
         uid = state['identity_map'].get(name)
