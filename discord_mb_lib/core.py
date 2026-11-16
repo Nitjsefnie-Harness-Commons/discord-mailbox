@@ -1465,35 +1465,35 @@ def creds_cli(args):
     if resp.get('warning'):
         print(f'warning: {resp["warning"]}', file=sys.stderr)
     entries = resp.get('entries', [])
+    if action == 'add':
+        print(f'{resp.get("action")}: {resp.get("msg_id", "")} {resp.get("reason", "")}'.strip())
+        return
+    if action == 'get' and not entries:
+        tgt = f'{args.domain!r}' + (f' + login {args.login!r}' if args.login else '')
+        print(f'(no entry for {tgt})', file=sys.stderr)
+        sys.exit(2)
+    if args.json:
+        if action == 'list' and not args.show_passwords:
+            for e in entries:
+                e.pop('password', None)
+        print(json.dumps(entries, indent=2))
+        return
+    for e in entries:
+        e['author'] = (f'{e.get("author")}' + (f' user {e["author_id"]}' if e.get('author_id') else '')
+                       + (' UNTRUSTED' if e.get('trusted') is False else ''))
     if action == 'list':
-        if args.json:
-            if not args.show_passwords:
-                for e in entries:
-                    e.pop('password', None)
-            print(json.dumps(entries, indent=2))
-            return
         if not entries:
             print('(no credentials)')
-            return
         for e in entries:
             pw = e.get('password', '') if args.show_passwords else '<hidden — pass --show-passwords>'
-            print(f'{e["domain"]:<30}  login={e["login"]!r:<40}  password={pw!r}  (by {e.get("author")} user {e.get("author_id")}{" UNTRUSTED" if e.get("trusted") is False else ""} {e.get("created", "")[:19]})')
-    elif action == 'get':
-        if not entries:
-            tgt = f'{args.domain!r}' + (f' + login {args.login!r}' if args.login else '')
-            print(f'(no entry for {tgt})', file=sys.stderr)
-            sys.exit(2)
-        if args.json:
-            print(json.dumps(entries, indent=2))
-            return
+            print(f'{e["domain"]:<30}  login={e["login"]!r:<40}  password={pw!r}  (by {e.get("author")} {e.get("created", "")[:19]})')
+    else:
         for e in entries:
             print(f'domain:   {e["domain"]}')
             print(f'login:    {e["login"]}')
             print(f'password: {e["password"]}')
-            print(f'(by {e.get("author")} user {e.get("author_id")}{" UNTRUSTED" if e.get("trusted") is False else ""} {e.get("created", "")[:19]})')
+            print(f'(by {e.get("author")} {e.get("created", "")[:19]})')
             print()
-    else:
-        print(f'{resp.get("action")}: {resp.get("msg_id", "")} {resp.get("reason", "")}'.strip())
 
 
 def conversation_cli(identity, n, channel_id=None, before_id=None, after_id=None, grep=None, timeout=15.0, as_json=False, dm=None):
