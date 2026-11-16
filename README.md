@@ -148,6 +148,29 @@ output stays a list of entries. The text output of `creds list` and
 `creds get` shows each entry's author as `(by <label> user <author_id> ...)`
 and adds `UNTRUSTED` after the id of an untrusted one.
 
+## Secrets off the command line
+
+Another local user can read a running process's command line (on Linux,
+from `/proc/<pid>/cmdline` unless `/proc` is mounted with `hidepid`), so every
+secret has a source that keeps it off the command line:
+
+- `creds <identity> add <domain> <login>` takes the password from stdin with
+  `--password-stdin` (one trailing newline is dropped, nothing else). With
+  neither the password argument nor `--password-stdin`, it prompts without
+  echo when stdin is a terminal, and otherwise exits 1 with an error naming
+  both. Giving both is an error.
+- `setup --token-file PATH` and `connector --token-file PATH` read the bot
+  token from a file, without its surrounding whitespace or a UTF-8 byte-order
+  mark. A file that cannot be read or holds only whitespace exits 1 with an
+  error naming the path, never its content.
+- `connector` takes the first token it finds in `--token`, `--token-file`,
+  `DISCORD_TOKEN`, then `~/.agent-bundle/discord/<identity>.token`; `setup`
+  takes the first of `--token`, `--token-file`, `DISCORD_TOKEN`.
+
+`--token` and the password argument still work, and each prints a one-line
+`warning:` on stderr. The warning never goes to stdout, which carries the
+connector's event stream.
+
 ## Development
 
 ```sh
