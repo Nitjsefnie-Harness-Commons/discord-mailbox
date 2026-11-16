@@ -164,7 +164,8 @@ def test_the_password_comes_from_the_argument_stdin_or_the_prompt_never_two(tmp)
             (["--password-stdin"], _Tty(pw), pw, False, False),
             ([], _Tty(""), "typed", True, False),
             ([], io.StringIO(pw), ("--password-stdin", "password argument"), False, False),
-            ([pw, "--password-stdin"], io.StringIO(pw), ("--password-stdin", "not both"), False, False)):
+            ([pw, "--password-stdin"], io.StringIO(pw), ("--password-stdin", "not both"), False, False),
+            ([""], None, ("empty",), False, True)):
         seen, out, err, prompts = _cli([*add, *extra], stdin)
         if isinstance(want, tuple):     # refused: nothing is sent, the error names what to do
             assert "creds" not in seen and all(w in seen["exit"] for w in want), _hide((extra, seen), names)

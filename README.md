@@ -158,7 +158,7 @@ secret has a source that keeps it off the command line:
   `--password-stdin` (one trailing newline is dropped, nothing else). With
   neither the password argument nor `--password-stdin`, it prompts without
   echo when stdin is a terminal, and otherwise exits 1 with an error naming
-  both. Giving both is an error.
+  both. Giving both is an error, and so is an empty password from any source.
 - `setup --token-file PATH` and `connector --token-file PATH` read the bot
   token from a file, without its surrounding whitespace or a UTF-8 byte-order
   mark. A file that cannot be read or holds only whitespace exits 1 with an
