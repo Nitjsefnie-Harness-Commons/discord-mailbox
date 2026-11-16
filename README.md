@@ -81,6 +81,12 @@ matters. The `conversation`, `attachment-list`, `pins-list`, `creds-list`,
 `creds-get` and `move` answers, cached messages and the pins in an inbox
 record use the same label.
 
+`conversation --grep PATTERN` is applied by the CLI to the messages the
+connector returns, against `content` and `content_rendered`, so a slow pattern
+stalls only the CLI that passed it. An invalid pattern exits 2 before any
+request is sent. A connector refuses a request that still carries `grep` (an
+older CLI) with an error, never an unfiltered list.
+
 Every read sees the whole channel, however old the entry. `register` edits
 the newest unpinned message the connector wrote there, and startup posts an
 entry only when the connector has none. The connector reads the channel at
