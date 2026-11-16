@@ -281,7 +281,7 @@ never lower it to turn a build green.
 | `comment share` | `Nitjsefnie-Actions/comment-ratchet`: a pull request may not raise a tracked file's comment share above 15%, or above its record in `.github/comment-share.json`. |
 | `size baseline` | `Nitjsefnie-Actions/size-ratchet`: per-file line ceilings and the `tests/` line total, recorded in `.github/size-baseline.json`. |
 | `tag` | Watches `discord_mb_lib/__init__.py`. When `__version__` changes on `main`, it waits for every other check on that commit and then pushes `v<version>`. |
-| `release` | Fires on that tag: runs every suite, builds the wheel, and publishes `SHA256SUMS` beside it. |
+| `release` | Fires on that tag. Read-only jobs run every suite and build the wheel with the tagged commit's timestamp, so a rebuild gives the same bytes, and refuse a tag that is not `v` plus the wheel's version. A write-scoped job that runs no repository code then waits for the commit's other push and pull-request checks, checks the wheel against the build's `SHA256SUMS` and publishes both. A published asset never changes: on an existing release it uploads only missing assets, and fails without uploading if one already there differs. |
 
 **There is deliberately no speed gate here**, unlike the dashboard repos.
 pytest cannot run these suites — the tests are plain functions taking
