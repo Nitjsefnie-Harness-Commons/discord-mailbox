@@ -2021,11 +2021,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 tos = [t.strip() for t in to.split(',') if t.strip()]
                 mentions, unknown = [], []
                 for t in tos:
-                    if t.isdigit():
-                        # Raw Discord user id — mention directly, no directory
-                        # lookup (reaches non-registered humans).
-                        mentions.append(f'<@{t}>')
-                        continue
                     uid = await _resolve_dm_user_id(state, t, refresh_directory)
                     if uid is None:
                         unknown.append(t)

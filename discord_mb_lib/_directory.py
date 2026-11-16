@@ -7,6 +7,11 @@ MISS_REFRESH_INTERVAL = 15.0  # seconds a lookup miss reuses the last scan's map
 FALLBACK_PREFIX = 'user:'
 
 
+def is_user_id(name: Any) -> bool:
+    text = str(name)
+    return text.isascii() and text.isdigit()
+
+
 class _Directory:
     MAP_SEPARATORS = (':', '=', ' · ')  # only the map splits on the header's ' · '
     LIST_SEPARATORS = (':', '=')

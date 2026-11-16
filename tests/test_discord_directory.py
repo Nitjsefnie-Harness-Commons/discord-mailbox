@@ -81,7 +81,7 @@ def test_a_newer_entry_from_another_account_does_not_take_a_name(tmp):
         await on_message(_msg(101, MALLORY, f"<@{BOT}> hi", client.bridge, mentions=(BOT,)))
         await on_message(_msg(102, PROBE, f"<@{BOT}> hi", client.bridge, mentions=(BOT,)))
         await client.ask({"mention": _send("probe"), "dm": _send("probe", dm=True),
-                          "helper": _send("helper"), "plain": _send("plain"), "raw": _send(str(RAW)), "list": {"op": "list-agents"}})
+                          "helper": _send("helper"), "plain": _send("plain"), "raw": _send(str(RAW)), "²": _send("²"), "list": {"op": "list-agents"}})
 
     client, log = _run(tmp, entries, script)
     assert _inbox(tmp, 101)["from"] == f"user:user{MALLORY}", _inbox(tmp, 101)
@@ -90,7 +90,7 @@ def test_a_newer_entry_from_another_account_does_not_take_a_name(tmp):
     mentioned = sorted(s.split(" ", 1)[0] for s in client.bridge.sent)     # the watcher's order is free
     assert r["mention"]["ok"] and r["plain"]["ok"] and r["raw"]["ok"] and mentioned == [f"<@{PROBE}>", f"<@{PLAIN}>", f"<@{RAW}>"], (r, mentioned)
     assert r["dm"]["ok"] and list(client.dms) == [PROBE] and client.dms[PROBE].sent, (r, client.dms)
-    assert not r["helper"]["ok"] and "'helper'" in r["helper"]["error"], r["helper"]
+    assert [r[k].get("error", "").partition(": ")[2] for k in ("helper", "²")] == [f"unknown recipient identities [{k!r}]" for k in ("helper", "²")], r
     assert [(a["identity"], a["user_id"], a["author_id"]) for a in r["list"]["agents"]] == [
         (str(RAW), str(PLAIN), str(PLAIN)), ("probe", str(MALLORY), str(MALLORY)), ("helper", str(PROBE), str(MALLORY)),
         ("probe", str(PROBE), str(PROBE)), ("dir-test", str(BOT), str(BOT))], r["list"]

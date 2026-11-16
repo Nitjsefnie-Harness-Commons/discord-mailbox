@@ -1,10 +1,12 @@
 """One DM-user resolution for send, move and conversation, so they cannot drift."""
 from typing import Any, Awaitable, Callable
 
+from ._directory import is_user_id
+
 
 async def _resolve_dm_user_id(state: dict[str, Any], name: Any,
                               refresh: Callable[[], Awaitable[None]]) -> int | None:
-    if str(name).isdigit():
+    if is_user_id(name):
         return int(name)
     uid = state['identity_map'].get(name)
     if uid is None:
