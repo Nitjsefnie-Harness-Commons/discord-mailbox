@@ -158,12 +158,14 @@ def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
              "author_id": "9", "trusted": False, "created": "2026-01-01T00:00:00+00:00"}
     twin, base = {**entry, "author_id": "8", "trusted": True}, {
         "identity": "me", "timeout": 1.0, "json": True, "show_passwords": False, "login": None}
-    shown = ["bridge-bot user 9 UNTRUSTED 2026-01-01T00:00:00)", "bridge-bot user 8 2026-01-01T00:00:00)"]
+    bare = {k: v for k, v in entry.items() if k not in ("author_id", "trusted")}     # an older connector's entry
+    shown = ["bridge-bot user 9 UNTRUSTED 2026-01-01T00:00:00)", "bridge-bot user 8 2026-01-01T00:00:00)",
+             "bridge-bot 2026-01-01T00:00:00)"]
     for action, extra, answer, payload, code, stdout in (
             ("list", {}, [entry], {"op": "creds-list"}, None, [{k: v for k, v in entry.items() if k != "password"}]),
             ("get", {"domain": "a.example"}, [entry], {"op": "creds-get", "domain": "a.example"}, None, [entry]),
-            ("list", {"json": False}, [entry, twin], {"op": "creds-list"}, None, shown),
-            ("get", {"domain": "a.example", "json": False}, [entry, twin],
+            ("list", {"json": False}, [entry, twin, bare], {"op": "creds-list"}, None, shown),
+            ("get", {"domain": "a.example", "json": False}, [entry, twin, bare],
              {"op": "creds-get", "domain": "a.example"}, None, shown),
             ("get", {"domain": "b.example", "login": "l"}, [],
              {"op": "creds-get", "domain": "b.example", "login": "l"}, 2, None),
