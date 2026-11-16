@@ -13,6 +13,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
 from ._delivery import _DeliveryGates
+from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._meta_claim import _claim
 
@@ -968,27 +969,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if msg.pinned:
                 continue
             content = msg.content or ''
-            uid_match = re.search(r'<@!?(\d+)>', content)
-            if not uid_match:
+            if (entry := _Directory.parse_entry(content, _Directory.LIST_SEPARATORS)) is None:
                 continue
-            uid = int(uid_match.group(1))
-            name = None
-            bold = re.search(r'\*\*([^*\n]+)\*\*', content)
-            if bold:
-                name = bold.group(1).strip()
-            else:
-                for line in content.splitlines():
-                    line = line.strip().lstrip('-').strip()
-                    if not line:
-                        continue
-                    for sep in (':', '='):
-                        if sep in line:
-                            name = line.split(sep, 1)[0].strip()
-                            break
-                    if name:
-                        break
-            if not name:
-                continue
+            name, uid = entry
             agents.append({
                 'identity': name,
                 'user_id': str(uid),
@@ -2577,30 +2560,9 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             async for msg in channel.history(limit=200):
                 if msg.pinned:
                     continue
-                content = msg.content or ''
-                uid_match = re.search(r'<@!?(\d+)>', content)
-                if not uid_match:
+                if (entry := _Directory.parse_entry(msg.content, _Directory.MAP_SEPARATORS)) is None:
                     continue
-                uid = int(uid_match.group(1))
-                # Identity: first **bold** token on any line, else first non-empty line's
-                # leading word before ':' / '=' / ' · '
-                name = None
-                bold = re.search(r'\*\*([^*\n]+)\*\*', content)
-                if bold:
-                    name = bold.group(1).strip()
-                else:
-                    for line in content.splitlines():
-                        line = line.strip().lstrip('-').strip()
-                        if not line:
-                            continue
-                        for sep in (':', '=', ' · '):
-                            if sep in line:
-                                name = line.split(sep, 1)[0].strip()
-                                break
-                        if name:
-                            break
-                if not name:
-                    continue
+                name, uid = entry
                 # Last-writer-wins isn't right since history is newest-first; keep first seen.
                 new_map.setdefault(name, uid)
                 if self_user_id is not None and msg.author.id == self_user_id:
@@ -2935,6 +2897,7 @@ def connector_main(identity, claude_pid=None, token=None, log_path=None,
 __all__ = [
     'ConnectorApp',
     '_DeliveryGates',
+    '_Directory',
     '_claim',
     '_claim_ownership',
     '_open_dm_channel',
