@@ -824,7 +824,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if channel is None:
             raise RuntimeError(f'credentials channel #{CREDS_CHANNEL_NAME} not resolved')
         entries = []
-        async for m in channel.history(limit=500):
+        async for m in channel.history(limit=None):
             parsed = _parse_cred(m.content or '')
             if parsed is None:
                 continue

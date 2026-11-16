@@ -95,6 +95,7 @@
 !/tests/test_discord_chunk_routing.py
 !/tests/test_discord_codex_flavor.py
 !/tests/test_discord_connector_lock.py
+!/tests/test_discord_creds.py
 !/tests/test_discord_conversation_dm.py
 !/tests/test_discord_delivery_gates.py
 !/tests/test_discord_directory.py
