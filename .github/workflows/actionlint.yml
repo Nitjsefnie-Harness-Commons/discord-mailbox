@@ -31,13 +31,11 @@ name: actionlint
 
 on:
   push:
-    paths:
-      - '.github/workflows/**'
-      - '.github/dependabot.yml'
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/dependabot.yml'
   workflow_dispatch:
 
 permissions:
@@ -50,6 +48,7 @@ concurrency:
 jobs:
   actionlint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     env:
       # Nitjsefnie-OSC/actionlint, not stock rhysd/actionlint: upstream 1.7.12
