@@ -5,7 +5,7 @@ from collections.abc import Callable
 from importlib.util import cache_from_source
 from pathlib import Path
 
-MAX_HOPS = 40
+MAX_HOPS = 40   # Linux's limit: no chain it follows is refused
 
 
 def _resolve(path: Path) -> tuple[Path, list[Path]]:
@@ -38,8 +38,9 @@ def check_extension(path: str | Path, *, posix: bool = os.name != 'nt', euid: in
         return None
     euid = os.geteuid() if euid is None else euid
     real, holders = _resolve(Path(path).absolute())
-    warnings, cached = [], Path(cache_from_source(str(Path(path))))
-    for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, *holders, cached.parent, cached)):
+    cached, cache_holders = _resolve(Path(cache_from_source(str(Path(path)))).absolute())
+    warnings = []
+    for target in dict.fromkeys((real, real.parent, Path(path).absolute().parent, *holders, *cache_holders, cached.parent, cached)):
         try:
             info = stat_of(target)
         except FileNotFoundError:   # the loader refuses a missing module; the import writes a missing cache
