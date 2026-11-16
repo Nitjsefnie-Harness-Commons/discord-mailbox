@@ -3,10 +3,10 @@ name: lint
 # Two gates, one job each so a failure says which tool found it.
 #
 # Style opinions stay off (max-line-length = 10000 in setup.cfg, and .pylintrc
-# disables the formatting and metric checks): these exist for real defects, not
-# for formatting preferences. Every disable in .pylintrc names the pattern it
-# is there for; the type gate runs against the shipped package rather than the
-# suites, which monkeypatch module attributes no type checker can model.
+# disables the formatting and metric checks): they exist for real defects.
+# Every .pylintrc disable names its pattern; the type gate runs against the
+# shipped package rather than the suites, which monkeypatch module attributes
+# no type checker can model.
 
 on:
   push:
@@ -28,10 +28,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A push a mergeable open pull request's run also gates skips the jobs
-  # below. A skipped check shows `name:` unevaluated: the `${{ }}` in each
-  # keeps it off the gate's check name. `!cancelled()` runs them if this
-  # lookup fails.
+  # A push to a branch whose open, mergeable pull request runs these gates
+  # skips the jobs below; a skipped check passes. A skipped job's `name:`
+  # shows unevaluated, so its `${{ }}` keeps it off the gate's required
+  # check name: keep it. `!cancelled()` runs them if this lookup fails.
   guard:
     uses: ./.github/workflows/open-pull-request.yml
     permissions:
