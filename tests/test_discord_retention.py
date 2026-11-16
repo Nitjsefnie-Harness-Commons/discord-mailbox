@@ -94,8 +94,8 @@ def delete_on_discord(root, event, payload, replies):
     return stored(root / "mailbox"), heard, client
 
 
-async def deliver_during_delete(client, msg_id, held, whole_channel):
-    """Deliver `msg_id` and delete it, or its channel, on Discord while `held` ("pins" or "reaction") is awaited."""
+async def deliver_during_delete(client, msg_id, held, channel):
+    """Deliver `msg_id` and delete it, or its own `channel`, on Discord while `held` ("pins" or "reaction") waits."""
     import discord
     reached, release = asyncio.Event(), asyncio.Event()
 
@@ -111,15 +111,15 @@ async def deliver_during_delete(client, msg_id, held, whole_channel):
     async def reaction(emoji):
         await hold()
         raise RuntimeError(f"404 Unknown Message: {emoji}")   # a deleted message takes no reaction
-    msg = client.message(msg_id, ALICE, f"<@{BOT}> hi", client.bridge, mentions=(BOT,))
+    msg = client.message(msg_id, ALICE, f"<@{BOT}> hi", channel or client.bridge, mentions=(BOT,))
     if held == "pins":
         client.bridge.pins = pins
     else:
         msg.add_reaction = reaction
     task = asyncio.ensure_future(client.on_message(msg))
     await reached.wait()
-    if whole_channel:
-        await client.on_guild_channel_delete(types.SimpleNamespace(id=BRIDGE))
+    if channel:
+        await client.on_guild_channel_delete(types.SimpleNamespace(id=channel.id))
     else:
         await client.on_raw_message_delete(discord.RawMessageDeleteEvent({"id": msg_id, "channel_id": BRIDGE}))
     release.set()
@@ -136,8 +136,8 @@ def test_a_message_deleted_while_its_record_is_written_leaves_no_record(tmp):
     async def script(client):
         inbox.mkdir(parents=True)
         connector.inbox_dir = lambda identity: inbox   # the inbox the deletion handler sweeps
-        for msg_id, held, whole_channel in ((801, "pins", False), (802, "reaction", False), (804, "reaction", True)):
-            await deliver_during_delete(client, msg_id, held, whole_channel)
+        for msg_id, held, channel in ((801, "pins", None), (802, "reaction", None), (804, "reaction", client.dm(98))):
+            await deliver_during_delete(client, msg_id, held, channel)
         await client.on_message(client.message(803, ALICE, "kept", client.dm(970000000000000099)))
     _gateway.run(tmp, script)
     assert sorted(p.name for p in inbox.iterdir()) == ["803.json"], list(inbox.iterdir())
