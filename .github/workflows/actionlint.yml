@@ -46,7 +46,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push that an open pull request's run also gates skips the jobs below;
+  # `!cancelled()` in their `if:` still runs them if this lookup fails.
+  guard:
+    uses: ./.github/workflows/open-pull-request.yml
+    permissions:
+      pull-requests: read
+
   actionlint:
+    name: actionlint${{ needs.guard.outputs.skip-note }}
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

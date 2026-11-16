@@ -12,8 +12,8 @@ name: codeql
 # SHA of the *event*, while our checkout step deliberately takes
 # `pull_request.head.sha`. On a review event those two are different
 # commits, so the alerts would be filed against a tree that was never the
-# one analysed. `push` fires on every branch in this repo, which already
-# covers the head of any same-repo PR, so nothing is actually lost.
+# one analysed. A same-repo PR's head is analysed, merged onto its base, by
+# its `pull_request` run (the push run skips); `push` covers other branches.
 #
 # The weekly cron is not redundant with push: CodeQL's query packs are
 # updated continuously, and a new query only ever runs against code that
@@ -38,8 +38,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push that an open pull request's run also gates skips the jobs below;
+  # `!cancelled()` in their `if:` still runs them if this lookup fails.
+  guard:
+    uses: ./.github/workflows/open-pull-request.yml
+    permissions:
+      pull-requests: read
+
   analyze:
+    # No skip-note in the name: `if:` is evaluated before the matrix
+    # expands, so a skipped run is never named `analyze (python)`.
     name: analyze (${{ matrix.language }})
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

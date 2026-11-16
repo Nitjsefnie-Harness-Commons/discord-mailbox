@@ -1,0 +1,38 @@
+name: open pull request
+
+# On a push to a branch with an open pull request, `skip-note` names it and
+# the gate jobs skip under that suffix. Empty otherwise or on failure.
+
+on:
+  workflow_call:
+    outputs:
+      skip-note:
+        value: ${{ jobs.lookup.outputs.skip-note }}
+
+permissions: {}
+
+jobs:
+  lookup:
+    if: >-
+      github.event_name == 'push'
+      && github.ref_type == 'branch'
+      && github.ref_name != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      skip-note: ${{ steps.find.outputs.skip-note }}
+
+    steps:
+      - name: Find an open pull request from this branch
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ github.repository_owner }}:${{ github.ref_name }}
+        run: |
+          number="$(gh api --method GET "repos/$REPO/pulls" -f state=open -f head="$HEAD" --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            echo "skip-note= (pull request #$number runs it)" >> "$GITHUB_OUTPUT"
+          fi

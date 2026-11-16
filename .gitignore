@@ -55,6 +55,7 @@
 !/.github/workflows/codeql.yml
 !/.github/workflows/comment-share.yml
 !/.github/workflows/lint.yml
+!/.github/workflows/open-pull-request.yml
 !/.github/workflows/pin-guard.yml
 !/.github/workflows/pr-gate.yml
 !/.github/workflows/release.yml
