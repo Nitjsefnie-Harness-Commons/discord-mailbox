@@ -150,10 +150,9 @@ jobs:
           TMPDIR="$RUNNER_TEMP/portable-tmp" python run_tests.py
 
   coverage:
-    # A JOB of its own, not steps inside the matrix above: the matrix is
-    # 3 OSes x 3 Pythons, and coverage of the same code nine times over
-    # tells you the same number nine times. One run, on the newest Python
-    # and the cheapest runner.
+    # A JOB of its own, not steps inside the matrix above: every leg would
+    # measure the same code and report the same number. One run, on one
+    # Python and the cheapest runner.
     name: coverage${{ needs.guard.outputs.skip-note }}
     needs: guard
     if: ${{ !cancelled() && needs.guard.outputs.skip-note == '' }}
