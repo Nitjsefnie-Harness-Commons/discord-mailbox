@@ -38,11 +38,11 @@ class _Directory:
         """(name, mentioned id, author id), oldest first -> {name: id}."""
         held: dict[str, int] = {}
         for name, uid, author in entries:
+            if uid != author:
+                continue
             if name.casefold().startswith(FALLBACK_PREFIX):
                 self._log(f'directory: ignoring the entry {name!r} for user {uid}: '
                           f'{FALLBACK_PREFIX!r} marks a username, not a name')
-                continue
-            if uid != author:
                 continue
             holder = held.setdefault(name, uid)
             if holder != uid:
