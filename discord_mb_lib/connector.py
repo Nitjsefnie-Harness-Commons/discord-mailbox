@@ -12,6 +12,7 @@ from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
                       _ConnectorOwnershipError, _EventStreamReader,
                       _EventStreamWriter, _LeechLogWriter,
                       _OwnershipAccessError, _OwnershipContendedError)
+from . import _attachments
 from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
@@ -795,16 +796,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except Exception as e:
             raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
         if not msg.attachments:
-            return {'saved': [], 'reason': 'message has no attachments'}
-        dest = Path(dest_dir)
-        dest.mkdir(parents=True, exist_ok=True)
-        saved = []
-        for a in msg.attachments:
-            target_name = rename if (rename and len(msg.attachments) == 1) else a.filename
-            out = dest / target_name
-            await a.save(out)
-            saved.append({'path': str(out), 'filename': a.filename, 'size': a.size, 'url': a.url})
-        return {'saved': saved}
+            return {'saved': [], 'skipped': [], 'reason': 'message has no attachments'}
+        return await _attachments.save_all(msg.attachments, Path(dest_dir), rename)
 
     async def _fetch_creds():
         channel = ch('credentials')
@@ -2863,6 +2856,7 @@ __all__ = [
     '_CredsTrust',
     '_DeliveryGates',
     '_Directory',
+    '_attachments',
     '_claim',
     '_claim_ownership',
     '_linked',
