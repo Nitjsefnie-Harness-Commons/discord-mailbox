@@ -1,7 +1,8 @@
 name: open pull request
 
-# On a push to a branch with an open pull request, `skip-note` names it and
-# the gate jobs skip under that suffix. Empty otherwise or on failure.
+# Non-empty only on a push to the head of an open, mergeable pull request:
+# GitHub starts no pull_request run for a conflicted one. The text would
+# show only if GitHub evaluated a skipped job's `name:`; it does not.
 
 on:
   workflow_call:
@@ -25,14 +26,23 @@ jobs:
       skip-note: ${{ steps.find.outputs.skip-note }}
 
     steps:
-      - name: Find an open pull request from this branch
+      - name: Find a mergeable open pull request from this branch
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD: ${{ github.repository_owner }}:${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
           number="$(gh api --method GET "repos/$REPO/pulls" -f state=open -f head="$HEAD" --jq '.[0].number // empty')"
-          if [ -n "$number" ]; then
-            echo "skip-note= (pull request #$number runs it)" >> "$GITHUB_OUTPUT"
-          fi
+          [ -n "$number" ] || exit 0
+          for attempt in 1 2 3 4; do
+            # `mergeable` is null while GitHub computes it after a push.
+            state="$(gh api -H 'Cache-Control: no-cache' "repos/$REPO/pulls/$number" --jq '"\(.head.sha) \(.mergeable)"')"
+            case "$state" in
+              "$SHA true") echo "skip-note= (pull request #$number)" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              "$SHA false") exit 0 ;;
+            esac
+            echo "attempt $attempt: $state"
+            [ "$attempt" -eq 4 ] || sleep 8
+          done
