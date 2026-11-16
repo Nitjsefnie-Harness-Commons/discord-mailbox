@@ -49,6 +49,9 @@ class _Directory:
                 self._log(f'directory: ignoring the entry {name!r} for user {uid}: '
                           f'{FALLBACK_PREFIX!r} marks a username, not a name')
                 continue
+            if is_user_id(name):
+                self._log(f'directory: ignoring the entry {name!r} for user {uid}: an all-digit name reads as a user id')
+                continue
             holder = held.setdefault(name, uid)
             if holder != uid:
                 self._log(f'directory: {name!r} is held by user {holder}; '

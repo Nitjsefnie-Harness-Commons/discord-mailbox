@@ -30,8 +30,8 @@ def test_a_sender_is_labelled_by_its_oldest_directory_name_or_user_and_username(
 
 
 def test_the_message_event_and_record_say_who_sent_it_and_whether_they_hold_a_name(tmp):
-    entries = [_gateway.message(5, MALLORY, f"**user:alice** · <@{MALLORY}>"),    # newest first
-               _gateway.message(4, ALICE, f"**alice-2** · <@{ALICE}>"),
+    entries = [_gateway.message(6, MALLORY, f"**{OTHER}** · <@{MALLORY}>"), _gateway.message(5, MALLORY, f"**user:alice** · <@{MALLORY}>"),  # newest first; neither binds
+               _gateway.message(4, ALICE, f"**alice-2** · <@{ALICE}>"), _gateway.message(7, ALICE, f"**²** · <@{ALICE}>"),  # not an ASCII digit: a name
                _gateway.message(3, BOT, f"**gate-test** · <@{BOT}>"),
                _gateway.message(2, ALICE, f"**alice** · <@{ALICE}>")]
 
@@ -43,7 +43,7 @@ def test_the_message_event_and_record_say_who_sent_it_and_whether_they_hold_a_na
     client = _gateway.run(tmp, script, entries)
     events = {int(e["msg_id"]): e for e in client.events if e.get("event") == "message"}
     for msg_id, author, label, registered, identities, multiple in (
-            (101, MALLORY, FALLBACK, False, [], False), (102, ALICE, "alice", True, ["alice", "alice-2"], True)):
+            (101, MALLORY, FALLBACK, False, [], False), (102, ALICE, "alice", True, ["alice", "²", "alice-2"], True)):
         record = _gateway.inbox(tmp, msg_id)
         assert record["author_has_multiple_identities"] is multiple, record
         assert (events[msg_id]["from"], events[msg_id]["from_user_id"], events[msg_id]["from_registered"]) == (
