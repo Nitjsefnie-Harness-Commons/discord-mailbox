@@ -25,11 +25,14 @@ class _Directory:
     def names_held(identity_map: dict[str, int], user_id: int) -> list[str]:
         return [name for name, uid in identity_map.items() if uid == user_id]
 
+    @staticmethod
+    def label_for(names: list[str], user: Any) -> str:
+        """The oldest of `names`, else `user:<username>`."""
+        return names[0] if names else f'{FALLBACK_PREFIX}{getattr(user, "name", "?")}'
+
     @classmethod
     def label_of(cls, identity_map: dict[str, int], user: Any) -> str:
-        """The oldest name `user` holds, else `user:<username>`."""
-        names = cls.names_held(identity_map, user.id)
-        return names[0] if names else f'{FALLBACK_PREFIX}{getattr(user, "name", "?")}'
+        return cls.label_for(cls.names_held(identity_map, user.id), user)
 
     def bind_names(self, entries: Iterable[tuple[str, int, int]]) -> dict[str, int]:
         """(name, mentioned id, author id), oldest first -> {name: id}."""
