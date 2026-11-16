@@ -5,6 +5,7 @@ import re
 import time
 from typing import Any, Callable
 
+from ._directory import _Directory
 from ._settings import setting
 
 USERS = 'DISCORD_MAILBOX_ALLOWED_USER_IDS'
@@ -56,11 +57,6 @@ class _DeliveryGates:
         self._warned: dict[int, float] = {}
         self._swept = -math.inf
 
-    @staticmethod
-    def identity_for(identity_map: dict[str, int], user_id: int) -> str | None:
-        """The directory name mapped to `user_id`; a sender that has one is registered."""
-        return next((name for name, uid in identity_map.items() if uid == user_id), None)
-
     @classmethod
     def from_settings(cls, log: Callable[[str], None]) -> '_DeliveryGates':
         try:
@@ -79,7 +75,7 @@ class _DeliveryGates:
         train = train_of(msg.channel.id, msg.content)
         if (self.users or self.guilds) and author not in self.users and guild not in self.guilds:
             return self._refuse(msg, f'allow-list: neither the user nor guild {guild} is in {USERS} or {GUILDS}')
-        if (continuation and self.identity_for(identity_map, author) is None
+        if (continuation and not _Directory.names_held(identity_map, author)
                 and (train is None or self._train_authors.get(train[0]) != author)):
             return self._refuse(msg, 'continuation: an unregistered sender that did not send chunk 1')
         if self.rate is not None and self._over_rate(msg, time.monotonic() if now is None else now, *self.rate):

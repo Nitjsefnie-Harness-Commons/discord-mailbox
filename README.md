@@ -60,6 +60,20 @@ what `send`, `send --dm`, a `move` to a DM and `conversation --dm` resolve,
 and what the `from` and `author_identities` fields show. `list-agents`
 still lists every entry, with its `user_id` and `author_id`.
 
+An account that holds several names is labelled with its oldest bound name.
+A name beginning with `user:` (any case) is never bound.
+
+A sender's label is a directory name or, when its account holds none,
+`user:<username>`. The `message` event and the inbox record both carry
+`from` (that label) and `from_user_id` (the Discord id as a string). The
+event also carries `from_registered`, `true` when the account holds at least
+one name, which is exactly when the record's `author_identities` is not empty.
+"Registered" means "holds a directory claim", not "verified": the directory
+accepts any account's own entry, so check `from_user_id` where who is asking
+matters. The `conversation`, `attachment-list`, `pins-list`, `creds-list`,
+`creds-get` and `move` answers, cached messages and the pins in an inbox
+record use the same label.
+
 Every read sees the whole channel, however old the entry. `register` edits
 the newest unpinned message the connector wrote there, and startup posts an
 entry only when the connector has none. The connector reads the channel at

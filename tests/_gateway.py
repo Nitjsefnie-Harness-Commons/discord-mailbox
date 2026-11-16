@@ -1,15 +1,13 @@
-"""A stand-in Discord gateway for the connector suites.
+"""A stand-in Discord gateway: `run` drives the REAL connector closures.
 
-Not a suite itself -- run_tests.py only loads `test_*.py`. `run` drives the REAL
-connector closures (`on_ready`, `on_message`, the meta watcher, the extension
-context) on a client whose guild, directory history and channels the caller
-shapes, so a suite asserts on the inbox, the event stream, the receipt
-reactions and the answers to meta requests rather than on mocks of them.
+Not a suite itself -- run_tests.py only loads `test_*.py`.
 """
+# pylint: disable=import-outside-toplevel
 import asyncio
 import contextlib
 import datetime
 import functools
+import importlib
 import io
 import json
 import os
@@ -25,8 +23,7 @@ _OWN_GUILD = object()
 
 def message(msg_id, author, content, channel=None, guild=_OWN_GUILD, mentions=(), reactions=None,
             username=None):
-    """A stand-in message. It belongs to its channel's guild unless `guild` says
-    otherwise; `reactions` collects (msg_id, emoji) for every reaction added."""
+    """`guild` defaults to the channel's; `reactions` collects (msg_id, emoji)."""
     msg = types.SimpleNamespace(
         id=msg_id, content=content, pinned=False,
         guild=getattr(channel, "home", None) if guild is _OWN_GUILD else guild, channel=channel,
@@ -51,8 +48,8 @@ def message(msg_id, author, content, channel=None, guild=_OWN_GUILD, mentions=()
 
 def have_discord():
     try:
-        import discord  # noqa: F401  pylint: disable=import-outside-toplevel,unused-import
-        from discord_mb_lib import connector  # noqa: F401  pylint: disable=import-outside-toplevel,unused-import
+        for name in ("discord", "discord_mb_lib.connector"):
+            importlib.import_module(name)
     except ImportError:
         return False
     return True
@@ -67,25 +64,20 @@ def inbox(tmp, msg_id=None):
 
 
 def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False):
-    """Run the connector on a stand-in client and let `script(client)` drive it.
-
-    `entries` is the directory channel's history, newest first (default: the
-    connector's own entry and alice's). `extension` loads an extension that
-    leaves its context on `client.ext_ctx`. Returns the client, whose `events`
-    (every JSON line on stdout), `reactions` and `log` hold what the run
-    produced, or None when discord.py is not installed."""
+    """Let `script(client)` drive the connector; `entries` is the directory history,
+    newest first. -> the client (`events`, `reactions`, `log`), None without discord.py."""
     if not have_discord():
         return None
-    import discord  # pylint: disable=import-outside-toplevel
-    from discord_mb_lib import _directory, connector as c  # pylint: disable=import-outside-toplevel
+    import discord
+    from discord_mb_lib import _directory, connector as c
     root, env = Path(tmp), env or {}
     state, ids = root / "state", iter(range(500000, 600000))
     in_dir, out_dir = state / "in", state / "out"
-    guild_ns = types.SimpleNamespace(id=GUILD)
+    guild = types.SimpleNamespace(id=GUILD, name="guild", roles=[], text_channels=[])
 
     # The stand-in channels skip discord.py's __init__: it needs a live gateway state.
     class Channel:
-        def __init__(self, channel_id, name, history=(), home=guild_ns):
+        def __init__(self, channel_id, name, history=(), home=guild):
             self.id, self.name, self.msgs, self.home = channel_id, name, list(history), home
             self.reads, self.sent, self.edits, self.fail, self.pinned = [], [], [], False, []
 
@@ -115,9 +107,8 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
     history = entries if entries is not None else [
         message(1, BOT, f"**{identity}** · <@{BOT}>"), message(2, ALICE, f"**alice** · <@{ALICE}>")]
     names = (c.BRIDGE_CHANNEL_NAME, c.DIRECTORY_CHANNEL_NAME, c.ATTACHMENTS_CHANNEL_NAME, c.CREDS_CHANNEL_NAME)
-    guild = types.SimpleNamespace(id=GUILD, name="guild", roles=[], text_channels=[
-        Text(i, n, history if n == c.DIRECTORY_CHANNEL_NAME else (), guild_ns)
-        for i, n in zip((BRIDGE, DIRECTORY, ATTACHMENTS, CREDENTIALS), names)])
+    guild.text_channels = [Text(i, n, history if n == c.DIRECTORY_CHANNEL_NAME else (), guild)
+                           for i, n in zip((BRIDGE, DIRECTORY, ATTACHMENTS, CREDENTIALS), names)]
     for m in history:
         m.channel = guild.text_channels[1]
     ext = root / "relay.py"
@@ -130,7 +121,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
             self.guilds = [guild]
             self.loop = types.SimpleNamespace(create_task=self.tasks.append)
             self.bridge, self.directory, self.attachments, self.credentials = guild.text_channels
-            self.guild, self.dm, self.dms, self.responses = guild_ns, DM, {}, {}
+            self.guild, self.dm, self.dms, self.responses = guild, DM, {}, {}
             self.reactions, self.events, self.log = [], [], ""
             self.message = functools.partial(message, reactions=self.reactions)
 
@@ -179,7 +170,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
              "sweep_status_plugin": lambda identity: None,
              "default_status_plugin": lambda flavor: root / "no-such-plugin",
              "read_extension_registry": lambda identity, flavor=None: {"path": str(ext)} if extension else {},
-             "msg_cache_dir": lambda: root / "msgs",
+             "msg_cache_dir": lambda: root / "msgs", "pins_dir": lambda: root / "pins",
              "meta_in_dir": lambda identity: in_dir, "meta_out_dir": lambda identity: out_dir}
     for d in (in_dir, out_dir, root / "inbox", root / "msgs", root / "locks"):
         d.mkdir(parents=True, exist_ok=True)

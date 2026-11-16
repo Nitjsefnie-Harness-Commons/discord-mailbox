@@ -673,7 +673,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         async for m in channel.history(limit=limit):
             if not m.attachments:
                 continue
-            from_name = reverse_identity(m.author.id) or m.author.name
+            from_name = _Directory.label_of(state['identity_map'], m.author)
             for a in m.attachments:
                 entries.append({
                     'msg_id': str(m.id),
@@ -829,7 +829,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if parsed is None:
                 continue
             parsed['msg_id'] = str(m.id)
-            parsed['author'] = reverse_identity(m.author.id) or m.author.name
+            parsed['author'] = _Directory.label_of(state['identity_map'], m.author)
             parsed['created'] = m.created_at.isoformat()
             entries.append(parsed)
         # newest-first from history; reverse for chronological
@@ -904,7 +904,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         msgs = []
         async for m in channel.history(**kwargs):
             content = m.content or ''
-            from_name = reverse_identity(m.author.id) or m.author.name
+            from_name = _Directory.label_of(state['identity_map'], m.author)
             record = attach_extras({
                 'msg_id': str(m.id),
                 'channel_id': str(m.channel.id),
@@ -1032,7 +1032,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         async for p in channel.pins(limit=limit):
             entries.append(attach_extras({
                 'msg_id': str(p.id),
-                'from': reverse_identity(p.author.id) or p.author.name,
+                'from': _Directory.label_of(state['identity_map'], p.author),
                 'created': p.created_at.isoformat(),
                 'content': p.content,
                 'attachments': [{'filename': a.filename, 'url': a.url, 'size': a.size,
@@ -1228,7 +1228,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         msgs.reverse()          # chronological: they must land in reading order
 
         plan = [{'msg_id': str(m.id),
-                 'from': reverse_identity(m.author.id) or m.author.name,
+                 'from': _Directory.label_of(state['identity_map'], m.author),
                  'created': m.created_at.isoformat(),
                  'preview': (m.content or '')[:120],
                  'attachments': len(m.attachments)} for m in msgs]
@@ -1266,7 +1266,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         moved, failures = [], []
         for m in msgs:
-            author = reverse_identity(m.author.id) or m.author.name
+            author = _Directory.label_of(state['identity_map'], m.author)
             files, overflow = [], []
             for a in m.attachments:
                 try:
@@ -2220,9 +2220,6 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # rides chunk 1 for the one-ping property) — route on the frame instead.
         return 'continuation' if continuation_chunk_for(msg.content, identity) else False
 
-    def reverse_identity(user_id):
-        return _DeliveryGates.identity_for(state['identity_map'], user_id)
-
     async def resolve_pins(chobj):
         '''Pinned messages for a channel, TTL-cached 60s per channel id.
 
@@ -2242,7 +2239,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         entries = []
         try:
             async for p in chobj.pins(limit=50):
-                pfrom = reverse_identity(p.author.id) or p.author.name
+                pfrom = _Directory.label_of(state['identity_map'], p.author)
                 created = p.created_at.isoformat()
                 pin_payload = attach_extras({
                     'msg_id': str(p.id),
@@ -2274,7 +2271,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         mdir.mkdir(parents=True, exist_ok=True)
         payload = attach_extras({
             'msg_id': str(m.id),
-            'from': reverse_identity(m.author.id) or getattr(m.author, 'name', '?'),
+            'from': _Directory.label_of(state['identity_map'], m.author),
             'from_user_id': str(m.author.id),
             'created': m.created_at.isoformat(),
             'body': getattr(m, 'content', ''),
@@ -2437,7 +2434,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         author = msg.author
         author_roles = ([r.name for r in author.roles if r.name != '@everyone']
                         if isinstance(author, discord.Member) else None)
-        identities = [name for name, mapped in state['identity_map'].items() if mapped == author.id]
+        identities = _Directory.names_held(state['identity_map'], author.id)
         return {
             'channel': info,
             'guild': guild_info,
@@ -2470,7 +2467,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         }
 
     async def write_inbox(msg, source='live', continuation=False):
-        frm = reverse_identity(msg.author.id) or msg.author.name
+        frm = _Directory.label_of(state['identity_map'], msg.author)
+        registered = bool(_Directory.names_held(state['identity_map'], msg.author.id))
         body = msg.content
         inbox = inbox_dir(identity)
         path = inbox / f'{msg.id}.json'
@@ -2517,6 +2515,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             'source': source,
             'created': msg.created_at.isoformat(),
             'from': frm,
+            'from_user_id': str(msg.author.id),
+            'from_registered': registered,
             'to': to_label if len(to_label) <= 50 else to_label[:50],
             'subject': subject,
             'msg_id': str(msg.id),
