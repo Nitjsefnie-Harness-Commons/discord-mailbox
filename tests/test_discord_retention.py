@@ -35,6 +35,7 @@ def seed(root):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / f"{rel}.json").write_text(json.dumps(record), encoding="utf-8")
         os.utime(root / f"{rel}.json", (0, 0))   # an age rule would remove all of them
+    (root / f"messages/{C1}/799.json.tmp").write_text("{}", encoding="utf-8")   # a crashed writer's leftover
 
 
 def stored(root):   # os.walk lists a link but never descends through one
@@ -55,20 +56,25 @@ def test_a_deletion_on_discord_removes_exactly_its_local_records(tmp):
     if not _gateway.have_discord():
         _util.skip("discord.py is not installed")
     import discord
-    rows = [  # handler, its payload, the records left behind, a removed and a surviving reply target, a removed channel
+    rows = [  # handler, its payload, the records left behind, a removed and a surviving reply target, a removed
+        # channel, the connector log line
         ("raw_message_delete", lambda: discord.RawMessageDeleteEvent({"id": 701, "channel_id": C1}), deleted(701),
-         701, 702, None),
+         701, 702, None, ": removed 4 local"),
         ("raw_bulk_message_delete", lambda: discord.RawBulkMessageDeleteEvent({"ids": [701, 702], "channel_id": C1}),
-         deleted(701, 702), 702, None, None),
-        ("raw_thread_delete", lambda: raw_thread(C1, C2), deleted(701, 702, C1), 701, None, C1),
-        ("guild_channel_delete", lambda: types.SimpleNamespace(id=C2), deleted(703, 704, 705, C2), 705, 702, C2)]
-    for event, payload, expected, gone, live, channel in rows:
-        left, heard, answers = delete_on_discord(Path(tmp, event), event, payload(), {"gone": gone, "live": live})
+         deleted(701, 702), 702, None, None, ": removed 6 local"),
+        ("raw_thread_delete", lambda: raw_thread(C1, C2), deleted(701, 702, C1), 701, None, C1, ": removed 7 local"),
+        ("guild_channel_delete", lambda: types.SimpleNamespace(id=C2), deleted(703, 704, 705, C2), 705, 702, C2,
+         ": removed 8 local"),
+        ("raw_message_delete", lambda: types.SimpleNamespace(message_id=701, channel_id="C1"), sorted(STORED),
+         None, 702, None, " failed: ValueError")]   # a raising handler is contained; the extension still hears
+    for n, (event, payload, expected, gone, live, channel, logged) in enumerate(rows):
+        root = Path(tmp, str(n))
+        left, heard, client = delete_on_discord(root, event, payload(), {"gone": gone, "live": live})
         assert left == expected, (event, left)
-        assert not channel or not list(Path(tmp, event, "mailbox").glob(f"*/{channel}")), event
-        assert len(heard) == 1, (event, heard)
-        assert "not found in local caches" in answers["gone"].get("error", ""), (event, answers)
-        assert live is None or answers["live"].get("channel_id") == str(C1), (event, answers)
+        assert not channel or not list(Path(root, "mailbox").glob(f"*/{channel}")), event
+        assert len(heard) == 1 and f"on_{event}{logged}" in client.log, (event, client.log)
+        assert gone is None or "not found in local caches" in client.responses["gone"].get("error", ""), event
+        assert live is None or client.responses["live"].get("channel_id") == str(C1), (event, client.responses)
 
 
 def delete_on_discord(root, event, payload, replies):
@@ -85,7 +91,7 @@ def delete_on_discord(root, event, payload, replies):
         await client.ask({name: {"op": "send", "to": "nobody", "subject": "s", "body": "b", "reply_to": str(msg)}
                           for name, msg in replies.items() if msg})
     client = _gateway.run(root, script, extension=True)
-    return stored(root / "mailbox"), heard, client.responses
+    return stored(root / "mailbox"), heard, client
 
 
 async def deliver_during_delete(client, msg_id, held):
@@ -151,6 +157,8 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
     seed(outside)
     (root / "one/outbox").mkdir()
     (root / "one/outbox/705.json").write_text(json.dumps({"from_user_id": str(A)}), encoding="utf-8")
+    for rel, unreadable in (("one/inbox/790", "{"), ("two/inbox/791", "[1]")):   # skipped, never fatal
+        (root / f"{rel}.json").write_text(unreadable, encoding="utf-8")
     links = {"three": "two", f"messages/{C1 + 7}": f"messages/{C1}", "one/inbox/709.json": "one/inbox/703.json"}
     for link, target in links.items() if os.name != "nt" else ():
         os.symlink(outside / target, root / link)
@@ -158,7 +166,7 @@ def test_erase_removes_every_record_the_author_wrote_and_nothing_else(tmp):
         assert mb(tmp, "erase", "--user-id", refused).returncode == 2, refused
     done = mb(tmp, "erase", "--user-id", str(A))
     assert (done.returncode, json.loads(done.stdout)) == (0, {"user_id": str(A), "removed": 10}), done
-    kept = [rel for rel in STORED if rel.endswith(("702", "704"))] + ["one/outbox/705"]
+    kept = [rel for rel in STORED if rel.endswith(("702", "704"))] + ["one/inbox/790", "one/outbox/705", "two/inbox/791"]
     assert stored(root) == sorted(kept + (["one/inbox/709"] if os.name != "nt" else [])), stored(root)
     assert stored(outside) == sorted(STORED), stored(outside)
     for reply_to in ("702", "701"):
