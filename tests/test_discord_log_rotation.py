@@ -2876,9 +2876,15 @@ def test_connector_log_rotation_renames_backups_and_writes_the_active_copy_once(
 def test_connector_log_rotation_drops_a_linked_backup_name_and_never_writes_its_inode(tmp):
     """A hard link to the active, or a symlink, at a backup slot loses only its name; a slot with no inode number refuses."""
     m = _mod()
-    # The stage replaces the hard link's name at .1; the symlink at .2, with .1 absent, is unlinked by name.
-    for link, name in ((os.link, "shared.log.1"), (os.symlink, "shared.log.2")):
-        path = Path(tmp) / link.__name__ / "shared.log"
+    # The stage replaces the hard link's name at .1; the symlink at .2, with .1 absent, is unlinked by name,
+    # by the rotation or, after a crash once the generation is marked, by recovery.
+    crash = r'''
+real = mod._ConnectorLogWriter._mark_generation_publishing
+mod._ConnectorLogWriter._mark_generation_publishing = lambda self, manifest: (real(self, manifest), os._exit(178))
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
+'''
+    for link, name, crashed in ((os.link, "shared.log.1", False), (os.symlink, "shared.log.2", False), (os.symlink, "shared.log.2", True)):
+        path = Path(tmp) / f"{link.__name__}-{crashed}" / "shared.log"
         path.parent.mkdir()
         external, backup = path.with_name("external"), path.with_name("shared.log.1")
         path.write_bytes(b"A" * 31)
@@ -2888,6 +2894,8 @@ def test_connector_log_rotation_drops_a_linked_backup_name_and_never_writes_its_
         except (OSError, NotImplementedError):
             assert link is os.symlink, "this platform cannot create a hard link"
             continue  # no symlinks here; the hard-link row still ran
+        if crashed:
+            _run_child(crash, path, code=178)
         with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)) as writer:
             writer.write("x")
             writer.write("y")
