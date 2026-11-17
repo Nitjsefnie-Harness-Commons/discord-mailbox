@@ -5,5 +5,8 @@
 # Python 3.11, for the reason requirements-dev.in gives; --allow-unsafe
 # because setuptools is the point:
 #   pip-compile --generate-hashes --allow-unsafe requirements-build.in
+# It stays apart from requirements-dev.in because that flag would pin pip in
+# the toolchain lock, and the jobs that build and publish the wheel install
+# it without the toolchain.
 build
 setuptools
