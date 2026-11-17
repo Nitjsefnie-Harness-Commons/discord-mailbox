@@ -52,13 +52,13 @@ def test_each_perf_budget_change_is_a_budget_only_commit_and_their_trailers_name
 
 
 def test_the_freshness_set_holds_the_files_the_required_checks_name_and_no_record_or_code_named_only_as_a_directory(_tmp):
-    assert {"run_tests.py", ".pylintrc", ".github/workflows/tests.yml", ".github/workflows/open-pull-request.yml", "pyproject.toml", "scripts/ci/gate_base_freshness.py"} <= set(paths := FRESH.gate_paths(_util.SCRIPTS)) and not [p for p in paths if p.startswith(("discord_mb_lib/", "tests/", ".github/size-baseline.json", ".github/ci-thresholds.json"))], paths
+    assert (paths := FRESH.gate_paths(_util.SCRIPTS)) == [*(f".github/workflows/{w}" for w in ("audit.yml", "codeql.yml", "comment-share.yml", "lint.yml", "open-pull-request.yml", "pr-gate.yml", "requirements-runtime.txt", "size-baseline.yml", "tests.yml", "types.yml")), ".pylintrc", "pyproject.toml", "pyrightconfig.json", "requirements-build.txt", "requirements-dev.txt", "run_tests.py", "scripts/ci/coverage_floor.py", "scripts/ci/gate_base_freshness.py", "setup.cfg"], paths
 
 
 def test_the_ci_gate_is_final_once_every_covered_run_completed_and_green_only_when_each_job_succeeded_or_skipped_a_guard(_tmp):
     runs, lint, tests = {path: {"id": path, "status": "completed"} for path in GATE.COVERED}, ".github/workflows/lint.yml", ".github/workflows/tests.yml"  # each run's jobs are pylint succeeded unless a row says otherwise
     rows = (({}, {}, (True, [])), ({}, {lint: [("pylint", "success"), ("guard / lookup", "skipped")]}, (True, [])), ({}, {lint: [("pylint", "skipped"), ("guard", "skipped")]}, (True, [f"{lint}: pylint skipped", f"{lint}: guard skipped"])), ({}, {tests: [("suites (macos-latest, 3.13)", "cancelled"), ("guard / lookup", "cancelled")]}, (True, [f"{tests}: suites (macos-latest, 3.13) cancelled", f"{tests}: guard / lookup cancelled"])), ({".github/workflows/perf.yml": None}, {}, (False, [".github/workflows/perf.yml: no run"])), ({".github/workflows/types.yml": {"id": 0, "status": "in_progress"}}, {}, (False, [".github/workflows/types.yml: run in_progress"])), ({}, {".github/workflows/secrets.yml": []}, (True, [".github/workflows/secrets.yml: no jobs"])))
-    assert (verdicts := [GATE.verdict({**runs, **runs_over}, {path: [{"name": n, "conclusion": c} for n, c in jobs_over.get(path, [("pylint", "success")])] for path in GATE.COVERED}) for runs_over, jobs_over, _ in rows]) == [want for *_, want in rows], verdicts
+    assert (GATE.COVERED, verdicts := [GATE.verdict({**runs, **runs_over}, {path: [{"name": n, "conclusion": c} for n, c in jobs_over.get(path, [("pylint", "success")])] for path in GATE.COVERED}) for runs_over, jobs_over, _ in rows]) == ((".github/workflows/tests.yml", ".github/workflows/lint.yml", ".github/workflows/types.yml", ".github/workflows/audit.yml", ".github/workflows/codeql.yml", ".github/workflows/actionlint.yml", ".github/workflows/secrets.yml", ".github/workflows/perf.yml"), [want for *_, want in rows]), (GATE.COVERED, verdicts)
 
 
 def main():
