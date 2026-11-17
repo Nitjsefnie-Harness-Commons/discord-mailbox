@@ -3207,7 +3207,7 @@ class _ConnectorLogWriter:
         self._published_since_snapshot = True
 
     def _snapshot_published_names(self):
-        """Accept the names this writer published while the journal vouching for them remains."""
+        """Accept the names this writer published while the rotation journal vouching for them remains."""
         self._owner.refresh_stable_identities()
         self._published_since_snapshot = False
 
@@ -3624,7 +3624,6 @@ class _ConnectorLogWriter:
                 self._unlink_if_identity(
                     temporary, _temporary_identity,
                     _temporary_entry_identity)
-        self._snapshot_published_names()
         journal.unlink()
         self._cleanup_journal_temp(journal, 'migrate')
         self._fsync_directory(root)
@@ -4073,7 +4072,6 @@ class _ConnectorLogWriter:
                 self._manifest_identity(entry.get('temporary_identity')),
                 self._manifest_identity(entry.get('temporary_entry_identity')))
         journal = self._migration_manifest_path()
-        self._snapshot_published_names()
         try:
             journal.unlink()
         except FileNotFoundError:
