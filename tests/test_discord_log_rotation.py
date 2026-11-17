@@ -652,10 +652,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 def test_connector_log_rotation_recovers_after_every_publish_and_truncate(tmp):
     """Every durable rotation boundary can restart to one exact history."""
     child = r'''
-mode = sys.argv[3]
-threshold = int(sys.argv[4])
-real_replace = os.replace
-calls = [0]
+mode, threshold, real_replace, calls = sys.argv[3], int(sys.argv[4]), os.replace, [0]
 def publish_then_maybe_crash(*args):
     real_replace(*args)
     calls[0] += 1
@@ -671,45 +668,38 @@ if mode == "truncate":
 writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=8, backup_count=2)
 writer.write("ccccccc")
 writer.close()
-if mode == "count":
-    print(calls[0], flush=True)
+print(calls[0], flush=True) if mode == "count" else None
 '''
 
     def seed(case):
         case.mkdir()
-        path = case / "rotation.log"
-        path.write_bytes(b"aaaaaaa\n")
+        (path := case / "rotation.log").write_bytes(b"aaaaaaa\n")
         path.with_name("rotation.log.1").write_bytes(b"bbbbbbb\n")
         return path
 
-    probe = Path(tmp) / "rotation-publish-count"
-    path = seed(probe)
+    path = seed(Path(tmp) / "rotation-publish-count")
     publish_count = int(_run_child(child, path, "count", "999", code=0, text=True).stdout.strip())
     assert publish_count == 2, publish_count
 
-    old_active = b"aaaaaaa\n"
-    old_backup = b"bbbbbbb\n"
+    old_active, old_backup = b"aaaaaaa\n", b"bbbbbbb\n"
     for crash_number in range(1, publish_count + 1):
-        case = Path(tmp) / f"rotation-publish-crash-{crash_number}"
-        path = seed(case)
+        path = seed(case := Path(tmp) / f"rotation-publish-crash-{crash_number}")
         _run_child(child, path, "replace", crash_number, code=130 + crash_number)
         _restart(path, 8, 2)
-        expected = {
-            path.with_name("rotation.log.2"): old_backup,
-            path.with_name("rotation.log.1"): old_active,
-            path: b"",
-        }
-        assert {slot: slot.read_bytes() for slot in expected} == expected
-        assert _hidden(case) == []
+        expected = {path.with_name("rotation.log.2"): old_backup, path.with_name("rotation.log.1"): old_active, path: b""}
+        assert {slot: slot.read_bytes() for slot in expected} == expected and _hidden(case) == [], _hidden(case)
 
-    case = Path(tmp) / "rotation-truncate-crash"
-    path = seed(case)
+    path = seed(case := Path(tmp) / "rotation-truncate-crash")
     _run_child(child, path, "truncate", "0", code=180)
+    kept = (journal := next(_mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.json"))).read_bytes()  # version 4: never "swapped"
+    journal.write_bytes(kept + json.dumps({**json.loads(kept.splitlines()[-1]), "state": "swapped"}).encode() + b"\n")
+    with _refuses("a version 4 journal was recovered as swapped") as caught:
+        _restart(path, 8, 2)
+    journal.write_bytes(kept)
+    assert "invalid state" in str(caught[0]), caught
     _restart(path, 8, 2)
-    assert path.read_bytes() == b""
-    assert path.with_name("rotation.log.1").read_bytes() == old_active
-    assert path.with_name("rotation.log.2").read_bytes() == old_backup
-    assert _hidden(case) == []
+    assert [path.read_bytes(), path.with_name("rotation.log.1").read_bytes(), path.with_name("rotation.log.2").read_bytes(), _hidden(case)] == [
+        b"", old_active, old_backup, []]
 
 
 def test_connector_log_background_rotation_recovers_at_every_step(tmp):
@@ -718,52 +708,55 @@ def test_connector_log_background_rotation_recovers_at_every_step(tmp):
 import threading
 step, on_worker, W, real_replace, real_write, real_fsync, active, synced = sys.argv[3], sys.argv[4] in ("worker", "repeat"), mod._ConnectorLogWriter, os.replace, os.write, os.fsync, None, []
 W._BACKGROUND_ROTATION_MIN_BYTES, W._BACKGROUND_ROTATION_HEADROOM = 0, 1024
-real_manifest, real_stage, real_adopt = W._write_migration_manifest, W._stage_rotation_copy, W._adopt_rotated_identities
-real_sidecar, real_record, real_drop = W._prepare_rotation_sidecar, W._write_rotation_record, W._drop_rotation_journal
+real_manifest, real_stage, real_adopt, real_finish = W._write_migration_manifest, W._stage_rotation_copy, W._adopt_rotated_identities, W._finish_rotation
+real_sidecar, real_record, real_drop, released, appended = W._prepare_rotation_sidecar, W._write_rotation_record, W._drop_rotation_journal, threading.Event(), threading.Event()
 def at(name, result=None):  # 191: a step meant for the worker thread ran on the caller
     return os._exit(191 if on_worker and threading.current_thread() is threading.main_thread() else 190) if step == name else result
 def durable(self, fd):  # 192 otherwise: the record overwrote a sidecar not synced (bytes; off Windows, name) or not mode 0600
     return os.fstat(fd).st_ino in synced and (os.name == "nt" or os.stat(self._owner.lock_root).st_ino in synced and os.fstat(fd).st_mode & 0o777 == 0o600) or os._exit(192)
-W._write_migration_manifest = lambda self, m, kind="migrate", create=False: at("after-create" if kind == "rotate" and create else "", real_manifest(self, m, kind, create=create))
+def settled():  # 193 otherwise: "swapped" was journaled before the active and (off Windows) the log directory were synced after the record
+    return active in synced and (os.name == "nt" or os.stat(os.path.dirname(sys.argv[2])).st_ino in synced) or os._exit(193)
+W._write_migration_manifest = lambda self, m, kind="migrate", create=False: (m.get("state") != "swapped" or settled()) and at(
+    "after-create" if kind == "rotate" and create else "after-swapped" if m.get("state") == "swapped" else "", real_manifest(self, m, kind, create=create))
 W._prepare_rotation_sidecar = lambda self, cut: synced.clear() or at("after-prealloc", real_sidecar(self, cut))
-W._write_rotation_record = lambda self, context: durable(self, context["sidecar"]) and at("after-prepared", real_record(self, context))
+W._write_rotation_record = lambda self, context: durable(self, context["sidecar"]) and not synced.clear() and at("after-prepared", real_record(self, context))
+W._finish_rotation = lambda self, context: (released.set(), on_worker and appended.wait(60), at("after-release"), real_finish(self, context))[-1]
 W._drop_rotation_journal = lambda self, journal: at("after-journal-unlink", real_drop(self, journal))
 os.fsync = lambda fd: synced.append(os.fstat(fd).st_ino) or real_fsync(fd)
+os.fdatasync = lambda fd, real=getattr(os, "fdatasync", real_fsync): synced.append(os.fstat(fd).st_ino) or real(fd)
 W._stage_rotation_copy = lambda self, *args: at("after-stage", real_stage(self, *args))
 W._adopt_rotated_identities = lambda self, *args: at("after-rewrite") or real_adopt(self, *args)
 os.replace = lambda source, destination, **kwargs: at({"c.log.3": "after-rename-1", "c.log.2": "after-rename-2", "c.log.1": "after-stage-publish"}.get(
     os.path.basename(destination)), real_replace(source, destination, **kwargs))
 os.write = lambda fd, data: at("after-truncate" if os.fstat(fd).st_ino == active else "") or real_write(fd, data)
-writer = W(sys.argv[2], max_bytes=4096, backup_count=3)
+writer = W(sys.argv[2], max_bytes=4096, backup_count=0 if sys.argv[4] == "torn-alone" else 3)
 active = os.stat(sys.argv[2]).st_ino
 for n in range(240, 440):
-    worker = writer._rotation_worker
-    if on_worker and worker is not None and writer._active_bytes + 50 > 4096:
-        worker.join()  # the caller stays below the ceiling, so the worker swaps on its own thread
+    after = released.is_set()  # the caller stays below the ceiling, so a "worker" row's worker swaps on its own thread
+    _ = on_worker and writer._rotation_worker is not None and writer._active_bytes + 50 > 4096 and released.wait(60)
     writer.write(f"{n:05d}".ljust(49, "."))
-    print(n, flush=True)
+    _ = print(n, flush=True), after and appended.set()  # its finish goes on once a line was written after its swap
 '''
     lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
     lines = [f"{n:05d}".ljust(49, ".").encode() + b"\n" for n in range(450)]
-    # A forged tail refuses before recovery goes on; a torn or stale sidecar is absent, so the journal rolls back; appended
-    # lines model a finish outside the lock; "worker" rows swap on the worker thread; "repeat" seeds an active beginning with its tail.
+    # A forged tail refuses before recovery goes on; a torn or stale sidecar is absent, so the journal rolls back; "worker" rows
+    # swap on the worker thread, which goes on to finish after lines are appended; "repeat" seeds an active beginning with its tail.
     in_lock = ("after-prepared", "after-rename-1", "after-rename-2", "after-stage-publish", "after-truncate", "after-rewrite")
     for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prealloc", ""), ("after-prepared", "torn"), ("after-rename-2", "unmarked"),
                         *(("after-prepared", f"stale-{key}") for key in ("generation", "transaction_nonce", "token", "kind", "list")), *((step, "") for step in in_lock),
                         ("after-journal-unlink", ""), ("after-prepared", "digest"), ("after-prepared", "length"), ("after-prepared", "version"),
-                        ("after-rewrite", "appended"), *((step, "worker") for step in in_lock), ("after-prepared", "repeat")):
-        case, rolled_back = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" or extra.startswith("stale")
+                        *((step, "worker") for step in in_lock), ("after-prepared", "repeat"), ("after-release", "worker"),
+                        ("after-swapped", ""), ("after-swapped", "torn-alone"), ("after-swapped", "torn-short"),
+                        *((step, extra) for step in (*in_lock, "after-release", "after-swapped") for extra in ("torn-active", "foreign-c.log", "foreign-c.log.1"))):
+        case, rolled_back, backups = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" or extra.startswith("stale"), 3 - 3 * (extra == "torn-alone")
         case.mkdir()
         slots = [case / name for name in ("c.log.3", "c.log.2", "c.log.1", "c.log")]
-        for index, slot in enumerate(slots):
+        for index, slot in [*enumerate(slots)][3 - backups:]:
             slot.write_bytes(b"".join(lines[60 * index:60 * index + 60] if index < 3 or extra != "repeat" else lines[241:261] + lines[200:240]))
         done = int(_run_child(child, slots[-1], step, extra, code=190, text=True).stdout.split()[-1])
         # Publishing the stage appends no record of its own: the swap's one in-lock record goes to the sidecar.
         assert step not in in_lock[3:] or "prepared" not in [json.loads(r)["state"] for r in next(lock_root.glob("*.rotate.json")).read_bytes().splitlines()], step
-        if extra == "appended":
-            done = int(slots[-1].read_bytes().splitlines()[-1][:5]) + 3
-            slots[-1].write_bytes(slots[-1].read_bytes() + b"".join(lines[done - 2:done + 1]))
-        elif extra in ("digest", "length", "version", "unmarked", "torn") or extra.startswith("stale"):
+        if extra in ("digest", "length", "version", "unmarked", "torn") or extra.startswith("stale"):
             sidecar, journal = next(lock_root.glob("*.rotate.swap")), next(lock_root.glob("*.rotate.json"))
             saved, kept, tail = sidecar.read_bytes(), journal.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
             record = json.loads(saved[40:40 + int.from_bytes(saved[:8], "big")])
@@ -790,7 +783,16 @@ for n in range(240, 440):
                     _restart(slots[-1], 4096, 3)
                 assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
                 _ = sidecar.write_bytes(saved), journal.write_bytes(kept)
-        _restart(slots[-1], 4096, 3)
+        elif extra.startswith(("torn-", "foreign-")):  # power loss tears the active, or a file is put at a slot, after the crash
+            foreign, kept, victim, aside = extra.startswith("foreign"), step == "after-swapped" and extra in ("torn-active", "torn-short"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"
+            saved, _ = (victim.read_bytes(), foreign and os.replace(victim, aside)) if victim.exists() else (b"", None)
+            victim.write_bytes(crafted := b"FOREIGN\n" if foreign else saved[:len(saved) // 2] if extra == "torn-short" else b"x" * 16 + saved[16:])
+            # Only a swapped generation whose prefix .1 holds keeps a torn active; a foreign active is another inode, its journal its own.
+            with contextlib.nullcontext() if kept or extra == "foreign-c.log" else _refuses(f"recovery accepted a {extra} slot after {step}"):
+                _restart(slots[-1], 4096, backups)
+            assert victim.read_bytes() == crafted and (extra != "foreign-c.log" or any(lock_root.glob("*.rotate.json"))), (step, extra)  # never written through
+            _ = (victim.unlink(), aside.exists() and os.replace(aside, victim)) if foreign else victim.write_bytes(saved)
+        _restart(slots[-1], 4096, backups)
         assert not rolled_back or slots[2].read_bytes() == b"".join(lines[120:180]), step  # no slot moved
         if extra == "repeat":  # the prefix moved to .1 and the active holds only the tail, a run of lines 241 on
             tail = slots[-1].read_bytes()
@@ -863,6 +865,18 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
                     for line in lines[:30]:
                         small.write(line.decode()[:-1])
                         assert small._rotation_worker is None, minimum
+            # The next rotation, or close(), joins a worker still finishing after its swap: here the finish goes on only once joined.
+            go, entered, done = threading.Event(), threading.Event(), []
+            with _patched(W, _finish_rotation=lambda self, context, real=W._finish_rotation: (entered.set(), go.wait(60), real(self, context), done.append(1))):
+                for joins in ("write", "close"):
+                    late, _ = W(path.with_name(f"{joins}.log"), max_bytes=1024), (go.clear(), entered.clear(), done.clear())
+                    while late._rotation_worker is None:
+                        late.write(lines[0].decode()[:-1])
+                    assert entered.wait(60) and (finishing := late._rotation_finishing) is not None, "the worker never swapped on its own"
+                    finishing.join = lambda *args, real=finishing.join: go.set() or real(*args)
+                    _ = joins == "write" and [late.write(line.decode()[:-1]) for line in lines if not done]
+                    late.close()
+                    assert done and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.*")), f"{joins}: no wait for the finish"
         finally:
             appended.set()
             held.set()
@@ -873,10 +887,10 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     m, log, case, locked, release, staged, held, opens = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event(), set(), []
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_prepare_rotation_sidecar",
-                                                "_write_rotation_record", "_start_rotation_worker", "_rotate", "_recover_and_open")}
+                                                "_write_rotation_record", "_drop_rotation_journal", "_start_rotation_worker", "_rotate", "_recover_and_open")}
 
     def seam(name):  # the row's fault fires once: on the worker, or on the caller swapping at the ceiling
-        def wrapped(self, *args):
+        def wrapped(self, *args, **kwargs):
             error, worker = case["error"], threading.current_thread() is not threading.main_thread()
             if name == "_stage_rotation_copy" and worker and len(case["refused"]) > 7:  # the caller swaps at the ceiling
                 assert case["ceiling"].wait(60), "the caller never reached the ceiling"
@@ -892,7 +906,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                 else:  # a foreign file takes the victim's name
                     os.replace(case["path"].with_name(error), case["path"].with_name("aside"))
                     case["path"].with_name(error).write_bytes(b"FOREIGN\n")
-            return real[name](self, *args)
+            return real[name](self, *args, **kwargs)
         return wrapped
 
     def rotate(self):  # the SystemExit row's first synchronous rotation after the report then raises once
@@ -900,7 +914,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
         log.append("rotate")
         if case.pop("sync fault", False):
             raise OSError("injected fault after a synchronous rotation")
-    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:5]},
+    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:6]},
                   _recover_and_open=lambda self: real["_recover_and_open"](self) or log.append("recover"),
                   _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or wait(self),
                   _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)), \
@@ -908,7 +922,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                      open=lambda path, *args, real=os.open, **kw: (fd := real(path, *args, **kw), os.fspath(path).endswith("connector.log.2") and (held.add(fd), opens.append(threading.current_thread().name)))[0]):
         for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
                                                       *(("_prepare_rotation_sidecar", plant, "refused") for plant in ("plant-symlink", "plant-hardlink")),
-                                                      ("_write_rotation_record", OSError("injected record fault"), "refused"),
+                                                      ("_write_rotation_record", OSError("injected record fault"), "refused"), ("_drop_rotation_journal", OSError("injected fault after the swap"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
                                                       ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
             if error == "fork" and not hasattr(os, "fork") or error == "connector.log" and os.name == "nt":  # rows 4 and 5 run last
@@ -939,7 +953,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                     worker.join(60)
                     assert not worker.is_alive() and path.read_bytes() == b"b" * 7 + b"\nchild\n", path.read_bytes()  # the parent's swap kept the child's line
                     continue
-                stored = len(refused) > 7 or log[1].join(60) or writer._rotation_error  # the worker stores its failure, unless the caller reaps it at the ceiling
+                stored = len(refused) > 7 or log[1].join(60) or writer._rotation_error or writer._rotation_finish_error  # the worker stores its failure, unless the caller reaps it at the ceiling
                 assert len(refused) > 7 or not log[1].is_alive(), "the failed worker never finished"
                 with _refuses(f"{name}: the write after a failed rotation was accepted", BaseException) as caught:  # SystemExit too
                     writer.write(refused)
