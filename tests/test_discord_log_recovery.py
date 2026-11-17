@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import io
+import json
 import os
 import sys
 from pathlib import Path
@@ -372,6 +373,49 @@ def test_a_slot_swapped_after_the_rotation_journal_is_prepared_is_never_moved(tm
             os.replace(held[0].with_name("aside"), held[0])
             writer.write("z" * 25)
         assert [p.read_bytes() for p in _window(path)] == [b"z" * 25 + b"\n", before[0], before[1]], key
+
+
+def test_a_version_3_journal_left_by_the_previous_release_recovers_or_refuses(tmp):
+    """That release's journal, crashed at .1's replace, finishes; without the active's staged temp it refuses."""
+    m = _mod()
+    sha, ident, nonce = m._ConnectorLogWriter._sha256_bytes, lambda p: list(m._ConnectorOwnership._identity_for(p)), "7a" * 16
+    active, backup = b"A" * 20 + b"\n", b"B" * 10 + b"\n"
+    for drop in (False, True):
+        path = Path(tmp) / f"v3-{drop}" / "c.log"
+        path.parent.mkdir()
+        path.write_bytes(active)
+        path.with_name("c.log.1").write_bytes(backup)
+        writer, slots = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1), (path.with_name("c.log.1"), path)
+        temps = [path.with_name(f".c.log.rotate-{writer._identity_digest}-{nonce}-{i}.tmp") for i in (0, 1)]
+        # As that release left them: .1's payload already stripped of its envelope, the active's empty one not.
+        writer._transaction_nonce, writer._staging_kind, writer._staging_slot, writer._staging_destination = nonce, "rotate", 1, path
+        temps[0].write_bytes(active)
+        temps[1].write_bytes(writer._staging_envelope(b""))
+        journal, manifest = writer._rotation_manifest_path(), {
+            "version": 3, "kind": "rotate", "token": writer._identity_digest, "state": "prepared", "root": str(path.parent),
+            "log_name": "c.log", "backup_count": 1, "transaction_nonce": nonce,
+            "stable_paths": [{"path": str(p), "identity": ident(p)} for p in slots],
+            "destinations": [{"destination": str(p), "in_place": p == path, "present": True, "temporary": str(t),
+                              "size": len(data), "sha256": sha(data), "before_size": len(old), "before_sha256": sha(old),
+                              "before_identity": ident(p), "before_entry_identity": ident(p),
+                              "temporary_identity": ident(t), "temporary_entry_identity": ident(t)}
+                             for p, t, data, old in zip(slots, temps, (active, b""), (backup, active))]}
+        manifest["destinations"][0]["publish_state"] = "publishing"
+        journal.write_bytes(json.dumps(manifest).encode("utf-8"))
+        writer.close()
+        if drop:
+            temps[1].unlink()
+        before = {p.name: p.read_bytes() for p in (journal, *path.parent.glob("*c.log*")) if p.is_file()}
+        try:
+            restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
+        except RuntimeError as exc:
+            assert drop and "c.log has no staged replacement" in str(exc), exc
+            assert {p.name: p.read_bytes() for p in (journal, *path.parent.glob("*c.log*")) if p.is_file()} == before
+        else:
+            restarted.write("z")
+            restarted.close()
+            assert not drop and [path.read_bytes(), slots[0].read_bytes()] == [b"z\n", active], drop
+            assert not journal.exists() and _hidden(path.parent) == [], _hidden(path.parent)
 
 
 def test_the_watchdog_closes_first_and_a_failed_log_write_falls_back_to_stderr(tmp):
