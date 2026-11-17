@@ -36,7 +36,8 @@ import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from . import _control_files, _graphemes, _prog, _retention, _usage_windows
+from . import _control_files, _prog, _retention, _usage_windows
+from ._chunking import chunk_body
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1147,30 +1148,6 @@ class SendRetry(Exception):
 
 class SendError(Exception):
     'Permanent send failure — reported and dropped, never silently rerouted.'
-
-
-def chunk_body(body, limit):
-    '''Split body into <=limit pieces, preferring paragraph, then line, then
-    space boundaries; hard-splits only when no boundary lands in the back 3/4
-    of the window. Returns [body] unchanged when it already fits.'''
-    if len(body) <= limit:
-        return [body]
-    parts = []
-    rest = body
-    while len(rest) > limit:
-        window = rest[:limit + 1]
-        for sep in ('\n\n', '\n', ' '):
-            cut = window.rfind(sep)
-            if cut > limit // 4:
-                sep_len = len(sep)
-                break
-        else:
-            cut, sep_len = _graphemes.hard_cut(body, len(body) - len(rest), limit), 0
-        parts.append(rest[:cut].rstrip())
-        rest = rest[cut + sep_len:]
-    if rest.strip():
-        parts.append(rest)
-    return parts
 
 
 def moved_body(author, created, content, extra_urls=None):
@@ -2723,7 +2700,6 @@ __all__ = [
     '_control_files',
     '_ensure_state_root',
     '_flat_component',
-    '_graphemes',
     '_linklike',
     '_meta_request',
     '_prog',
