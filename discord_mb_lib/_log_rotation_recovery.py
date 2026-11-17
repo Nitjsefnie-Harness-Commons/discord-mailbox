@@ -43,43 +43,56 @@ class _RotationRecovery:
     def _slot_identity(self: Any, path: Path) -> tuple:
         return (self._owner._identity_for(path), self._owner._entry_identity(path))
 
+    def _journal_pair(self: Any, item: dict, field: str) -> tuple:
+        """The inode and entry identities a journal entry records under ``field``."""
+        return (self._manifest_identity(item.get(f'{field}_identity')),
+                self._manifest_identity(item.get(f'{field}_entry_identity')))
+
     def _rotation_entries(self: Any, manifest: dict, root: Path,
                           log_name: str) -> list[dict[str, Any]]:
-        """Read v3 slots as entries; the active's rewrite has an empty tail."""
-        backup_count = int(manifest['backup_count'])
+        """Read journal slots as entries; a v3 journal's active is a rewrite with an empty tail."""
+        backup_count, v4 = int(manifest['backup_count']), int(manifest['version']) >= 4
         if not isinstance(manifest['destinations'], list) or backup_count < 0:
             raise ValueError('connector log journal has invalid rotation slots')
         slot_names = {log_name, *(f'{log_name}.{index}'
                                   for index in range(1, backup_count + 1))}
         entries = []
         for index, item in enumerate(manifest['destinations']):
-            def pair(field, item=item):
-                return (self._manifest_identity(item.get(f'{field}_identity')),
-                        self._manifest_identity(item.get(f'{field}_entry_identity')))
             destination = self._manifest_path(item['destination'], root)
             if destination.name not in slot_names:
                 raise ValueError('unsafe rotation destination')
+            method = item['method'] if v4 else (
+                'rewrite' if item.get('in_place') else 'stage' if item['present'] else 'unlink')
             entry: dict[str, Any] = {
-                'destination': destination, 'before': pair('before'),
+                'destination': destination, 'method': method, 'v4': v4,
+                'before': self._journal_pair(item, 'before'),
                 'marked': bool(item.get('publish_state')),
-                'temporary': None, 'staged': _ABSENT,
+                'temporary': None, 'staged': _ABSENT, 'post': _ABSENT,
                 'context': {'expected_kind': 'rotate', 'expected_slot': index,
                             'expected_destination': destination,
                             'expected_nonce': manifest.get('transaction_nonce'),
                             'expected_staging': manifest.get('staging')}}
-            if item.get('in_place'):
-                entry.update(method='rewrite', cut=int(item['before_size']),
-                             prefix_sha256=str(item['before_sha256']), tail=b'',
-                             size=0, sha256=self._sha256_bytes(b''))
-            elif item['present']:
-                entry.update(method='stage', size=int(item['size']),
-                             sha256=str(item['sha256']))
-            else:
-                entry['method'] = 'unlink'
-            if item['present']:
+            if method == 'rewrite':
+                if v4 and item['tail']:
+                    raise ValueError('connector log journal has an unsupported rotation tail')
+                entry.update(cut=int(item['cut' if v4 else 'before_size']),
+                             prefix_sha256=str(item['prefix_sha256' if v4 else 'before_sha256']),
+                             tail=b'', size=0, sha256=self._sha256_bytes(b''))
+            elif method == 'stage':
+                entry.update(size=int(item['size']), sha256=str(item['sha256']))
+            elif method == 'rename':
+                source = self._manifest_path(item['source'], root)
+                if source.name not in slot_names:
+                    raise ValueError('unsafe rotation source')
+                entry.update(source=source, post=self._journal_pair(item, 'source'))
+            elif method != 'unlink':
+                raise ValueError('unknown connector log rotation method')
+            if method == 'stage' or (not v4 and item['present']):
                 temporary = self._manifest_path(item['temporary'], root)
                 self._validate_journal_temp(temporary, 'rotate', log_name)
-                entry.update(temporary=temporary, staged=pair('temporary'))
+                entry.update(temporary=temporary, staged=self._journal_pair(item, 'temporary'))
+                if method == 'stage':
+                    entry['post'] = entry['staged']
             entries.append(entry)
         return entries
 
@@ -87,7 +100,7 @@ class _RotationRecovery:
         """Decide each entry from its slots' identities, changing nothing."""
         plan: list[tuple] = []
         decided = {}
-        for entry in entries:
+        for position, entry in enumerate(entries):
             destination, method = entry['destination'], entry['method']
             current = self._slot_identity(destination)
             temporary, staged = entry['temporary'], entry['staged']
@@ -108,6 +121,22 @@ class _RotationRecovery:
                     raise RuntimeError(
                         f'connector log rotation is incomplete: '
                         f'{destination.name} has no staged replacement')
+                else:
+                    raise RuntimeError(
+                        f'connector log journal destination was rebound: {destination}')
+            elif method == 'rename':
+                expected, source = entry['post'][0], self._slot_identity(entry['source'])
+                newer = entries[position + 1]['post'] if position + 1 < len(entries) else _ABSENT
+                if current == entry['post']:
+                    outcome = 'complete'
+                elif current not in (entry['before'], _ABSENT):
+                    raise RuntimeError(
+                        f'connector log journal destination was rebound: {destination}')
+                elif source == entry['post']:
+                    outcome = 'rename'
+                elif source in (_ABSENT, newer):
+                    # The source was deleted, or renamed here and deleted: the backup is absent.
+                    outcome, expected = ('complete' if current == _ABSENT else 'unlink'), None
                 else:
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
@@ -132,7 +161,7 @@ class _RotationRecovery:
                 elif (data[cut:] == tail and len(data) == cut + len(tail) and
                       self._sha256_bytes(data[:cut]) == entry['prefix_sha256'] and
                       holds_prefix):
-                    if not staged_temp:
+                    if temporary is not None and not staged_temp:
                         raise RuntimeError(
                             f'connector log rotation is incomplete: '
                             f'{destination.name} has no staged replacement')
@@ -143,11 +172,15 @@ class _RotationRecovery:
                 else:
                     raise RuntimeError(
                         f'connector log journal destination content changed: {destination}')
-            if outcome in ('publish', 'rewrite'):
+            if outcome in ('publish', 'rewrite') and temporary is not None:
                 # Authenticate the staged bytes now, so a refusal precedes every write.
-                self._read_staged_payload(
-                    temporary, expected_size=entry['size'],
-                    expected_digest=entry['sha256'], **entry['context'])
+                if not entry['v4']:
+                    self._read_staged_payload(
+                        temporary, expected_size=entry['size'],
+                        expected_digest=entry['sha256'], **entry['context'])
+                elif not self._file_matches_state(temporary, entry['size'], entry['sha256']):
+                    raise RuntimeError(
+                        f'connector log staging temp digest mismatch: {temporary}')
             decided[destination.name] = (entry, outcome)
             plan.append((entry, outcome, expected))
         return plan
@@ -156,24 +189,35 @@ class _RotationRecovery:
         """Carry out each decided entry, revalidating a slot before changing it."""
         for entry, outcome, _expected in plan:
             destination, temporary = entry['destination'], entry['temporary']
+            observed = self._slot_identity(destination)
+            if outcome in ('publish', 'rename') and observed not in (entry['before'], _ABSENT):
+                raise RuntimeError(
+                    f'connector log journal destination was rebound: {destination}')
             if outcome == 'publish':
-                observed = self._slot_identity(destination)
-                if observed not in (entry['before'], _ABSENT):
-                    raise RuntimeError(
-                        f'connector log journal destination was rebound: {destination}')
                 try:
-                    self._prepare_staged_for_replace(
-                        temporary, entry['size'], entry['sha256'], **entry['context'])
+                    if entry['v4']:
+                        self._claim_staged_for_replace(
+                            temporary, expected_destination=destination,
+                            identity=entry['staged'][0], entry_identity=entry['staged'][1])
+                    else:
+                        self._prepare_staged_for_replace(
+                            temporary, entry['size'], entry['sha256'], **entry['context'])
                     self._revalidate_destination(destination, *observed)
                     self._revalidate_staged_for_replace(temporary)
                     os.replace(temporary, destination)
                 finally:
                     self._forget_staged_for_replace(temporary)
+            elif outcome == 'rename':
+                self._revalidate_destination(entry['source'], *entry['post'])
+                self._revalidate_destination(destination, *observed)
+                os.replace(entry['source'], destination)
             elif outcome == 'unlink':
                 if (not self._unlink_if_identity(destination, *entry['before']) and
                         os.path.lexists(destination)):
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
+            elif outcome == 'rewrite' and temporary is None:
+                self._publish_in_place(destination, None, *entry['before'])
             elif outcome == 'rewrite':
                 self._validate_and_remember_staged(
                     temporary, expected_size=entry['size'],

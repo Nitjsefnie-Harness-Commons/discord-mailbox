@@ -3017,10 +3017,11 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
 
         The active slot always uses this path: the writer's ownership lock is
         on that inode, so replacing the pathname would strand the lock.
+        A ``temporary`` of None truncates the inode to empty.
         """
-        key = _ConnectorLogWriter._staged_path_key(temporary)
-        verified = _ConnectorLogWriter._VERIFIED_STAGED_PAYLOADS.pop(
-            key, None)
+        verified = (b'', None, None) if temporary is None else (
+            _ConnectorLogWriter._VERIFIED_STAGED_PAYLOADS.pop(
+                _ConnectorLogWriter._staged_path_key(temporary), None))
         if verified is None:
             # Decoding the envelope here would authenticate nothing and would
             # write the result straight into the live inode.  Callers stage
@@ -3093,7 +3094,7 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
             return False
         return size == int(expected_size) and digest == str(expected_digest)
 
-    def _journal_file_state(self, path):
+    def _journal_file_state(self, path, hash_content=True):
         """Capture the exact pre-crash identity/state of one pathname."""
         identity = self._owner._identity_for(path)
         entry_identity = self._owner._entry_identity(path)
@@ -3102,8 +3103,10 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
         digest = self._sha256_bytes(b'')
         try:
             present = path.is_file()
-            if present:
+            if present and hash_content:
                 size, digest = self._sha256_file(path)
+            elif present:
+                size, digest = path.stat().st_size, None
         except OSError:
             # The identity is still useful if a concurrent actor removed the
             # path; recovery will fail closed unless the journal can prove an
@@ -3279,7 +3282,7 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
                 if manifest is None:
                     raise ValueError(
                         'connector log journal has no complete state') from exc
-            if manifest.get('version') not in (2, 3) or manifest.get('kind') != kind:
+            if manifest.get('version') not in (2, 3, 4) or manifest.get('kind') != kind:
                 raise ValueError('unsupported connector log journal version')
             if manifest.get('token') != self._identity_digest:
                 raise ValueError('connector log journal identity mismatch')
