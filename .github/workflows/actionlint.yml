@@ -94,7 +94,7 @@ jobs:
           tar -xzf "$tarball" actionlint
           ./actionlint --version
 
-      - name: Install zizmor
+      - name: Install the dev toolchain
         id: install_zizmor
         run: pip install --require-hashes -r requirements-dev.txt
 
