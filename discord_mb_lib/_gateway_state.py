@@ -1,6 +1,6 @@
 """The connector's gateway state, readable from outside its process, and discord.py's
-records in connector.log. A session is starting until its first READY, and a later
-session's READY reads as reconnecting."""
+records in connector.log. A session is starting until its first READY or disconnect, and a
+later session's READY reads as reconnecting."""
 import json
 import logging
 import os
