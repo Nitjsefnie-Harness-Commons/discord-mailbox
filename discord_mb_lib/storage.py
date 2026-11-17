@@ -3924,6 +3924,12 @@ class _ConnectorLogWriter(_RotationJournal):
         if not self._path.exists():
             self._path.touch()
         self._fh = open(self._path, 'ab', buffering=0)
+        opened = os.fstat(self._fh.fileno())
+        if self._owner.identity not in (None, (str(opened.st_dev), str(opened.st_ino))):
+            fh, self._fh = self._fh, None
+            fh.close()
+            raise _ConnectorOwnershipError(
+                f'connector log identity was replaced while owned: {self._path}')
         if mode is not None:
             os.chmod(self._path, mode)
         self._fh.seek(0, os.SEEK_END)
