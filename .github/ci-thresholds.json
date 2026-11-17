@@ -2,8 +2,9 @@
   "schema_version": 1,
   "coverage": {
     "python": {
-      "floor": 48.0,
-      "gap": 1.5
+      "floor": 68.6,
+      "gap": 1.5,
+      "measured": 70.1
     }
   }
 }
