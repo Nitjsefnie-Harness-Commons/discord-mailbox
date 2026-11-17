@@ -20,7 +20,7 @@ class _RotationJournal:
 
     def _write_rotation_temp(self: Any, data: bytes, mode: Any, name: Path,
                              directory: Path, anonymous: bool) -> Path:
-        """Write one rotation payload once, claiming its inode before its first byte."""
+        """Write one rotation payload once, claiming its inode before its name holds a byte."""
         if anonymous:
             staged = self._link_rotation_temp(data, mode, name, directory)
             if staged is not None:
@@ -36,7 +36,7 @@ class _RotationJournal:
                 except (AttributeError, OSError):
                     os.chmod(str(name), mode)
             # A durable claim before any byte makes a torn write reclaimable by identity.
-            self._staging_claim_callback(name, identity)
+            self._claim_rotation_temp(name, identity)
             self._fsync_directory(directory)
             self._write_fd_bytes(fd, data)
             os.fsync(fd)
@@ -70,12 +70,13 @@ class _RotationJournal:
                     pass
             self._write_fd_bytes(fd, data)
             os.fsync(fd)
-            self._staging_claim_callback(name, identity)
+            self._claim_rotation_temp(name, identity)
             try:
                 self._link_anonymous_fd(fd, name)
             except OSError as exc:
                 if exc.errno not in _NO_ANONYMOUS:
                     raise
+                self._claim_rotation_temp(name, None)  # the portable retry claims anew
                 os.close(fd)
                 return None
             linked = True
@@ -88,6 +89,12 @@ class _RotationJournal:
             raise
         os.close(fd)
         return name
+
+    def _claim_rotation_temp(self: Any, name: Path,
+                             identity: tuple[str, str] | None) -> None:
+        """Journal the inode staged at ``name``; None revokes it."""
+        if self._staging_claim_callback is not None:
+            self._staging_claim_callback(name, identity)
 
     def _discard_rotation_temp(self: Any, fd: int, name: Path | None,
                                identity: tuple[str, str]) -> None:
@@ -216,10 +223,11 @@ class _RotationJournal:
 
                 def claim(staged, identity, index=index):
                     entry = manifest['destinations'][index]
-                    entry['temporary_identity'] = list(identity)
-                    entry['temporary_entry_identity'] = list(identity)
-                    # A portable retry after an unnamed anonymous stage claims the same name again.
-                    if str(staged) not in manifest['created_temporaries']:
+                    recorded = list(identity) if identity is not None else None
+                    entry['temporary_identity'] = entry['temporary_entry_identity'] = recorded
+                    if identity is None:
+                        manifest['created_temporaries'].remove(str(staged))
+                    else:
                         manifest['created_temporaries'].append(str(staged))
                     self._write_migration_manifest(manifest, kind='rotate')
                 self._staging_claim_callback = claim
