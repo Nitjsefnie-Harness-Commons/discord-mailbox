@@ -254,9 +254,10 @@ jobs:
       - name: Coverage gate
         if: ${{ !cancelled() && steps.measure.conclusion == 'success' }}
         # The floor is .github/ci-thresholds.json. A green push to main stages
-        # measured coverage minus its gap when that is higher, and
-        # ratchet-push.yml commits it unless code landed on main meanwhile. A
-        # pull request fails when it lowers the floor or widens the gap.
+        # measured coverage minus its gap when that is higher; ratchet-push.yml
+        # commits it, or drops it when main moved under the measurement and
+        # the next main push measures again. A pull request fails when it
+        # lowers the floor or widens the gap.
         run: |
           base=()
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && git cat-file -e HEAD^1:.github/ci-thresholds.json 2>/dev/null; then
@@ -265,6 +266,30 @@ jobs:
           fi
           floor="$(python scripts/ci/coverage_floor.py floor --thresholds .github/ci-thresholds.json "${base[@]}")"
           python -m coverage report --fail-under="$floor" --precision=1
+
+      - name: Report the patch coverage
+        id: patch
+        # Informational: the share of added lines the suites reach. HEAD^1 is
+        # the base tip merged into the checkout. coverage-comment.yml posts it.
+        if: ${{ !cancelled() && steps.measure.conclusion == 'success' && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          DISCORD_MAILBOX_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          out="$RUNNER_TEMP/diff-coverage"
+          mkdir -p "$out"
+          diff-cover coverage.xml --compare-branch=HEAD^1 --format "markdown:$out/body.md"
+          cat "$out/body.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$DISCORD_MAILBOX_PR_NUMBER" > "$out/pr-number.txt"
+
+      - name: Upload the patch coverage comment
+        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diff-coverage-comment
+          path: ${{ runner.temp }}/diff-coverage/
+          if-no-files-found: error
 
       - name: Stage the coverage floor raise
         id: raise
