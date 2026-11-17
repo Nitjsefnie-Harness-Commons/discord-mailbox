@@ -55,9 +55,9 @@ def test_each_perf_budget_change_is_a_budget_only_commit_and_their_trailers_name
     assert [(c["files"], c["declares"]) for c in PERF.commits_in("HEAD", tmp)] == [(["budget.json", "code.py"], ["a", "b"])]
 
 
-def test_the_freshness_set_holds_the_files_the_required_checks_name_and_the_size_baseline_job_runs_the_check(_tmp):
-    paths, steps = FRESH.gate_paths(_util.SCRIPTS), FRESH.workflow_jobs(Path(_util.script(".github/workflows/size-baseline.yml")).read_text(encoding="utf-8"), "size-baseline.yml")["size-baseline"]["steps"]
-    assert {"run_tests.py", ".github/workflows/open-pull-request.yml", "pyproject.toml", "scripts/ci/gate_base_freshness.py"} <= set(paths) and not [p for p in paths if p.startswith(("discord_mb_lib/", "tests/", ".github/size-baseline.json", ".github/ci-thresholds.json"))] and "python3 scripts/ci/gate_base_freshness.py" in (runs := [s["run"] or "" for s in steps]) and [r for r in runs if "git grep -nI -E" in r], (paths, steps)
+def test_the_freshness_set_holds_the_files_the_required_checks_name_and_no_record_or_code_named_only_as_a_directory(_tmp):
+    assert {"run_tests.py", ".pylintrc", ".github/workflows/tests.yml", ".github/workflows/open-pull-request.yml", "pyproject.toml", "scripts/ci/gate_base_freshness.py"} <= set(paths := FRESH.gate_paths(_util.SCRIPTS)), paths
+    assert not [p for p in paths if p.startswith(("discord_mb_lib/", "tests/", ".github/size-baseline.json", ".github/ci-thresholds.json"))], paths
 
 
 def main():
