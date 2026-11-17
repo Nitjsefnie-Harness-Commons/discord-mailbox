@@ -4,8 +4,7 @@
 Token-shaped strings are assembled at runtime from a synthetic id and random segments.
 """
 import base64
-import contextlib
-import io
+import functools
 import json
 import os
 import secrets
@@ -165,26 +164,16 @@ def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
              {"op": "creds-get", "domain": "b.example", "login": "l"}, 2, None),
             ("add", {"domain": "d", "login": "l", "password": "p", "upsert": True}, None,
              {"op": "creds-add", "domain": "d", "login": "l", "password": "p", "upsert": True}, None, None)):
-        sent, out, err, original = [], io.StringIO(), io.StringIO(), core._meta_request
-        core._meta_request = lambda i, p, t, answer=answer, sent=sent: sent.append((i, p)) or {
-            "ok": True, "entries": json.loads(json.dumps(answer)), "warning": "w-text", "action": "added",
-            "msg_id": "5"}
-        try:
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                core.creds_cli(types.SimpleNamespace(**{**base, **extra, "creds_action": action}))
-        except SystemExit as e:
-            assert e.code == code, (action, e.code)
-        else:
-            assert code is None, (action, "no exit")
-        finally:
-            core._meta_request = original
+        got_code, out, err, sent = _util.run_cli(functools.partial(core.creds_cli, types.SimpleNamespace(**{**base, **extra, "creds_action": action})), {
+            "ok": True, "entries": json.loads(json.dumps(answer)), "warning": "w-text", "action": "added", "msg_id": "5"})
+        assert got_code == code, (action, got_code)
         assert sent == [("me", payload)], (action, sent)
-        assert err.getvalue().startswith("warning: w-text\n"), (action, err.getvalue())
+        assert err.startswith("warning: w-text\n"), (action, err)
         if stdout is not None:      # --json parses whole; the text form is read off its `(by ...)` tails
-            got = json.loads(out.getvalue()) if extra.get("json", True) else [
-                line.split("(by ", 1)[1] for line in out.getvalue().splitlines() if "(by " in line]
-            assert got == stdout, (action, extra, out.getvalue())
-    assert out.getvalue() == "added: 5\n", out.getvalue()
+            got = json.loads(out) if extra.get("json", True) else [
+                line.split("(by ", 1)[1] for line in out.splitlines() if "(by " in line]
+            assert got == stdout, (action, extra, out)
+    assert out == "added: 5\n", out
 
 
 def main():

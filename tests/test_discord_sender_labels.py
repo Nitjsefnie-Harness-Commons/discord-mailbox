@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Sender labels: a name from the directory, or visibly `user:<username>`; and the attachment ops' answers."""
-import contextlib
-import io
+import functools
 import json
 import os
 import sys
@@ -185,18 +184,10 @@ def test_a_download_saves_each_attachment_directly_inside_dest_dir_or_skips_it_w
 def test_the_download_cli_prints_every_skipped_attachment(tmp):
     del tmp
     args = types.SimpleNamespace(identity="me", timeout=1.0, att_action="download", msg_id="7", dest_dir="d", rename=None, channel=None)
-    err, original, code = io.StringIO(), core._meta_request, None
-    core._meta_request = lambda i, p, t: {"ok": True, "saved": [], "skipped": [
-        {"filename": "x/..", "reason": "file name reduces to '..'"}]}
-    try:
-        with contextlib.redirect_stderr(err):
-            core.attachments_cli(args)
-    except SystemExit as e:
-        code = e.code
-    finally:
-        core._meta_request = original
-    assert (code, err.getvalue()) == (2, "skipped: 'x/..'  (file name reduces to '..')\n"
-                                         "(nothing saved from 7: every attachment was skipped)\n"), err.getvalue()
+    code, _, err, _ = _util.run_cli(functools.partial(core.attachments_cli, args), {"ok": True, "saved": [], "skipped": [
+        {"filename": "x/..", "reason": "file name reduces to '..'"}]})
+    assert (code, err) == (2, "skipped: 'x/..'  (file name reduces to '..')\n"
+                          "(nothing saved from 7: every attachment was skipped)\n"), err
 
 
 def main():
