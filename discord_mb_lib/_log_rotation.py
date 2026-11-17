@@ -235,22 +235,32 @@ class _RotationJournal:
                                    *self._journal_pair(destinations[-1], 'before'))
         except BaseException:
             if not published:
-                kept = (staged is not None and
-                        not self._unlink_if_identity(
-                            staged, *self._journal_pair(destinations[-2], 'temporary')) and
-                        os.path.lexists(str(staged)))
-                if not (kept or self._staging_cleanup_failed):
-                    try:
-                        journal.unlink()
-                    except FileNotFoundError:
-                        pass
-                    self._fsync_directory(self._path.parent)
-                    self._fsync_directory(journal.parent)
+                self._unstage_rotation(manifest, staged, journal)
             raise
-        self._adopt_rotated_identities({
-            Path(item['destination']): owner.identity if item['method'] == 'rewrite' else
-            self._manifest_identity(item.get('source_identity', item.get('temporary_identity')))
-            for item in destinations})
+        self._adopt_rotated_identities(self._rotation_identities(destinations))
+        self._drop_rotation_journal(journal)
+        self._open_active(mode)
+        self._use_anonymous_staging = False
+
+    def _unstage_rotation(self: Any, manifest: dict, staged: Any, journal: Path) -> None:
+        kept = (staged is not None and
+                not self._unlink_if_identity(
+                    staged, *self._journal_pair(manifest['destinations'][-2], 'temporary')) and
+                os.path.lexists(str(staged)))
+        if not (kept or self._staging_cleanup_failed):
+            try:
+                journal.unlink()
+            except FileNotFoundError:
+                pass
+            self._fsync_directory(self._path.parent)
+            self._fsync_directory(journal.parent)
+
+    def _rotation_identities(self: Any, destinations: list) -> dict:
+        return {Path(item['destination']): self._owner.identity if item['method'] == 'rewrite' else
+                self._manifest_identity(item.get('source_identity', item.get('temporary_identity')))
+                for item in destinations}
+
+    def _drop_rotation_journal(self: Any, journal: Path) -> None:
         try:
             journal.unlink()
         except FileNotFoundError:
@@ -258,10 +268,9 @@ class _RotationJournal:
         self._cleanup_journal_temp(journal, 'rotate')
         self._fsync_directory(self._path.parent)
         self._fsync_directory(journal.parent)
-        self._open_active(mode)
-        self._use_anonymous_staging = False
 
-    def _rotation_plan(self: Any, data_len: int, digest: str | None, version: int) -> tuple:
+    def _rotation_plan(self: Any, data_len: int, digest: str | None,
+                       version: int) -> tuple[dict, Path | None]:
         owner = self._owner
         empty = self._sha256_bytes(b'')
         backups = [self._backup_path(index) for index in range(self._backup_count, 0, -1)]
