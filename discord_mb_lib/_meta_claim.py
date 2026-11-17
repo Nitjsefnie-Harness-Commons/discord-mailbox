@@ -1,5 +1,4 @@
 """A meta request is claimed by the connector or withdrawn by the CLI, never both."""
-import asyncio
 import contextlib
 import json
 import time
@@ -61,8 +60,8 @@ def _claim(request: Path, out_dir: Path) -> Iterator[Path | None]:
         if expired:
             _answer(claimed, out_dir, expired)
         yield None if expired else claimed
-    except asyncio.CancelledError:
-        with contextlib.suppress(OSError):    # a failed write must not replace the cancellation
+    except BaseException:       # every abnormal exit leaves the caller waiting for an answer
+        with contextlib.suppress(OSError):    # a failed write must not replace the exit
             _answer(claimed, out_dir, _INTERRUPTED)
         raise
     finally:
