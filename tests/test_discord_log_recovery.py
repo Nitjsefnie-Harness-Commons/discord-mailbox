@@ -133,6 +133,37 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
         assert "refused" not in path.read_text(encoding="utf-8")
 
 
+def test_a_slot_swapped_during_a_rotation_is_refused_and_never_written(tmp):
+    """A backup or the active file swapped in before a rotation ends refuses every later write."""
+    m = _mod()
+    cls = m._ConnectorLogWriter
+    # The swap lands after the last publish, then after the journal unlink and before the reopen.
+    for seam, victim in (("_publish_in_place", "connector.log.1"), ("_cleanup_journal_temp", "connector.log")):
+        path = Path(tmp) / seam / "connector.log"
+        path.parent.mkdir()
+        writer, real = _filled(m, path), cls.__dict__[seam]
+
+        def swap(*args, call=getattr(writer, seam), seam=seam, real=real, target=path.with_name(victim)):
+            setattr(cls, seam, real)  # one swap per row
+            result = call(*args)
+            target.with_name("foreign").write_bytes(b"FOREIGN\n")
+            os.replace(target.with_name("foreign"), target)
+            return result
+        setattr(cls, seam, staticmethod(swap))
+        try:
+            for attempt in range(2):  # the refusal holds on the write after it
+                try:
+                    writer.write("refused")
+                except m._ConnectorOwnershipError as exc:
+                    assert "replaced" in str(exc), (seam, attempt, exc)
+                else:
+                    raise AssertionError(f"{seam}: write {attempt} accepted a swapped {victim}")
+        finally:
+            setattr(cls, seam, real)
+            writer.close()
+        assert path.with_name(victim).read_bytes() == b"FOREIGN\n", seam  # swapped, and never written
+
+
 def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(tmp):
     """An I/O fault after a rotated slot was published does not break every later write."""
     m = _mod()

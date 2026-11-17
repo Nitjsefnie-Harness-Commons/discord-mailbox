@@ -3,11 +3,28 @@
 # pylint: disable=no-member,attribute-defined-outside-init
 import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 
 class _RotationJournal:
     """Rotation methods of the connector log writer."""
+
+    def _adopt_rotated_identities(self: Any, expected: dict) -> None:
+        """Hold each slot to the identity this rotation published into it.
+
+        ``expected`` maps a rotated slot to that identity.  A name that
+        resolves to no rotated slot keeps the identity held before.  A slot
+        holding another file then refuses here and on every later write, as
+        revalidation compares against these identities.
+        """
+        owner = self._owner
+        owner._stable_identities = {
+            path: expected.get(Path(os.path.realpath(path.parent)) / path.name,
+                               owner._stable_identities.get(path))
+            for path in owner._path_candidates()}
+        self._published_since_snapshot = False
+        owner.revalidate()
 
     def _recover_rotation(self: Any) -> None:
         """Resume an interrupted ordinary rotation from its durable journal."""
@@ -373,7 +390,11 @@ class _RotationJournal:
                 self._manifest_identity(entry.get('temporary_identity')),
                 self._manifest_identity(entry.get('temporary_entry_identity')))
         journal = self._rotation_manifest_path()
-        self._snapshot_published_names()
+        self._adopt_rotated_identities({
+            Path(entry['destination']): (
+                self._owner.identity if entry['in_place'] else
+                self._manifest_identity(entry['temporary_identity']))
+            for entry in manifest['destinations']})
         try:
             journal.unlink()
         except FileNotFoundError:
