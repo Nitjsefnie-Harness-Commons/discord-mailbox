@@ -759,6 +759,7 @@ class _ConnectorLogWriter:
         self._staging_claim_callback = None
         self._staging_cleanup_failed = False
         self._fh = None
+        self._active_bytes = 0
         self._closed = False
         self._use_anonymous_staging = True
         import threading

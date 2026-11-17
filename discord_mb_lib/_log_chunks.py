@@ -1,4 +1,4 @@
-"""Bounded, valid-UTF-8 chunks of historical connector log bytes."""
+"""Bounded UTF-8 chunks of historical connector log bytes."""
 import codecs
 
 
@@ -7,10 +7,7 @@ def bounded_byte_chunks(raw, limit):
     limit = int(limit)
     if limit < 1:
         raise ValueError('chunk limit must be positive')
-    # Replacement is deliberate for historical bytes that predate this
-    # writer.  New records never reach this helper.  If the configured cap
-    # cannot hold U+FFFD (or any other one code point), fail cleanly rather
-    # than emitting an invalid UTF-8 fragment.
+    # Only history older than this writer gets here.
     text = bytes(raw).decode('utf-8', errors='replace')
     current = bytearray()
     for char in text:
