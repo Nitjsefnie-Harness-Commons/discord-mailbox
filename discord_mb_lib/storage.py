@@ -4121,6 +4121,8 @@ class _ConnectorLogWriter:
             destination: self._journal_file_state(destination)
             for destination, _data, _present, _in_place in destinations
         }
+        # Revalidate while the handle is held: a refusal must not look like a failed rotation.
+        stable_paths = self._owner.manifest_stable_paths()
         fh, self._fh = self._fh, None
         if fh is not None:
             fh.close()
@@ -4139,7 +4141,7 @@ class _ConnectorLogWriter:
             'planned_temporaries': [str(path) for path in staged_paths],
             'created_temporaries': [],
             'path_states': list(path_state_map.values()),
-            'stable_paths': self._owner.manifest_stable_paths(),
+            'stable_paths': stable_paths,
             'destinations': [
                 {
                     'destination': str(destination),
