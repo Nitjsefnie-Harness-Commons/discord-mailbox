@@ -2871,23 +2871,37 @@ def test_connector_log_rotation_renames_backups_and_writes_the_active_copy_once(
     assert written.get(before[0], 0) == 0, written  # the active inode is truncated, never rewritten
 
 
-def test_connector_log_rotation_refuses_a_backup_sharing_the_active_inode(tmp):
-    """A backup hard- or symlinked to the active is refused before any journal: a rename would carry it down."""
+def test_connector_log_rotation_drops_a_linked_backup_name_and_never_writes_its_inode(tmp):
+    """A hard link to the active, or a symlink, at a backup slot loses only its name; a slot with no inode number refuses."""
     m = _mod()
-    for link in (os.link, os.symlink):
+    # The stage replaces the hard link's name at .1; the symlink at .2, with .1 absent, is unlinked by name.
+    for link, name in ((os.link, "shared.log.1"), (os.symlink, "shared.log.2")):
         path = Path(tmp) / link.__name__ / "shared.log"
         path.parent.mkdir()
+        external, backup = path.with_name("external"), path.with_name("shared.log.1")
         path.write_bytes(b"A" * 31)
+        external.write_bytes(b"EXTERNAL\n")
         try:
-            link(path, path.with_name("shared.log.1"))
+            link(path if link is os.link else external, path.with_name(name))
         except (OSError, NotImplementedError):
-            _util.skip("this platform cannot create a symlink")
-        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-        before = {slot.name: slot.read_bytes() for slot in path.parent.glob("shared.log*")}
-        with contextlib.closing(writer), _refuses(f"a {link.__name__} of the active was rotated"):
+            assert link is os.symlink, "this platform cannot create a hard link"
+            continue  # no symlinks here; the hard-link row still ran
+        with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)) as writer:
             writer.write("x")
-        assert not list(writer._owner.lock_root.glob("*.rotate.json")), link
-        assert {slot.name: slot.read_bytes() for slot in path.parent.glob("shared.log*")} == before, link
+            writer.write("y")
+        assert (path.read_bytes(), backup.read_bytes(), external.read_bytes()) == (b"x\ny\n", b"A" * 31, b"EXTERNAL\n"), link
+        assert not backup.is_symlink() and not path.with_name("shared.log.2").exists() and not path.samefile(backup), link
+    path, real_lstat = Path(tmp) / "no-inode.log", os.lstat
+    path.write_bytes(b"A" * 31)
+    path.with_name("no-inode.log.1").write_bytes(b"B\n")
+
+    def no_inode(name, *args, **kwargs):  # a filesystem that reports no inode number for .1
+        info = real_lstat(name, *args, **kwargs)
+        return os.stat_result((info.st_mode, 0, *tuple(info)[2:])) if str(name).endswith(".log.1") else info
+    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
+    with contextlib.closing(writer), _patched(m.os, lstat=no_inode), _refuses("a backup with no inode number was rotated"):
+        writer.write("x")
+    assert not list(writer._owner.lock_root.glob("*.rotate.json")) and path.read_bytes() == b"A" * 31
 
 
 def test_connector_log_preserves_user_notes_and_temps_with_embedded_tokens(tmp):

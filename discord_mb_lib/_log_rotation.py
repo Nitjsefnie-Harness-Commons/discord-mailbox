@@ -172,8 +172,9 @@ class _RotationJournal:
         """Shift one backup by rename or unlink, or publish the stage, rechecking it first."""
         item = manifest['destinations'][position]
         destination, method = Path(item['destination']), item['method']
-        # Every slot after the oldest was vacated by the shift into the slot before it.
-        expected = self._journal_pair(item, 'before') if position == 0 else (None, None)
+        # A slot the shift before it renamed away is empty; any other still holds what it held.
+        moved = position > 0 and manifest['destinations'][position - 1]['method'] == 'rename'
+        expected = (None, None) if moved else self._journal_pair(item, 'before')
         if method == 'stage':
             self._mark_destination_publishing(manifest, position, 'rotate')
             try:
@@ -192,7 +193,7 @@ class _RotationJournal:
             os.replace(item['source'], destination)
         else:
             self._revalidate_destination(destination, *expected)
-            if (not self._unlink_if_identity(destination, *expected) and
+            if (not self._remove_slot(destination, expected) and
                     os.path.lexists(str(destination))):
                 raise RuntimeError(
                     f'connector log sparse destination was rebound: {destination}')
@@ -218,16 +219,18 @@ class _RotationJournal:
         backups = [self._backup_path(index) for index in range(self._backup_count, 0, -1)]
         states = {slot: self._journal_file_state(slot, hash_content=False)
                   for slot in (*backups, self._path)}
+        dropped = set()
         for slot in backups:
             try:
                 info = os.lstat(slot)
             except FileNotFoundError:
                 continue
-            # A rename carries the inode down the window, so only a separate regular file moves.
-            if (not stat.S_ISREG(info.st_mode) or not info.st_ino or
+            if not info.st_ino or stat.S_ISDIR(info.st_mode):
+                raise RuntimeError(f'connector log backup cannot be journaled: {slot}')
+            # A rename would carry a link or special file down the window: drop its name instead.
+            if (not stat.S_ISREG(info.st_mode) or
                     (str(info.st_dev), str(info.st_ino)) == owner.identity):
-                raise RuntimeError(
-                    f'connector log backup is not a separate regular file: {slot}')
+                dropped.add(slot)
         # Revalidate while the handle is held: a refusal must not look like a failed rotation.
         stable_paths = owner.manifest_stable_paths()
         fh, self._fh = self._fh, None
@@ -246,7 +249,7 @@ class _RotationJournal:
             entry(slot, 'rename', source=str(source),
                   source_identity=states[source]['identity'],
                   source_entry_identity=states[source]['entry_identity'])
-            if states[source]['present'] else entry(slot, 'unlink')
+            if states[source]['present'] and source not in dropped else entry(slot, 'unlink')
             for slot, source in zip(backups, backups[1:])]
         planned = self._owned_temp_path('rotate', len(destinations)) if backups else None
         if planned is not None:

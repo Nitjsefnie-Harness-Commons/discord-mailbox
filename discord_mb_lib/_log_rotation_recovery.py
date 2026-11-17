@@ -2,6 +2,8 @@
 # The writer in storage.py supplies every attribute these methods use.
 # pylint: disable=no-member,attribute-defined-outside-init
 import os
+import stat
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,31 @@ class _RotationRecovery:
 
     def _slot_identity(self: Any, path: Path) -> tuple:
         return (self._owner._identity_for(path), self._owner._entry_identity(path))
+
+    def _remove_slot(self: Any, path: Path, pair: tuple) -> bool:
+        """Remove ``path`` while it holds ``pair``; True once removed.
+
+        A regular file goes through ``_unlink_if_identity``.  A symlink or
+        special file is never opened: its name moves to a quarantine name,
+        which is unlinked only while it is still the recorded entry, so the
+        inode it names is never written.
+        """
+        try:
+            regular = stat.S_ISREG(os.lstat(path).st_mode)
+        except FileNotFoundError:
+            return False
+        if regular:
+            return self._unlink_if_identity(path, *pair)
+        if pair[1] is None or self._owner._entry_identity(path) != pair[1]:
+            return False
+        quarantine = path.with_name(f'.{path.name}.drop-{uuid.uuid4().hex}.tmp')
+        os.rename(path, quarantine)
+        if self._owner._entry_identity(quarantine) == pair[1]:
+            os.unlink(quarantine)
+            return True
+        if not os.path.lexists(path):
+            os.rename(quarantine, path)
+        return False
 
     def _journal_pair(self: Any, item: dict, field: str) -> tuple:
         """The inode and entry identities a journal entry records under ``field``."""
@@ -212,7 +239,7 @@ class _RotationRecovery:
                 self._revalidate_destination(destination, *observed)
                 os.replace(entry['source'], destination)
             elif outcome == 'unlink':
-                if (not self._unlink_if_identity(destination, *entry['before']) and
+                if (not self._remove_slot(destination, entry['before']) and
                         os.path.lexists(destination)):
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
