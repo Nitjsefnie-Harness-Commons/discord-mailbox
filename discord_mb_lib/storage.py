@@ -10,6 +10,7 @@ from .core import (_DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV,
                    _linklike)
 from . import _log_chunks
 from ._log_rotation import _RotationJournal
+from ._log_rotation_recovery import _RotationRecovery
 
 
 def _posix_mode_exposed(mode):
@@ -704,7 +705,7 @@ class _ConnectorOwnership:
         self.close()
 
 
-class _ConnectorLogWriter(_RotationJournal):
+class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
     """Line-buffered UTF-8 writer with a strict byte-sized rotation window.
 
     A logical line is encoded first, then written with one trailing newline.
@@ -4500,6 +4501,7 @@ __all__ = [
     '_OwnershipAccessError',
     '_OwnershipContendedError',
     '_RotationJournal',
+    '_RotationRecovery',
     '_EVENT_SEGMENT_RE',
     '_EventStreamReader',
     '_EventStreamWriter',
