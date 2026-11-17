@@ -3207,7 +3207,6 @@ class _ConnectorLogWriter:
         self._published_since_snapshot = True
 
     def _snapshot_published_names(self):
-        """Accept the names this writer published while the rotation journal vouching for them remains."""
         self._owner.refresh_stable_identities()
         self._published_since_snapshot = False
 
