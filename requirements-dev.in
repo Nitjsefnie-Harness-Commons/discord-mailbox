@@ -20,7 +20,7 @@
 # runs each tests/test_*.py file, whose plain test_* functions tests/_util.py's
 # runner calls, with no pytest.
 pycodestyle==2.15.0
-pylint==4.1.3
+pylint==4.1.4
 pyright==1.1.414
 coverage==7.17.3
 diff-cover==11.0.3
