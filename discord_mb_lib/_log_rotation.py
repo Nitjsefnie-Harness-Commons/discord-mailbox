@@ -126,11 +126,11 @@ class _RotationJournal:
         self._published_since_snapshot = False
         owner.revalidate()
 
-    def _mark_generation_publishing(self: Any, manifest: dict) -> None:
-        """Persist ``prepared`` and the contract of every slot but the stage in one append."""
+    def _mark_generation_publishing(self: Any, manifest: dict, *, include_stage: bool = False) -> None:
+        """Persist ``prepared`` and each slot's contract, the stage's if ``include_stage``, in one append."""
         manifest['state'] = 'prepared'
         for item in manifest['destinations']:
-            if item['method'] != 'stage':
+            if include_stage or item['method'] != 'stage':
                 item.update(publish_state='publishing',
                             publish_identity=item['before_identity'],
                             publish_entry_identity=item['before_entry_identity'])
@@ -177,7 +177,8 @@ class _RotationJournal:
         moved = position > 0 and manifest['destinations'][position - 1]['method'] == 'rename'
         expected = (None, None) if moved else self._journal_pair(item, 'before')
         if method == 'stage':
-            self._mark_destination_publishing(manifest, position, 'rotate')
+            if 'publish_state' not in item:
+                self._mark_destination_publishing(manifest, position, 'rotate')
             try:
                 self._claim_staged_for_replace(
                     staged, expected_destination=destination,
