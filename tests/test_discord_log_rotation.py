@@ -4430,38 +4430,40 @@ def replace_then_crash(source, destination, **kwargs):
     if hit:
         os._exit(178)
 os.replace = replace_then_crash
-mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2, lock_root=sys.argv[3]).write("x")
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=int(sys.argv[6]), lock_root=sys.argv[3]).write("x")
 '''
     history = b"".join(f"{i:02d}\n".encode() for i in range(12))
-    rotate, T, D, gone = ("rotate", 32, {"": b"A" * 31, ".1": b"B" * 10}, rotate_child, 178), "temporary", "destination", "has no staged replacement"
+    rotate, T, D, gone = ("rotate", 2, {"": b"A" * 31, ".1": b"B" * 10}, rotate_child, 178), "temporary", "destination", "has no staged replacement"
     # Damage is (journal slot, its temp or destination, change; None deletes); rotation slots are .2, .1, active.
-    rows = (("migrate", 16, {"": history}, _crash_after_first_replace_script("migrate"), 174, "", "", ((1, T, None),), gone),
+    rows = (("migrate", 2, {"": history}, _crash_after_first_replace_script("migrate"), 174, "", "", ((1, T, None),), gone),
             (*rotate, ".2", "after", ((1, T, None), (2, T, None), (1, D, None)), gone),  # .1 unmarked, then deleted
             (*rotate, ".1", "before", ((1, T, None),), gone),  # .1 marked and never published
             (*rotate, ".1", "after", ((2, T, None),), gone),  # the active's empty temp
             # .2 still awaits its publish when a later slot refuses
             (*rotate, ".2", "before", ((1, T, lambda p: p.write_bytes(p.read_bytes()[:-4] + b"XXXX")),), "temp digest mismatch"),
             (*rotate, ".2", "before", ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"),
-            (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"))
-    for i, (kind, max_bytes, seed, child, code, slot, when, damage, refusal) in enumerate(rows):
-        path = Path(tmp) / f"{kind}-{i}.log"
+            (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"),
+            # .2 is an unlink after .3's stage: its refusal must come before .3 is published
+            ("rotate", 3, {"": b"A" * 31, ".2": b"C" * 10}, rotate_child, 178, ".3", "before",
+             ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"))
+    for i, (kind, backups, seed, child, code, slot, when, damage, refusal) in enumerate(rows):
+        path, max_bytes = Path(tmp) / f"{kind}-{i}.log", 16 if kind == "migrate" else 32
         for suffix, data in seed.items():
             path.with_name(path.name + suffix).write_bytes(data)
-        writer = m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=2)
+        writer = m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=backups)
         lock_root = writer._owner.lock_root
         writer.close()
         path.write_bytes(seed[""])
-        _run_child(child, path, lock_root, slot, when, code=code)
+        _run_child(child, path, lock_root, slot, when, backups, code=code)
         journal = lock_root / f"{writer._identity_digest}.{kind}.json"
         destinations = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])["destinations"]
         for index, key, change in damage:
             (change or Path.unlink)(Path(destinations[index][key]))
-        slots = {p.name: p.read_bytes() for p in Path(tmp).glob(path.name + "*")}
+        slots = {p.name: p.read_bytes() for p in (journal, *Path(tmp).glob(path.name + "*"))}
         with _refuses(f"row {i}: {kind} recovery accepted a generation it cannot finish") as caught:
-            m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=2, lock_root=lock_root)
+            m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=backups, lock_root=lock_root)
         assert refusal in str(caught[0]), (i, caught)
-        assert journal.exists(), i
-        assert {p.name: p.read_bytes() for p in Path(tmp).glob(path.name + "*")} == slots, i
+        assert {p.name: p.read_bytes() for p in (journal, *Path(tmp).glob(path.name + "*"))} == slots, i
         assert kind == "migrate" or path.read_bytes() in (b"A" * 31, b"FOREIGN\n"), i
 
 
