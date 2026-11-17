@@ -15,12 +15,13 @@ permissions:
   actions: read
 
 concurrency:
-  # Keyed on the head repository and branch, so another fork's branch of the
-  # same name cannot cancel this run.
+  # Keyed on the head repository, branch and event, so neither another fork's
+  # branch of the same name nor a push run of this branch can cancel this run.
   group: >-
     coverage-comment-${{
     github.event.workflow_run.head_repository.full_name }}-${{
-    github.event.workflow_run.head_branch }}
+    github.event.workflow_run.head_branch }}-${{
+    github.event.workflow_run.event }}
   cancel-in-progress: true
 
 jobs:
