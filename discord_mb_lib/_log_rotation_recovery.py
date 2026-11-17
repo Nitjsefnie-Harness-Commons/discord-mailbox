@@ -68,7 +68,8 @@ class _RotationRecovery:
                             'expected_nonce': manifest.get('transaction_nonce')}}
             if item.get('in_place'):
                 entry.update(method='rewrite', cut=int(item['before_size']),
-                             prefix_sha256=str(item['before_sha256']), tail=b'')
+                             prefix_sha256=str(item['before_sha256']), tail=b'',
+                             size=0, sha256=self._sha256_bytes(b''))
             elif item['present']:
                 entry.update(method='stage', size=int(item['size']),
                              sha256=str(item['sha256']))
@@ -99,13 +100,13 @@ class _RotationRecovery:
                     outcome = 'complete'
                 elif staged_temp and current in (entry['before'], _ABSENT):
                     outcome = 'publish'
-                elif gone and not entry['marked']:
+                elif gone and entry['marked'] and current == _ABSENT:
+                    # Published, then deleted: a retained backup's absence.
+                    outcome, expected = 'absent', None
+                elif gone and (not entry['marked'] or current == entry['before']):
                     raise RuntimeError(
                         f'connector log rotation is incomplete: '
                         f'{destination.name} has no staged replacement')
-                elif gone and current == _ABSENT:
-                    # Published, then deleted: a retained backup's absence.
-                    outcome, expected = 'absent', None
                 else:
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
@@ -141,6 +142,11 @@ class _RotationRecovery:
                 else:
                     raise RuntimeError(
                         f'connector log journal destination content changed: {destination}')
+            if outcome in ('publish', 'rewrite'):
+                # Authenticate the staged bytes now, so a refusal precedes every write.
+                self._read_staged_payload(
+                    temporary, expected_size=entry['size'],
+                    expected_digest=entry['sha256'], **entry['context'])
             decided[destination.name] = (entry, outcome)
             plan.append((entry, outcome, expected))
         return plan
@@ -169,9 +175,8 @@ class _RotationRecovery:
                         f'connector log journal destination was rebound: {destination}')
             elif outcome == 'rewrite':
                 self._validate_and_remember_staged(
-                    temporary, expected_size=len(entry['tail']),
-                    expected_digest=self._sha256_bytes(entry['tail']),
-                    **entry['context'])
+                    temporary, expected_size=entry['size'],
+                    expected_digest=entry['sha256'], **entry['context'])
                 try:
                     self._publish_in_place(destination, temporary, *entry['before'])
                 finally:
