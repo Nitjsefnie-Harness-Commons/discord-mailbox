@@ -1,7 +1,6 @@
-"""The connector's gateway state, readable from outside its process, and discord.py's
-records in connector.log. starting from before login to the first on_ready, on_resumed or
-on_disconnect; connected at each on_ready and on_resumed; disconnected at each on_disconnect;
-reconnecting from a later session's on_connect to its on_ready."""
+"""Gateway state read from outside the process; discord.py's records go to connector.log.
+starting until the first on_ready, on_resumed or on_disconnect; reconnecting from an
+on_connect after an on_ready or on_disconnect until on_ready."""
 import json
 import logging
 import os
