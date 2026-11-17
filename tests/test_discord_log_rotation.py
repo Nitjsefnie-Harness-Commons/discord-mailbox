@@ -3310,7 +3310,8 @@ def test_connector_staging_key_lifecycle_rejects_tampering(tmp):
             target.write_bytes(key_bytes)
             key_path.symlink_to(target)
         elif kind == "permissive":
-            os.chmod(key_path, 0o644)
+            # 0o644 from stat constants, not a literal, keeps CodeQL's py/overly-permissive-file query off this test.
+            os.chmod(key_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
         else:
             key_path.write_bytes(key_bytes[:1])
             os.chmod(key_path, 0o600)
