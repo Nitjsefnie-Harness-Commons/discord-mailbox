@@ -7,5 +7,9 @@
     "valgrind": "3.22.0",
     "runner": "ubuntu-24.04"
   },
-  "workloads": {}
+  "workloads": {
+    "log-rotation": 1008922595,
+    "outbox-dispatch": 180852566,
+    "usage-parse": 91527781
+  }
 }
