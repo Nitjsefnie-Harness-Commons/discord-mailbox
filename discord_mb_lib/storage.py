@@ -762,7 +762,8 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
         self._staging_claim_callback = None
         self._staging_cleanup_failed = False
         self._rotation_worker = self._rotation_context = self._rotation_staged = None
-        self._rotation_stop = False
+        self._rotation_stop = self._rotation_failed = False
+        self._rotation_error = self._rotation_refusal = None
         self._fh = None
         self._active_bytes = 0
         self._closed = False
@@ -782,6 +783,9 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                 # process death if close itself is broken.
                 pass
             raise
+        register_at_fork = getattr(os, 'register_at_fork', None)
+        if register_at_fork is not None:
+            register_at_fork(after_in_child=self._after_fork_in_child)
 
     def _backup_path(self, index):
         return self._path.with_name(f'{self._path.name}.{index}')
@@ -3966,6 +3970,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             raise AssertionError('connector log record exceeded byte ceiling')
         if self._rotation_before_append(len(data)):
             self._rotate()
+            self._rotation_failed = False
         handle = self._fh
         if handle is None:
             raise OSError('connector log is not open')
@@ -4014,6 +4019,14 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
         with self._thread_lock:
             if self._closed:
                 raise OSError('connector log is not open')
+            if self._rotation_refusal is not None:  # no recovery or rebuild follows an ownership error
+                self._owner.revalidate()
+                raise _ConnectorOwnershipError(
+                    f'connector log refuses writes after an ownership error: {self._path}') from self._rotation_refusal
+            error, self._rotation_error = self._rotation_error, None
+            if error is not None:  # a rotation worker's failure, raised once with nothing appended
+                self._rotation_refusal = error if isinstance(error, _ConnectorOwnershipError) else None
+                raise error
             if self._fh is None:
                 # A failed rotation left no handle. Accept the names it published only while
                 # their journal remains to validate them; otherwise any change still refuses.

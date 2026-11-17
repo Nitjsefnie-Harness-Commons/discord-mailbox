@@ -11,23 +11,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _patched, _refuses, _restart  # noqa: E402
-
-LIMIT = 32
-
-
-def _filled(m, path):
-    """A writer whose startup migration filled the active log and both retained backups."""
-    # write_bytes, not write_text: the latter translates \n to \r\n on
-    # Windows, leaving a 9-byte active file the next write does not rotate.
-    path.write_bytes("".join(f"line {i:02d}\n" for i in range(12)).encode("utf-8"))
-    writer = m._ConnectorLogWriter(path, max_bytes=LIMIT, backup_count=2)
-    assert [p.name for p in _window(path)] == [path.name, f"{path.name}.1", f"{path.name}.2"]
-    return writer
-
-
-def _window(path):
-    return sorted(path.parent.glob(f"{path.name}*"))
+from test_discord_log_rotation import LIMIT, _filled, _fixture_lock_root, _hidden, _mod, _patched, _refuses, _restart, _window  # noqa: E402
 
 
 def test_a_deleted_backup_is_absent_and_later_writes_succeed(tmp):
