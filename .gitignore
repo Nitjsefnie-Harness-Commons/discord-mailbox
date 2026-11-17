@@ -86,6 +86,7 @@
 !/discord_mb_lib/_dm.py
 !/discord_mb_lib/_ext_trust.py
 !/discord_mb_lib/_gateway_state.py
+!/discord_mb_lib/_graphemes.py
 !/discord_mb_lib/_grep.py
 !/discord_mb_lib/_linked.py
 !/discord_mb_lib/_log_chunks.py

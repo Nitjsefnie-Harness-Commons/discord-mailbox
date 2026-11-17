@@ -36,7 +36,7 @@ import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from . import _control_files, _prog, _retention, _usage_windows
+from . import _control_files, _graphemes, _prog, _retention, _usage_windows
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1159,14 +1159,13 @@ def chunk_body(body, limit):
     rest = body
     while len(rest) > limit:
         window = rest[:limit + 1]
-        cut, sep_len = -1, 0
         for sep in ('\n\n', '\n', ' '):
-            i = window.rfind(sep)
-            if i > limit // 4:
-                cut, sep_len = i, len(sep)
+            cut = window.rfind(sep)
+            if cut > limit // 4:
+                sep_len = len(sep)
                 break
-        if cut < 0:
-            cut, sep_len = limit, 0
+        else:
+            cut, sep_len = _graphemes.hard_cut(body, len(body) - len(rest), limit), 0
         parts.append(rest[:cut].rstrip())
         rest = rest[cut + sep_len:]
     if rest.strip():
@@ -2724,6 +2723,7 @@ __all__ = [
     '_control_files',
     '_ensure_state_root',
     '_flat_component',
+    '_graphemes',
     '_linklike',
     '_meta_request',
     '_prog',
