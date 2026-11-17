@@ -1,6 +1,7 @@
 """The connector's gateway state, readable from outside its process, and discord.py's
-records in connector.log. A session is starting until its first READY or disconnect, and a
-later session's READY reads as reconnecting."""
+records in connector.log. starting from before login to the first on_ready, on_resumed or
+on_disconnect; connected at each on_ready and on_resumed; disconnected at each on_disconnect;
+reconnecting from a later session's on_connect to its on_ready."""
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ class _ConnectorLogHandler(logging.Handler):
 
 
 def run(client: Any, token: str, state_dir: Path, log: Callable[[str], None]) -> None:
-    ready: list[bool] = []
+    had_session: list[bool] = []
 
     def record(state: str) -> None:
         log(f'gateway: {state}')
@@ -41,9 +42,9 @@ def run(client: Any, token: str, state_dir: Path, log: Callable[[str], None]) ->
         bound = getattr(client, f'on_{event}', None)
 
         async def handler(*args: Any) -> None:
-            if event == 'ready':
-                ready.append(True)
-            if event != 'connect' or ready:
+            if event in ('ready', 'disconnect'):
+                had_session.append(True)
+            if event != 'connect' or had_session:
                 record(_STATES[event])
             if bound is not None:
                 await bound(*args)
