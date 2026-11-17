@@ -1118,12 +1118,12 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
     m = _mod()
     state = Path(tmp) / "state"
     state.mkdir()
-    pidfile = state / "connector.pid"
-    path = Path(tmp) / "cleanup-startup.log"
+    pidfile, path, writers = state / "connector.pid", Path(tmp) / "cleanup-startup.log", []
 
     class FailingWriter:
         def __init__(self, *args, **kwargs):
             self.inner = m._real_writer_for_test(*args, **kwargs)
+            writers.append(self.inner)
 
         def write(self, line):
             return self.inner.write(line)
@@ -1136,10 +1136,7 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
         def __init__(self, *args, **kwargs):
             raise ValueError("primary startup failure")
 
-    fake_discord = types.SimpleNamespace(
-        Intents=types.SimpleNamespace(default=types.SimpleNamespace),
-        Client=ExplodingClient,
-    )
+    fake_discord = types.SimpleNamespace(Intents=types.SimpleNamespace(default=types.SimpleNamespace), Client=ExplodingClient)
     with _patched(m, _real_writer_for_test=m._ConnectorLogWriter, state_dir=lambda identity: state,
                   sweep_status_plugin=lambda identity: None, _ConnectorLogWriter=FailingWriter), \
             _patched(sys.modules, discord=fake_discord):
@@ -1147,6 +1144,7 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
             m.connector_main("identity", claude_pid=os.getpid(), token="token",
                              log_path=path, flavor="claude")
     assert "primary startup failure" in str(failure[0])
+    writers[0].close()    # the injected close released only the owner; a traceback cycle holds the file
     m._ConnectorOwnership(pidfile).close()
 
 
