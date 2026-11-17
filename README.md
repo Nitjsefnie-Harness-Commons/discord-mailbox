@@ -560,11 +560,13 @@ measures above budget × (1 + tolerance), when a budgeted workload is
 missing or fails to measure, and when a measured workload has no budget.
 Each push to `main` lowers a budget whose workload got cheaper by more
 than the tolerance and commits it through `ratchet-push.yml`. In a pull
-request, every commit that changes the budget file changes nothing else,
-and every raise of the head budget over the base is named in a
+request, every commit that changes the budget file changes nothing else (a
+merge commit changes only the files that differ from every parent), and
+every raise of the head budget over the base is named in a
 `Perf-Budget-Raise:` trailer of one of those commits: each raised, added
 or dropped workload by its name, a raised tolerance as `tolerance` and a
-changed Python version as `python`.
+changed Python version as `python`. A pull request that seeds the budget
+file, against a base without one, is exempt from both rules.
 
 **Releasing = bumping `__version__`.** `tag` creates the tag, `release`
 publishes from it. Nothing bumps the version automatically: deciding

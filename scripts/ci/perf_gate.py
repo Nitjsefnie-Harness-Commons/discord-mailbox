@@ -3,12 +3,13 @@
 measure: write {python, environment, workloads, failed}, where a workload's
 count is Ir(--repeat K) - Ir(--repeat 0), its own start-up subtracted.
 check: exit 1 when a workload is over budget * (1 + tolerance), missing,
-failed or unbudgeted. Against a base budget it also exits 1 when a commit
-in the range changes the budget file beside another file, or when a raise
-of the head over the base (a workload raised, added or dropped, the
-tolerance raised, the python changed) is not named by a Perf-Budget-Raise
-trailer of a budget-only commit in the range. It prints the table and the
-budget document re-recorded from the counts.
+failed or unbudgeted. Against a base budget (a seed, whose base has none,
+is exempt) it also exits 1 when a commit in the range changes the budget
+file beside another file (a merge changes only the files that differ from
+every parent), or when a raise of the head over the base (a workload
+raised, added or dropped, the tolerance raised, the python changed) is not
+named by a Perf-Budget-Raise trailer of a budget-only commit in the range.
+It prints the table and the budget document re-recorded from the counts.
 tighten: write the budget lowered to every count below budget *
 (1 - tolerance) and exit 0, or write nothing and exit 3.
 Exit 2 on a malformed document or argument.
