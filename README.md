@@ -559,9 +559,10 @@ which pytest reads as fixture requests). Budgets live in
 measures above budget × (1 + tolerance), when a budgeted workload is
 missing or fails to measure, and when a measured workload has no budget.
 Each push to `main` lowers a budget whose workload got cheaper by more
-than the tolerance and commits it through `ratchet-push.yml`. A raise is
-its own commit touching only the budget file, with a `Perf-Budget-Raise:
-<workload>, ...` trailer (`*` for the tolerance or the Python version).
+than the tolerance and commits it through `ratchet-push.yml`. Each raised,
+added or dropped workload budget, and any raised tolerance or changed
+Python version, must come from a commit that touches only the budget file
+and whose `Perf-Budget-Raise:` trailer names each one (`*` names them all).
 
 **Releasing = bumping `__version__`.** `tag` creates the tag, `release`
 publishes from it. Nothing bumps the version automatically: deciding
