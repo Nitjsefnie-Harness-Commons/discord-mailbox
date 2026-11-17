@@ -36,7 +36,7 @@ def test_each_gateway_event_records_its_state_before_the_handler_it_chains(tmp):
 
     async def gateway():
         seen.append(_recorded(tmp)["state"])
-        for event in ("connect", "ready", "disconnect", "connect", "resumed"):
+        for event in ("connect", "disconnect", "connect", "ready", "disconnect", "connect", "resumed"):
             await getattr(client, f"on_{event}")()
             seen.append(_recorded(tmp)["state"])
         logging.getLogger("discord.gateway").info("an info record")
@@ -50,7 +50,7 @@ def test_each_gateway_event_records_its_state_before_the_handler_it_chains(tmp):
     finally:
         discord_log.setLevel(level)
     assert runs == [("token", None)], runs
-    assert seen == ["starting", "starting", "connected", "connected", "disconnected", "reconnecting", "connected"], seen
+    assert seen == ["starting", "starting", "disconnected", "reconnecting", "connected", "connected", "disconnected", "reconnecting", "connected"], seen
     assert _recorded(tmp)["pid"] == os.getpid()
     if _util.POSIX_MODES:
         assert (Path(tmp) / _gateway_state.STATE_FILE).stat().st_mode & 0o777 == 0o600
