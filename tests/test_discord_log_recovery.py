@@ -16,10 +16,9 @@ LIMIT = 32
 
 
 def _filled(m, path):
-    """A writer whose active log and both retained backups hold records."""
+    """A writer whose startup migration filled the active log and both retained backups."""
+    path.write_text("".join(f"line {i:02d}\n" for i in range(12)), encoding="utf-8")
     writer = m._ConnectorLogWriter(path, max_bytes=LIMIT, backup_count=2)
-    for i in range(12):
-        writer.write(f"line {i:02d}")
     assert [p.name for p in _window(path)] == [path.name, f"{path.name}.1", f"{path.name}.2"]
     return writer
 
@@ -99,7 +98,12 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
             raise OSError("injected journal fault")
         m._ConnectorLogWriter._write_migration_manifest = link_then_fail
 
-    for replace in (foreign_file, hardlink_mid_rotation, hardlink_then_journal_fault, dangling_link):
+    def rotation_then_hardlink_journal_fault(backup):  # a completed rotation clears its own mark
+        writer.write("x" * 25)
+        hardlink_then_journal_fault(backup)
+
+    for replace in (foreign_file, hardlink_mid_rotation, hardlink_then_journal_fault,
+                    rotation_then_hardlink_journal_fault, dangling_link):
         path = Path(tmp) / replace.__name__ / "connector.log"
         path.parent.mkdir()
         writer = _filled(m, path)
