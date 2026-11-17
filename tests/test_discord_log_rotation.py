@@ -3298,13 +3298,8 @@ def test_connector_staging_key_lifecycle_rejects_tampering(tmp):
         else:
             key_path.write_bytes(key_bytes[:1])
             os.chmod(key_path, 0o600)
-        try:
-            m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                                  lock_root=root)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError(f"tampered {kind} staging key was adopted")
+        with _refuses(f"tampered {kind} staging key was adopted"):
+            m._ConnectorLogWriter(path, max_bytes=32, backup_count=1, lock_root=root)
 
 
 def test_connector_staging_key_rejects_transient_swap_restore_during_open(tmp):
@@ -4202,13 +4197,8 @@ def test_connector_log_first_journal_create_rejects_and_preserves_tampered_recor
         seed.close()
         tampered = b"{\"version\":3,\"state\":\n"
         journal.write_bytes(tampered)
-        try:
-            _mod()._ConnectorLogWriter(
-                path, max_bytes=max_bytes, backup_count=1, lock_root=lock_root)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError(f"tampered {kind} journal was adopted")
+        with _refuses(f"tampered {kind} journal was adopted"):
+            _mod()._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=1, lock_root=lock_root)
         assert journal.read_bytes() == tampered
 
 
