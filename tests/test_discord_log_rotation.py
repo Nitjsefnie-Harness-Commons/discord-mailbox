@@ -2883,7 +2883,8 @@ real = mod._ConnectorLogWriter._mark_generation_publishing
 mod._ConnectorLogWriter._mark_generation_publishing = lambda self, manifest: (real(self, manifest), os._exit(178))
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
 '''
-    for link, name, crashed in ((os.link, "shared.log.1", False), (os.symlink, "shared.log.2", False), (os.symlink, "shared.log.2", True)):
+    for link, name, crashed in ((os.link, "shared.log.1", False), (os.symlink, "shared.log.2", False), (os.symlink, "shared.log.2", True),
+                                (os.symlink, "shared.log.2", "swap")):
         path = Path(tmp) / f"{link.__name__}-{crashed}" / "shared.log"
         path.parent.mkdir()
         external, backup = path.with_name("external"), path.with_name("shared.log.1")
@@ -2896,6 +2897,17 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
             continue  # no symlinks here; the hard-link row still ran
         if crashed:
             _run_child(crash, path, code=178)
+        if crashed == "swap":  # a foreign symlink put at .2 after recovery decided to drop it is kept
+
+            def classify(self, entries, real=m._ConnectorLogWriter._classify_rotation, path=path):
+                plan = real(self, entries)
+                os.symlink(path.with_name("other"), path.with_name("foreign"))
+                os.replace(path.with_name("foreign"), path.with_name("shared.log.2"))
+                return plan
+            with _patched(m._ConnectorLogWriter, _classify_rotation=classify), _refuses("recovery dropped a foreign symlink"):
+                m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
+            assert os.readlink(path.with_name("shared.log.2")) == str(path.with_name("other"))
+            continue
         with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)) as writer:
             writer.write("x")
             writer.write("y")
@@ -2911,7 +2923,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
     with contextlib.closing(writer), _patched(m.os, lstat=no_inode), _refuses("a backup with no inode number was rotated"):
         writer.write("x")
-    assert not list(writer._owner.lock_root.glob("*.rotate.json")) and path.read_bytes() == b"A" * 31
+    assert not writer._rotation_manifest_path().exists() and path.read_bytes() == b"A" * 31
 
 
 def test_connector_log_preserves_user_notes_and_temps_with_embedded_tokens(tmp):
