@@ -154,6 +154,32 @@ def _run_child(child, *args, code=None, **kwargs):
     return run
 
 
+@contextlib.contextmanager
+def _held_in_child(path, backup_count, *lock_root, **kwargs):
+    """Hold a writer on `path` in a child process for the block; afterwards the child must close it cleanly."""
+    child = r'''
+writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=int(sys.argv[3]), lock_root=(sys.argv[4:] or [None])[0])
+writer.write("child-held")
+print("READY", flush=True)
+input()
+writer.close()
+'''
+    proc = subprocess.Popen(_child_argv(child, path, backup_count, *lock_root), stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+    try:
+        assert proc.stdout.readline().strip() == "READY"
+        yield
+    finally:
+        proc.stdin.write("\n")
+        proc.stdin.flush()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    assert proc.returncode == 0, proc.stderr.read()
+
+
 def _restart(path, max_bytes, backup_count, **kwargs):
     """Open and close a writer from a fresh module load: a restart that recovers an interrupted run."""
     _mod()._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=backup_count, **kwargs).close()
@@ -979,32 +1005,8 @@ def test_connector_log_hardlink_aliases_share_ownership_across_processes(tmp):
     target.write_bytes(b"")
     os.link(target, alias)
     assert target.stat().st_ino == alias.stat().st_ino
-    child = r'''
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
-writer.write("child-held")
-print("READY", flush=True)
-input()
-writer.close()
-'''
-    proc = subprocess.Popen(
-        _child_argv(child, target),
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert proc.stdout.readline().strip() == "READY"
-        with _refuses("hard-link aliases acquired independent ownership"):
-            m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)
-    finally:
-        if proc.stdin is not None:
-            proc.stdin.write("\n")
-            proc.stdin.flush()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-    assert proc.returncode == 0, proc.stderr.read() if proc.stderr else ""
+    with _held_in_child(target, 1), _refuses("hard-link aliases acquired independent ownership"):
+        m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)
 
     writer = m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)
     writer.write("after-release")
@@ -2924,85 +2926,16 @@ def test_connector_log_ownership_excludes_a_second_process(tmp):
     """A second process cannot open or rotate a path owned by the first."""
     m = _mod()
     path = Path(tmp) / "owned.log"
-    child = r'''
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_child", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2)
-print("READY", flush=True)
-input()
-writer.close()
-'''
-    proc = subprocess.Popen(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert proc.stdout.readline().strip() == "READY"
-        try:
-            writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-        except RuntimeError:
-            pass
-        else:
-            writer.close()
-            raise AssertionError("a second process acquired the connector log")
-    finally:
-        if proc.stdin is not None:
-            proc.stdin.write("\n")
-            proc.stdin.flush()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-    assert proc.returncode == 0, proc.stderr.read() if proc.stderr else ""
+    with _held_in_child(path, 2), _refuses("a second process acquired the connector log"):
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=2).close()
 
 
 def test_connector_log_ownership_locks_complete_rotation_namespace(tmp):
     """A live active connector excludes another connector on its backup slot."""
     m = _mod()
     path = Path(tmp) / "shared.log"
-    child = r'''
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_namespace_child", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2)
-print("READY", flush=True)
-input()
-writer.close()
-'''
-    proc = subprocess.Popen(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert proc.stdout.readline().strip() == "READY"
-        backup_writer = None
-        try:
-            backup_writer = m._ConnectorLogWriter(
-                path.with_name("shared.log.1"), max_bytes=32, backup_count=2)
-        except RuntimeError:
-            pass
-        else:
-            backup_writer.close()
-            raise AssertionError(
-                "a live connector acquired a pathname in another rotation namespace")
-    finally:
-        if proc.stdin is not None:
-            proc.stdin.write("\n")
-            proc.stdin.flush()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-    assert proc.returncode == 0, proc.stderr.read() if proc.stderr else ""
+    with _held_in_child(path, 2), _refuses("a live connector acquired a pathname in another rotation namespace"):
+        m._ConnectorLogWriter(path.with_name("shared.log.1"), max_bytes=32, backup_count=2).close()
 
 
 def test_connector_startup_exception_releases_ownership_and_pidfile(tmp):
@@ -3071,25 +3004,12 @@ def test_connector_startup_exception_releases_ownership_and_pidfile(tmp):
 def test_connector_log_lock_namespace_is_tmpdir_independent_with_injection(tmp):
     """TMPDIR changes do not split hard-link locks or recovery journals."""
     m = _mod()
-    default_child = r'''
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_namespace", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-print(mod._ConnectorOwnership._IDENTITY_LOCK_ROOT, flush=True)
-'''
     roots = []
     for name in ("tmp-a", "tmp-b"):
-        env = os.environ.copy()
-        env.pop(TEST_LOCK_ROOT_ENV, None)
+        env = {key: value for key, value in os.environ.items() if key != TEST_LOCK_ROOT_ENV}
         env["TMPDIR"] = str(Path(tmp) / name)
         Path(env["TMPDIR"]).mkdir()
-        result = subprocess.run(
-            [sys.executable, "-c", default_child, str(Path(MB))],
-            env=env, capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
+        result = _run_child("print(mod._ConnectorOwnership._IDENTITY_LOCK_ROOT, flush=True)", env=env, text=True, code=0)
         roots.append(Path(result.stdout.strip()))
     assert roots[0] == roots[1]
 
@@ -3098,49 +3018,11 @@ print(mod._ConnectorOwnership._IDENTITY_LOCK_ROOT, flush=True)
     alias = Path(tmp) / "tmpdir-contention-alias.log"
     path.write_bytes(b"")
     os.link(path, alias)
-    child = r'''
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_tmpdir_owner", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
-                                 lock_root=sys.argv[3])
-print("READY", flush=True)
-input()
-writer.close()
-'''
-    env = os.environ.copy()
-    env.pop(TEST_LOCK_ROOT_ENV, None)
+    env = {key: value for key, value in os.environ.items() if key != TEST_LOCK_ROOT_ENV}
     env["TMPDIR"] = str(Path(tmp) / "tmp-a")
-    proc = subprocess.Popen(
-        [sys.executable, "-c", child, str(Path(MB)), str(path), str(lock_root)],
-        env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True,
-    )
-    try:
-        assert proc.stdout.readline().strip() == "READY"
-        old_tmpdir = os.environ.get("TMPDIR")
-        os.environ["TMPDIR"] = str(Path(tmp) / "tmp-b")
-        try:
-            try:
-                m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1,
-                                      lock_root=lock_root)
-            finally:
-                if old_tmpdir is None:
-                    os.environ.pop("TMPDIR", None)
-                else:
-                    os.environ["TMPDIR"] = old_tmpdir
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("TMPDIR split an explicit identity lock root")
-    finally:
-        if proc.stdin is not None:
-            proc.stdin.write("\n")
-            proc.stdin.flush()
-        proc.wait(timeout=5)
-    assert proc.returncode == 0, proc.stderr.read() if proc.stderr else ""
+    with _held_in_child(path, 1, lock_root, env=env), mock.patch.dict(os.environ, TMPDIR=str(Path(tmp) / "tmp-b")):
+        with _refuses("TMPDIR split an explicit identity lock root"):
+            m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1, lock_root=lock_root)
 
     recovery_target = Path(tmp) / "tmpdir-recovery.log"
     recovery_alias = Path(tmp) / "tmpdir-recovery-alias.log"
@@ -3148,12 +3030,6 @@ writer.close()
     recovery_target.write_bytes(original)
     os.link(recovery_target, recovery_alias)
     crash = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_tmpdir_recovery", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def replace_then_crash(*args):
@@ -3162,28 +3038,11 @@ def replace_then_crash(*args):
     if calls[0] == 2:
         os._exit(175)
 os.replace = replace_then_crash
-mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
-                        lock_root=sys.argv[3])
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2, lock_root=sys.argv[3])
 '''
-    recovery_env = os.environ.copy()
-    recovery_env.pop(TEST_LOCK_ROOT_ENV, None)
-    recovery_env["TMPDIR"] = str(Path(tmp) / "tmp-a")
-    crashed = subprocess.run(
-        [sys.executable, "-c", crash, str(Path(MB)), str(recovery_target),
-         str(lock_root)], env=recovery_env, capture_output=True,
-    )
-    assert crashed.returncode == 175, crashed.stderr.decode("utf-8", "replace")
-    old_tmpdir = os.environ.get("TMPDIR")
-    os.environ["TMPDIR"] = str(Path(tmp) / "tmp-b")
-    try:
-        restarted = m._ConnectorLogWriter(
-            recovery_alias, max_bytes=16, backup_count=2, lock_root=lock_root)
-        restarted.close()
-    finally:
-        if old_tmpdir is None:
-            os.environ.pop("TMPDIR", None)
-        else:
-            os.environ["TMPDIR"] = old_tmpdir
+    _run_child(crash, recovery_target, lock_root, env=env, code=175)
+    with mock.patch.dict(os.environ, TMPDIR=str(Path(tmp) / "tmp-b")):
+        m._ConnectorLogWriter(recovery_alias, max_bytes=16, backup_count=2, lock_root=lock_root).close()
     slots = [recovery_target.with_name("tmpdir-recovery.log.2"),
              recovery_target.with_name("tmpdir-recovery.log.1"), recovery_target]
     assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
@@ -4495,6 +4354,9 @@ def replace_then_crash(source, destination, **kwargs):
     if hit:
         os._exit(178)
 os.replace = replace_then_crash
+if sys.argv[4] == "mark":  # crash once the generation is marked, before any slot acts
+    real_mark = mod._ConnectorLogWriter._mark_generation_publishing
+    mod._ConnectorLogWriter._mark_generation_publishing = lambda self, manifest: (real_mark(self, manifest), os._exit(178))
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=int(sys.argv[6]), lock_root=sys.argv[3]).write("x")
 '''
     history = b"".join(f"{i:02d}\n".encode() for i in range(12))
@@ -4511,7 +4373,10 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=int(sys.argv[6])
             (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"),
             # .3 renames .2 and .2 is an unlink: a rebound .2 refuses before .3 is renamed
             ("rotate", 3, {"": b"A" * 31, ".2": b"C" * 10}, rotate_child, 178, ".3", "before",
-             ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"))
+             ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"),
+            # a foreign .2 behind a pending unlink of .3 refuses before .3 is unlinked
+            ("rotate", 3, {"": b"A" * 31, ".1": b"B" * 10, ".3": b"C" * 10}, rotate_child, 178, "mark", "",
+             ((1, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination was rebound"))
     for i, (kind, backups, seed, child, code, slot, when, damage, refusal) in enumerate(rows):
         path, max_bytes = Path(tmp) / f"{kind}-{i}.log", 16 if kind == "migrate" else 32
         for suffix, data in seed.items():
