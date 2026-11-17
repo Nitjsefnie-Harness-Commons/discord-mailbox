@@ -1944,11 +1944,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
     async def perform_send(data, request):
         '''Shared send core for the outbox watcher and the `send --wait` meta op;
-        `request`'s id keys each chunk's nonce, so a retried chunk is the same
-        message. Handles reply routing, DMs, mentions, chunking (>MAX_BODY bodies
-        become a numbered train; mention + reply-ref + attachments ride the first
-        chunk) and pin-on-send. Returns {'msg_id', 'msg_ids', 'channel_id',
-        'chunks', 'pinned'}. Raises SendRetry (transient) or SendError (permanent).'''
+        `request`'s name keys each chunk's nonce, so Discord dedups a chunk retried
+        within its short window. Handles reply routing, DMs, mentions, chunking
+        (>MAX_BODY bodies become a numbered train; mention + reply-ref + attachments
+        ride the first chunk) and pin-on-send. Returns {'msg_id', 'msg_ids',
+        'channel_id', 'chunks', 'pinned'}. Raises SendRetry or SendError (final).'''
         to = data.get('to', '')
         subject = data.get('subject', '')
         body = data.get('body', '')

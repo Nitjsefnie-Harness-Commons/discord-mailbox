@@ -13,6 +13,5 @@ def _send_failure(e: Exception, what: str, permanent: tuple[int, ...]) -> SendEr
 
 
 def _send_nonce(request: Path, chunk: int) -> str:
-    # A claimed meta file adds a suffix.
-    digest = hashlib.sha256(request.name.partition('.')[0].encode()).hexdigest()
+    digest = hashlib.sha256(request.name.removesuffix('.claimed').encode()).hexdigest()
     return f'{digest[:16]}{chunk}'
