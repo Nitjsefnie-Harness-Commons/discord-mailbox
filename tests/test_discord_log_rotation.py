@@ -1882,12 +1882,6 @@ def test_connector_named_fallback_partial_payload_is_recoverable(tmp):
     """A hard exit during fallback payload bytes is reclaimed on restart."""
     path = Path(tmp) / "named-partial.log"
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_named_partial", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = os.write
 def partial_write(fd, data):
     if bytes(data) == b"PAYLOAD":
@@ -1898,11 +1892,7 @@ os.write = partial_write
 mod._ConnectorLogWriter._publish_named_bytes(
     sys.argv[2], b"PAYLOAD", auth_key=b"P" * 32)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 189, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=189)
     m = _mod()
     temporary, claim, private = m._ConnectorLogWriter._named_publish_paths(path)
     assert not temporary.exists()
@@ -2151,12 +2141,6 @@ def test_connector_named_claim_operations_preserve_forged_proof_shapes(tmp):
 def _partial_first_named_claim_child(kind, code):
     """Return a child which exits during the first portable claim record."""
     return rf'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_partial_first_claim", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 real_write = os.write
 armed = {{"value": True}}
@@ -2257,12 +2241,7 @@ def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(t
         else:
             proof_destination = lock_root / "connector-staging.key"
 
-        crashed = subprocess.run(
-            [sys.executable, "-c", _partial_first_named_claim_child(kind, code),
-             str(Path(MB)), str(path), kind, str(lock_root)],
-            capture_output=True,
-        )
-        assert crashed.returncode == code, crashed.stderr.decode("utf-8", "replace")
+        _run_child(_partial_first_named_claim_child(kind, code), path, kind, lock_root, code=code)
 
         # The first claim is a fixed-name transaction, never a UUID family.
         claim_residue = sorted(
@@ -2412,12 +2391,6 @@ def test_connector_log_cleanup_preserves_rebound_temp_after_validation(tmp):
     path = case / "rebound.log"
     path.write_bytes(b"history\n" * 8)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_cleanup_rebound", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_stage = mod._ConnectorLogWriter._write_migration_temp
 def stage_then_crash(self, data, mode, name=None, directory=None):
     result = real_stage(self, data, mode, name=name, directory=directory)
@@ -2427,11 +2400,7 @@ def stage_then_crash(self, data, mode, name=None, directory=None):
 mod._ConnectorLogWriter._write_migration_temp = stage_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 173, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=173)
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
     owner = m._ConnectorOwnership(path, lock_inode=True, lock_root=lock_root)
     token = hashlib.sha256(owner.identity_token.encode("utf-8")).hexdigest()[:32]
@@ -2475,12 +2444,6 @@ def test_connector_log_first_stage_crash_loop_has_bounded_temps(tmp):
     path = case / "loop.log"
     path.write_bytes(b"historic line\n" * 12)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_first_stage_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = mod._ConnectorLogWriter._write_migration_temp
 def write_then_crash(self, data, mode, name=None, directory=None):
     result = real_write(self, data, mode, name=name, directory=directory)
@@ -2492,12 +2455,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
     outcomes = []
     for _ in range(8):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 171, crashed.stderr.decode("utf-8", "replace")
-        outcomes.append(crashed.returncode)
+        outcomes.append(_run_child(child, path, code=171).returncode)
     hidden = [
         item for item in case.iterdir()
         if item.name.startswith(".") and not item.name.endswith(".lock")
@@ -2514,12 +2472,6 @@ def test_connector_log_partial_first_stage_crash_loop_has_bounded_temps(tmp):
     path = case / "loop.log"
     path.write_bytes(b"historic line\n" * 12)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_partial_first_stage", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 # Exercise the named-file fallback's partial-write recovery explicitly; the
 # normal Linux path now keeps its anonymous inode invisible until complete.
 mod._ConnectorLogWriter._write_anonymous_migration_temp = lambda *args, **kwargs: None
@@ -2544,11 +2496,7 @@ os.write = partial_write
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
     for _ in range(8):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 170, crashed.stderr.decode("utf-8", "replace")
+        _run_child(child, path, code=170)
 
     partials = sorted(case.glob(".loop.log.migrate-*.tmp"))
     assert partials, "the crash did not leave a non-vacuous partial temp"
@@ -2572,13 +2520,7 @@ def test_connector_log_claim_boundary_crash_loop_reclaims_created_temp(tmp):
     path.write_bytes(original)
     lock_root = case / "lock-root"
     child = r'''
-import importlib.util
-import os
-import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_claim_boundary", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 real_fsync = mod._ConnectorLogWriter._fsync_directory
 armed = {"value": False}
@@ -2600,11 +2542,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
 '''
 
     for _ in range(5):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             str(lock_root)], capture_output=True,
-        )
-        assert crashed.returncode == 179, crashed.stderr.decode("utf-8", "replace")
+        _run_child(child, path, lock_root, code=179)
 
         restarted = _mod()._ConnectorLogWriter(
             path, max_bytes=16, backup_count=2, lock_root=lock_root)
@@ -2626,13 +2564,7 @@ def test_connector_log_claim_callback_crash_loop_reclaims_created_temp(tmp):
     path.write_bytes(original)
     lock_root = case / "lock-root"
     child = r'''
-import importlib.util
-import os
-import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_claim_callback", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 real_identity = mod._ConnectorOwnership._identity_for
 armed = {"value": False}
@@ -2652,11 +2584,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
 '''
 
     for _ in range(5):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             str(lock_root)], capture_output=True,
-        )
-        assert crashed.returncode == 180, crashed.stderr.decode("utf-8", "replace")
+        _run_child(child, path, lock_root, code=180)
 
         restarted = _mod()._ConnectorLogWriter(
             path, max_bytes=16, backup_count=2, lock_root=lock_root)
@@ -2676,13 +2604,7 @@ def test_connector_log_rotation_claim_callback_crash_loop_reclaims_temp(tmp):
     path = case / "loop.log"
     lock_root = case / "lock-root"
     child = r'''
-import importlib.util
-import os
-import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_rotation_claim_callback", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 real_identity = mod._ConnectorOwnership._identity_for
 armed = {"value": False}
@@ -2704,11 +2626,7 @@ writer.write("x")
 
     for _ in range(5):
         path.write_bytes(b"A" * 31)
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             str(lock_root)], capture_output=True,
-        )
-        assert crashed.returncode == 181, crashed.stderr.decode("utf-8", "replace")
+        _run_child(child, path, lock_root, code=181)
 
         restarted = _mod()._ConnectorLogWriter(
             path, max_bytes=32, backup_count=1, lock_root=lock_root)
@@ -2728,12 +2646,6 @@ def test_connector_log_partial_empty_rotation_stage_crash_loop_has_bounded_temps
     path = case / "loop.log"
     path.write_bytes(b"a" * 31)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_partial_empty_rotation", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 # Keep this fallback-specific torn-envelope test meaningful after anonymous
 # staging was added for the normal rotation path.
 mod._ConnectorLogWriter._write_anonymous_migration_temp = lambda *args, **kwargs: None
@@ -2760,11 +2672,7 @@ writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 writer.write("x")
 '''
     for _ in range(8):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 178, crashed.stderr.decode("utf-8", "replace")
+        _run_child(child, path, code=178)
 
     # Slot 1 is the empty active-stage envelope; slot 0 is the real backup
     # and may have completed before the hard exit.
@@ -2791,12 +2699,6 @@ def test_connector_log_rotation_recovers_completed_sparse_backup_deletion(tmp):
     stale = path.with_name("sparse.log.2")
     stale.write_bytes(b"STALE-BACKUP")
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_sparse_delete", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_unlink = mod._ConnectorLogWriter._unlink_if_identity
 def unlink_then_crash(path, *args, **kwargs):
     result = real_unlink(path, *args, **kwargs)
@@ -2807,11 +2709,7 @@ mod._ConnectorLogWriter._unlink_if_identity = staticmethod(unlink_then_crash)
 writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2)
 writer.write("x")
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 179, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=179)
     journals = list(lock_root.glob("*.rotate.json"))
     assert len(journals) == 1, [item.name for item in journals]
     manifest = json.loads(journals[0].read_text(encoding="utf-8").splitlines()[-1])
@@ -2884,12 +2782,6 @@ def test_connector_log_alias_recovery_refuses_rebound_live_stable_path(tmp):
     os.link(target, alias)
 
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_rebound_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def publish_then_crash(*args):
@@ -2900,11 +2792,7 @@ def publish_then_crash(*args):
 os.replace = publish_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(target)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 118, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, target, code=118)
 
     replacement = case / "rebound-replacement.log"
     replacement.write_bytes(b"LIVE-WRITER\n")
@@ -3399,12 +3287,6 @@ def test_connector_staging_key_first_create_partial_restart_is_recoverable(tmp):
     path = case / "connector.log"
     lock_root = case / "lock-root"
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_first_key_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = os.write
 real_create = mod._ConnectorLogWriter._create_staging_key
 armed = {"value": False}
@@ -3422,11 +3304,7 @@ os.write = partial_key_write
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
                         lock_root=sys.argv[3])
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path),
-         str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 182, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, lock_root, code=182)
 
     key_path = lock_root / "connector-staging.key"
     residue = key_path.read_bytes() if key_path.exists() else b""
@@ -3455,12 +3333,6 @@ def test_connector_staging_key_partial_restart_preserves_foreign_replacement(tmp
     path = case / "connector.log"
     lock_root = case / "lock-root"
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_first_key_foreign", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = os.write
 real_create = mod._ConnectorLogWriter._create_staging_key
 armed = {"value": False}
@@ -3478,11 +3350,7 @@ os.write = partial_key_write
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
                         lock_root=sys.argv[3])
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path),
-         str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 183, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, lock_root, code=183)
 
     key_path = lock_root / "connector-staging.key"
     foreign = b"foreign-partial-key"
@@ -3709,12 +3577,6 @@ def test_connector_staging_key_raw_file_wins_over_a_disagreeing_authority(tmp):
 def _bootstrap_destination_link_child():
     """Return a child which dies before the virgin key is ever published."""
     return r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_bootstrap_link", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 real_link = os.link
 def interrupt_before_destination(source, destination, *args, **kwargs):
@@ -3730,12 +3592,6 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
 def _bootstrap_partial_payload_child():
     """Return a child which tears the virgin key payload mid-write."""
     return r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_bootstrap_payload", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 armed = {"value": False}
 real_publish = mod._ConnectorLogWriter._publish_named_bytes
@@ -3778,12 +3634,7 @@ def test_connector_staging_key_bootstrap_transaction_residue_recovers_twice(tmp)
     case.mkdir()
     path = case / "connector.log"
     lock_root = case / "lock-root"
-    crashed = subprocess.run(
-        [sys.executable, "-c", _bootstrap_destination_link_child(),
-         str(Path(MB)), str(path), str(lock_root), "202"],
-        capture_output=True,
-    )
-    assert crashed.returncode == 202, crashed.stderr.decode("utf-8", "replace")
+    _run_child(_bootstrap_destination_link_child(), path, lock_root, 202, code=202)
 
     key_path = lock_root / "connector-staging.key"
     assert not key_path.exists(), "the destination was published before the exit"
@@ -3811,12 +3662,7 @@ def test_connector_staging_key_bootstrap_partial_payload_recovers_twice(tmp):
     case.mkdir()
     path = case / "connector.log"
     lock_root = case / "lock-root"
-    crashed = subprocess.run(
-        [sys.executable, "-c", _bootstrap_partial_payload_child(),
-         str(Path(MB)), str(path), str(lock_root), "203"],
-        capture_output=True,
-    )
-    assert crashed.returncode == 203, crashed.stderr.decode("utf-8", "replace")
+    _run_child(_bootstrap_partial_payload_child(), path, lock_root, 203, code=203)
 
     key_path = lock_root / "connector-staging.key"
     assert not key_path.exists()
@@ -3976,12 +3822,6 @@ def test_connector_named_fallback_crash_loops_do_not_accumulate_uuid_temps(tmp):
         ("rotate", 188, ".*.rotate.json.create-*.tmp"),
     )
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_named_fallback_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 real_link = os.link
 def crash_payload_link(source, destination, *args, **kwargs):
@@ -4017,14 +3857,7 @@ if kind == "rotate":
             path.write_bytes(b"A" * 31)
         attempts = 5
         for _ in range(attempts):
-            crashed = subprocess.run(
-                [sys.executable, "-c", child, str(Path(MB)), str(path),
-                 kind, str(code), str(lock_root)], capture_output=True,
-            )
-            assert crashed.returncode == code, (
-                kind, crashed.returncode,
-                crashed.stderr.decode("utf-8", "replace"),
-            )
+            _run_child(child, path, kind, code, lock_root, code=code)
         residue = sorted(lock_root.glob(pattern))
         assert not residue, [item.name for item in residue]
         claim_residue = sorted(
@@ -4083,12 +3916,6 @@ def _named_claim_scenario(tmp, kind):
 
 def _proof_only_claim_child():
     return r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_proof_only_claim", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 real_link = os.link
 def interrupt_before_stage(source, destination, *args, **kwargs):
@@ -4126,15 +3953,7 @@ def test_connector_named_claim_proof_only_restart_is_authenticated_or_fails_clos
         case, path, lock_root, destination = _named_claim_scenario(tmp, kind)
         proof = _mod()._ConnectorLogWriter._named_claim_proof_path(destination)
         stage = _mod()._ConnectorLogWriter._named_claim_staging_path(destination)
-        crashed = subprocess.run(
-            [sys.executable, "-c", _proof_only_claim_child(), str(Path(MB)),
-             str(path), kind, str(code), str(lock_root)],
-            capture_output=True,
-        )
-        assert crashed.returncode == code, (
-            kind, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
+        _run_child(_proof_only_claim_child(), path, kind, code, lock_root, code=code)
         assert proof.exists(), (kind, "proof-only residue was not created")
         assert not stage.exists(), (kind, "stage link happened unexpectedly")
 
@@ -4158,13 +3977,7 @@ def test_connector_named_claim_proof_only_restart_is_authenticated_or_fails_clos
 
 def _stage_validation_exception_child():
     return r'''
-import importlib.util
-import os
-import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_stage_validation", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 real_link = os.link
 linked = {"value": False}
@@ -4217,15 +4030,7 @@ def test_connector_named_claim_stage_validation_restart_is_authenticated_or_fail
         marker = case / "validation-error.txt"
         proof = _mod()._ConnectorLogWriter._named_claim_proof_path(destination)
         stage = _mod()._ConnectorLogWriter._named_claim_staging_path(destination)
-        crashed = subprocess.run(
-            [sys.executable, "-c", _stage_validation_exception_child(),
-             str(Path(MB)), str(path), kind, str(code), str(lock_root),
-             str(marker)], capture_output=True,
-        )
-        assert crashed.returncode == 0, (
-            kind, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
+        _run_child(_stage_validation_exception_child(), path, kind, code, lock_root, marker, code=0)
         assert marker.read_text(encoding="utf-8") == \
             "injected post-link validation failure"
         assert not proof.exists(), (kind, proof)
@@ -4251,13 +4056,7 @@ def test_connector_named_claim_stage_validation_restart_is_authenticated_or_fail
 
 def _cleanup_interrupt_child():
     return r'''
-import importlib.util
-import os
-import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_cleanup_interrupt", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mod.os.O_TMPFILE = None
 claim_stage = Path(sys.argv[6])
 real_unlink = mod._ConnectorLogWriter._unlink_if_identity
@@ -4292,15 +4091,7 @@ def test_connector_named_claim_cleanup_half_state_restart_is_recoverable(tmp):
         case, path, lock_root, destination = _named_claim_scenario(tmp, kind)
         proof = _mod()._ConnectorLogWriter._named_claim_proof_path(destination)
         stage = _mod()._ConnectorLogWriter._named_claim_staging_path(destination)
-        crashed = subprocess.run(
-            [sys.executable, "-c", _cleanup_interrupt_child(), str(Path(MB)),
-             str(path), kind, str(code), str(lock_root), str(stage)],
-            capture_output=True,
-        )
-        assert crashed.returncode == code, (
-            kind, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
+        _run_child(_cleanup_interrupt_child(), path, kind, code, lock_root, stage, code=code)
         assert proof.exists(), (kind, "cleanup did not leave proof residue")
         assert not stage.exists(), (kind, "stage cleanup did not run")
 
@@ -4333,12 +4124,6 @@ def test_connector_log_first_migration_journal_create_partial_restart_preserves_
     seed.close()
     path.write_bytes(original)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_first_migration_journal", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = os.write
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 armed = {"value": False}
@@ -4357,11 +4142,7 @@ os.write = partial_journal
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
                         lock_root=sys.argv[3])
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path),
-         str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 184, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, lock_root, code=184)
 
     for _ in range(4):
         restarted = _mod()._ConnectorLogWriter(
@@ -4387,12 +4168,6 @@ def test_connector_log_first_rotation_journal_create_partial_restart_is_bounded(
     seed.close()
     path.write_bytes(b"A" * 31)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_first_rotation_journal", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = os.write
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 armed = {"value": False}
@@ -4412,11 +4187,7 @@ writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
                                  lock_root=sys.argv[3])
 writer.write("x")
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path),
-         str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 185, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, lock_root, code=185)
 
     for _ in range(3):
         restarted = _mod()._ConnectorLogWriter(
@@ -4458,12 +4229,6 @@ def test_connector_log_first_journal_create_rejects_and_preserves_tampered_recor
 
 def _crash_after_journal_publish_script(kind):
     return rf'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_{kind}_collision", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = mod._ConnectorLogWriter._write_migration_manifest
 def publish_then_crash(self, manifest, kind="migrate", create=False):
     result = real_write(self, manifest, kind=kind, create=create)
@@ -4495,12 +4260,7 @@ def test_connector_log_collision_after_migration_journal_publish_is_preserved(tm
             # Probe the stable inode/token first, then make the next startup
             # perform migration so the crash occurs at journal publication.
             path.write_bytes(b"history\n" * 8)
-        child = _crash_after_journal_publish_script(kind)
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             str(lock_root)], capture_output=True,
-        )
-        assert crashed.returncode == 173, crashed.stderr.decode("utf-8", "replace")
+        _run_child(_crash_after_journal_publish_script(kind), path, lock_root, code=173)
         journal = lock_root / f"{token}.{kind}.json"
         manifest = json.loads(journal.read_text(encoding="utf-8"))
         planned = manifest["planned_temporaries"]
@@ -4516,12 +4276,6 @@ def test_connector_log_collision_after_migration_journal_publish_is_preserved(tm
 
 def _crash_after_first_stage_script(kind):
     return rf'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_{kind}_forged_temp", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = mod._ConnectorLogWriter._write_migration_temp
 def write_then_crash(self, data, mode, name=None, directory=None):
     result = real_write(self, data, mode, name=name, directory=directory)
@@ -4553,15 +4307,7 @@ def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
         if kind == "migrate":
             path.write_bytes(b"history\n" * 8)
 
-        crashed = subprocess.run(
-            [sys.executable, "-c", _crash_after_first_stage_script(kind),
-             str(Path(MB)), str(path), str(lock_root)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 177, (
-            kind, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
+        _run_child(_crash_after_first_stage_script(kind), path, lock_root, code=177)
         token = writer._identity_digest
         journal = lock_root / f"{token}.{kind}.json"
         manifest = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
@@ -4586,12 +4332,6 @@ def _crash_after_first_replace_script(kind):
     max_bytes = 16 if kind == "migrate" else 32
     backup_count = 2 if kind == "migrate" else 1
     return rf'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_{kind}_rebound", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def replace_then_crash(*args):
@@ -4615,12 +4355,6 @@ def test_connector_log_prepared_migration_recovery_streams_legacy_paths(tmp):
     source.write_bytes(b"SRC0000\n")
     path.write_bytes(b"ACT0000\nACT0001\nACT0002\n")
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_prepared_stream", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 def mark_then_crash(self, manifest, index, kind):
     if kind == "migrate":
         os._exit(176)
@@ -4629,11 +4363,7 @@ original_mark = mod._ConnectorLogWriter._mark_destination_publishing
 mod._ConnectorLogWriter._mark_destination_publishing = mark_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 176, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=176)
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
     journals = list(lock_root.glob("*.migrate.json"))
     assert len(journals) == 1, [item.name for item in journals]
@@ -4678,11 +4408,7 @@ def test_connector_log_migration_rejects_rebound_journal_destination(tmp):
     lock_root = writer._owner.lock_root
     writer.close()
     path.write_bytes(b"".join(f"{i:02d}\n".encode() for i in range(12)))
-    crashed = subprocess.run(
-        [sys.executable, "-c", _crash_after_first_replace_script("migrate"),
-         str(Path(MB)), str(path), str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 174, crashed.stderr.decode("utf-8", "replace")
+    _run_child(_crash_after_first_replace_script("migrate"), path, lock_root, code=174)
     rebound = path.with_name("migration-rebound.log.1")
     rebound.write_bytes(b"LIVE-MIGRATION-WRITER\n")
     before = rebound.read_bytes()
@@ -4705,11 +4431,7 @@ def test_connector_log_rotation_rejects_rebound_journal_destination(tmp):
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
     lock_root = writer._owner.lock_root
     writer.close()
-    crashed = subprocess.run(
-        [sys.executable, "-c", _crash_after_first_replace_script("rotate"),
-         str(Path(MB)), str(path), str(lock_root)], capture_output=True,
-    )
-    assert crashed.returncode == 174, crashed.stderr.decode("utf-8", "replace")
+    _run_child(_crash_after_first_replace_script("rotate"), path, lock_root, code=174)
     rebound = path.with_name("rotation-rebound.log.1")
     rebound.write_bytes(b"LIVE-ROTATION-WRITER\n")
     before = rebound.read_bytes()
