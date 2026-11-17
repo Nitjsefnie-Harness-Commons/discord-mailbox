@@ -132,16 +132,46 @@ def test_render_usage_name(_tmp):
     assert mb.render_usage_name(
         "claude", {"weekly": {"pct": 90.0, "pace_pct": 10.0}}) == \
         "claude · 7d 🔴 90%"
+    # no trustworthy number -> None, so the caller leaves the channel alone
+    for empty in ({"five_hour": {}, "weekly": {}}, None, {}):
+        assert mb.render_usage_name("kimi", empty) is None
 
 
-def test_render_returns_none_without_data(_tmp):
-    """No trustworthy number -> None, so the caller leaves the channel alone."""
+def test_scoped_windows_render_when_no_top_level_window_does(_tmp):
     mb = _mb()
     if mb is None:
         return
-    assert mb.render_usage_name("kimi", {"five_hour": {}, "weekly": {}}) is None
-    assert mb.render_usage_name("kimi", None) is None
-    assert mb.render_usage_name("kimi", {}) is None
+    one = {"pct": 0.0, "pace_pct": 16.2, "resets_in": "25d3h", "recover_in": None, "label": "30d"}
+    assert mb.render_usage_name("codex", {"_scoped": [one]}) == "codex · 30d 🟢 0%"
+    # list order, each with its own colour and red-only ETA; an entry without a
+    # pct or a usable label is skipped
+    red = {"pct": 90.0, "pace_pct": 10.0, "recover_in": "1h50m", "resets_in": "5h", "label": "1d"}
+    junk = [{"pct": None, "label": "x"}, {"pct": 1.0}, dict(one, label=" "), dict(one, label=30), "junk"]
+    name = mb.render_usage_name("codex", {"_scoped": [red, *junk, dict(one, label=" 9d ", pct=1.0, pace_pct=1.0)]})
+    assert name == "codex · 1d 🔴 90% →🟢 2h · 9d 🟡 1%", name
+    # a rendered top-level window keeps the name as it was; an empty one falls through
+    assert mb.render_usage_name("codex", {"weekly": {"pct": 12.0, "pace_pct": 20.0}, "_scoped": [one]}) == "codex · 7d 🟢 12%"
+    assert mb.render_usage_name("codex", {"five_hour": {}, "_scoped": [one]}) == "codex · 30d 🟢 0%"
+    assert all(mb.render_usage_name("codex", {"_scoped": bad}) is None for bad in (None, {}, "x"))
+    # the stale marker is replaced by the reading
+    assert mb.usage_board_plan("codex", {"_scoped": [one]}, "codex · ⚪ usage unknown", 5, True) == ("codex · 30d 🟢 0%", 0, False)
+
+
+def test_a_scoped_name_stays_within_the_channel_name_limit(_tmp):
+    mb = _mb()
+    if mb is None:
+        return
+
+    def scoped(*labels):
+        return {"_scoped": [{"pct": 1.0, "pace_pct": 1.0, "label": x} for x in labels]}
+    head = [f"w{i:02d}" for i in range(7)]            # 89 units: 🟡 counts as two
+    # 100 units (200 bytes) kept; 101 dropped, though only 93 code points; the
+    # later entry that would fit alone is dropped with it
+    fits = mb.render_usage_name("codex", scoped(*head, "w7", "z"))
+    assert len(fits.encode("utf-16-le")) == 200 and fits.endswith("w7 🟡 1%"), fits
+    over = mb.render_usage_name("codex", scoped(*head, "w07", "z"))
+    assert len(over.encode("utf-16-le")) == 178 and over.endswith("w06 🟡 1%"), over
+    assert mb.render_usage_name("codex", scoped("x" * 90)) is None
 
 
 def test_usage_fetch_keeps_partial_results_on_provider_failure(tmp):
@@ -319,31 +349,23 @@ LIVE = "claude · 5h 🟢 1% · 7d 🟢 43%"
 READING = {"weekly": {"pct": 68.0, "pace_pct": 65.0}}
 
 
-def test_a_single_dataless_period_leaves_the_board_alone(_tmp):
-    """One usage_query timeout must not blank a board that will be right again
-    in five minutes — the figure is only a few minutes old at that point."""
-    mb = _mb()
-    if mb is None:
-        return
-    name, misses, marked = mb.usage_board_plan("claude", None, LIVE)
-    assert name is None, f"one empty period already renamed the board to {name!r}"
-    assert (misses, marked) == (1, False)
-
-
 def test_a_board_with_no_reading_stops_asserting_a_figure(_tmp):
     """A reading that has gone stale must say so in the board's name.
 
     Otherwise `7d 🟢 43%` can stay up for twelve hours or more while the account
-    is actually at 68%, and nothing in the name says the reading is old.
+    is actually at 68%, and nothing in the name says the reading is old. One
+    usage_query timeout must not blank a board that will be right again in five
+    minutes, so each dataless period before the threshold only counts.
     """
     mb = _mb()
     if mb is None:
         return
     misses, marked, live = 0, False, LIVE
-    for _ in range(mb.USAGE_STALE_PERIODS - 1):
+    for n in range(1, mb.USAGE_STALE_PERIODS):
         name, misses, marked = mb.usage_board_plan("claude", None, live,
                                                    misses, marked)
-        assert name is None, "blanked before the threshold"
+        assert name is None, f"blanked before the threshold, at period {n}: {name!r}"
+        assert (misses, marked) == (n, False)
     name, misses, marked = mb.usage_board_plan("claude", None, live, misses,
                                                marked)
     assert name == mb.render_stale_usage_name("claude"), (
@@ -395,16 +417,9 @@ def test_a_reading_ends_the_episode_and_re_arms_the_marker(_tmp):
     name, _, _ = mb.usage_board_plan("claude", None, "claude · 7d 🔴 68%",
                                      misses, marked)
     assert name == stale, "the marker did not re-arm after a reading"
-
-
-def test_a_live_figure_that_needs_no_rename_is_not_stale(_tmp):
-    """Nothing to write is not the same as nothing to read."""
-    mb = _mb()
-    if mb is None:
-        return
-    current = mb.render_usage_name("claude", READING)
-    name, misses, marked = mb.usage_board_plan("claude", READING, current, 2,
-                                               False)
+    # nothing to write is not the same as nothing to read
+    name, misses, marked = mb.usage_board_plan(
+        "claude", READING, mb.render_usage_name("claude", READING), 2, False)
     assert name is None, "rewrote a name the channel already carried"
     assert (misses, marked) == (0, False), (
         "a board showing a current figure was left counted as stale")

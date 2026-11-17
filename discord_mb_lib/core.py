@@ -36,7 +36,7 @@ import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from . import _control_files, _prog, _retention
+from . import _control_files, _prog, _retention, _usage_windows
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1037,6 +1037,19 @@ def recovery_label(window):
     return coarse_duration(best_secs)
 
 
+def _usage_segment(label, w):
+    dot = pace_dot(w.get('pct'), w.get('pace_pct'))
+    seg = f"{label} {dot} {float(w['pct']):.0f}%"
+    if dot == '🔴':
+        # Only red carries the ETA. Green and yellow have nothing to wait
+        # for, and hanging a duration off every window would triple the
+        # length of a name whose whole value is being readable at a glance.
+        eta = recovery_label(w)
+        if eta:
+            seg += f' →🟢 {eta}'
+    return seg
+
+
 def render_usage_name(provider, block):
     """Channel name for one provider, e.g. `claude · 5h 🟢 0% · 7d 🔴 40%`.
 
@@ -1047,24 +1060,8 @@ def render_usage_name(provider, block):
     """
     if not isinstance(block, dict):
         return None
-    parts = []
-    for key, label in USAGE_WINDOWS:
-        w = block.get(key)
-        if not isinstance(w, dict) or w.get('pct') is None:
-            continue
-        dot = pace_dot(w.get('pct'), w.get('pace_pct'))
-        seg = f"{label} {dot} {float(w['pct']):.0f}%"
-        if dot == '🔴':
-            # Only red carries the ETA. Green and yellow have nothing to wait
-            # for, and hanging a duration off every window would triple the
-            # length of a name whose whole value is being readable at a glance.
-            eta = recovery_label(w)
-            if eta:
-                seg += f' →🟢 {eta}'
-        parts.append(seg)
-    if not parts:
-        return None
-    return f"{provider} · " + ' · '.join(parts)
+    segs = [_usage_segment(label, w) for label, w in _usage_windows.windows(block, USAGE_WINDOWS)]
+    return _usage_windows.name(provider, segs)
 
 
 def render_stale_usage_name(provider):
@@ -2732,6 +2729,8 @@ __all__ = [
     '_prog',
     '_retention',
     '_take_response',
+    '_usage_segment',
+    '_usage_windows',
     '_withdraw',
     'argparse',
     'asyncio',

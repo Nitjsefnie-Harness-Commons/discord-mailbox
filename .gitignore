@@ -98,6 +98,7 @@
 !/discord_mb_lib/_send_errors.py
 !/discord_mb_lib/_settings.py
 !/discord_mb_lib/_temp_provenance.py
+!/discord_mb_lib/_usage_windows.py
 !/discord_mb_lib/cli.py
 !/discord_mb_lib/connector.py
 !/discord_mb_lib/core.py
