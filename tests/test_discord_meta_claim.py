@@ -60,29 +60,32 @@ def _raise(e):
 
 
 def test_an_unanswered_request_is_withdrawn_on_every_exit_that_keeps_its_cause(tmp):
-    """Each exit keeps its cause and leaves only a connector's claim; SIGTERM/SIGHUP exit 128 + signum."""
+    """Each exit keeps its cause and leaves only a claim; only a default SIGTERM/SIGHUP is replaced (exit 128 + signum)."""
     ki, err, real_write, out, connector = KeyboardInterrupt(), RuntimeError("poll"), _control_files.write_private, [], contextlib.ExitStack()
-    signals = [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
-    saved = {s: signal.signal(s, signal.SIG_IGN) for s in signals}     # a handler left unset never kills the runner
+    signals, timed_out = [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)], "connector did not respond within 1.5s (is it running for 'me'?)"
+    saved = {s: signal.getsignal(s) for s in signals}
     cases = [("interrupt", lambda p, o: _raise(ki), ki, []), ("error", lambda p, o: _raise(err), err, []),
              ("thread", lambda p, o: _raise(err), err, []), ("written", None, ki, []),       # right after the write
              ("claimed", lambda p, o: (connector.enter_context(_claim(p, o)), _raise(ki)), ki, ["json.claimed"]),
              ("unlink fails", lambda p, o: (p.unlink(), p.mkdir(), _raise(ki)), ki, ["json"]),  # an OSError everywhere
              ("answered", lambda p, o: (connector.enter_context(_claim(p, o)), (o / p.name).write_text('{"ok": 1}', encoding="utf-8")),
-              {"ok": 1}, ["json.claimed"]), ("deadline", None, "connector did not respond within 1.5s (is it running for 'me'?)", []),
-             *((f"signal {s}", lambda p, o, s=s: signal.raise_signal(s), 128 + s, []) for s in signals)]
+              {"ok": 1}, ["json.claimed"]), ("deadline", None, timed_out, []),
+             *((f"{how} {s}", lambda p, o, s=s: signal.raise_signal(s) if signal.getsignal(s) is not signal.SIG_DFL else _raise(AssertionError(s)),
+                want, [], prior) for s in signals for how, want, prior in (    # never the default action: it kills the runner
+                    ("default", 128 + s, signal.SIG_DFL), ("ignored", timed_out, signal.SIG_IGN), ("theirs", KeyboardInterrupt, signal.default_int_handler)))]
     try:
-        for name, act, want, left in cases:
-            out.clear()
+        for name, act, want, left, *prior in cases:
+            prior, _ = (prior or [signal.SIG_DFL])[0], out.clear()
+            _ = [signal.signal(s, prior) for s in signals]
             worker = threading.Thread(target=lambda: out.append(_exit_of(lambda: core._meta_request("me", {"op": "list-agents"}, 1.5))))
             write = mock.patch.object(_control_files, "write_private", lambda p, text: (real_write(p, text), _raise(ki)))
             with write if name == "written" else contextlib.nullcontext(), _cli_side(
                     Path(tmp) / name, lambda i, o, act=act: [act(p, o) for p in i.glob("*.json") if act]) as (in_dir, out_dir):
                 _ = (worker.start(), worker.join(10)) if name == "thread" else worker.run()
             got = out[0].code if isinstance(out[0], SystemExit) else str(out[0]) if isinstance(out[0], TimeoutError) else out[0]
-            assert got == want, (name, out)
+            assert got == want or type(got) is want, (name, out)
             assert sorted(p.name.split(".", 1)[1] for p in in_dir.iterdir()) == left, (name, list(in_dir.iterdir()))
-            assert not any(out_dir.iterdir()) and all(signal.getsignal(s) is signal.SIG_IGN for s in signals), name
+            assert not any(out_dir.iterdir()) and all(signal.getsignal(s) is prior for s in signals), name
     finally:
         _ = connector.close(), [signal.signal(s, handler) for s, handler in saved.items()]
 
@@ -100,8 +103,8 @@ def test_a_claimed_rename_past_its_deadline_exits_75_as_pending(tmp):
         with _cli_side(tmp, claim) as (in_dir, out_dir), contextlib.redirect_stderr(stderr):
             sys.argv = ["discord_mb.py", "thread", "me", "--timeout", "0.2",
                         "rename", "new-name", "--channel", "1"]
-            code, sys.argv = getattr(_exit_of(cli._cli), "code", None), argv
-        assert code == 75, (code, stderr.getvalue())
+            exited, sys.argv = _exit_of(cli._cli), argv
+        assert isinstance(exited, SystemExit) and exited.code == 75, (exited, stderr.getvalue())
         assert held and list(in_dir.iterdir()) == held, "the claimed request was withdrawn"
         assert str(out_dir / held[0].name.removesuffix(".claimed")) in stderr.getvalue(), stderr.getvalue()
         assert "did not respond" not in stderr.getvalue(), stderr.getvalue()
@@ -143,8 +146,7 @@ def test_a_creds_add_request_carrying_a_password_is_private(tmp):
             seen.append((p.read_text(encoding="utf-8"), p.stat().st_mode & 0o777))
             (out_dir / p.name).write_text(json.dumps({"ok": True, "action": "added"}), encoding="utf-8")
 
-    args = types.SimpleNamespace(creds_action="add", identity="me", domain="a.example", login="login",
-                                 password=password, upsert=False, timeout=3.5)
+    args = types.SimpleNamespace(creds_action="add", identity="me", domain="a.example", login="login", password=password, upsert=False, timeout=3.5)
     with _cli_side(tmp, answer), contextlib.redirect_stdout(io.StringIO()):
         core.creds_cli(args)
     assert len(seen) == 1 and password in seen[0][0], seen
