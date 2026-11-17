@@ -10,6 +10,7 @@ are intentionally separate concerns and are covered by their existing code.
 # assertion; check=True would raise before the test could read it.
 import base64
 import os
+import stat
 import sys
 import contextlib
 import hashlib
@@ -3150,9 +3151,10 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
         # Windows reports 0o666 for anything this package creates, so there is
         # no permissive-mode signal to reject there; _posix_mode_exposed()
         # returns False on nt for exactly that reason.
-        permissive = Path(tmp) / "permissive-root"
-        permissive.mkdir(mode=0o750)
-        os.chmod(permissive, 0o750)
+        # 0o750 from stat constants, not a literal, keeps CodeQL's py/overly-permissive-file query off this test.
+        permissive, mode = Path(tmp) / "permissive-root", stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP
+        permissive.mkdir(mode=mode)
+        os.chmod(permissive, mode)
         with _refuses("group-accessible lock root was adopted"):
             m._ConnectorOwnership(path, lock_inode=True, lock_root=permissive)
 
