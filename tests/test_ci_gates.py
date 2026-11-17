@@ -13,6 +13,7 @@ import _util  # noqa: E402
 
 FLOOR = _util.load(os.path.join(_util.SCRIPTS, "scripts", "ci", "coverage_floor.py"))
 PERF = _util.load(os.path.join(_util.SCRIPTS, "scripts", "ci", "perf_gate.py"))
+BUDGET = {"schema_version": 1, "counter": "callgrind Ir", "tolerance": 0.02, "python": "3.13.14", "workloads": {"a": 1000}}
 
 
 def _thresholds(tmp, name, **record):
@@ -41,15 +42,23 @@ def test_the_gate_floor_is_the_higher_of_head_and_base_and_refuses_a_lower_floor
 def test_a_perf_workload_fails_over_tolerance_missing_failed_or_unbudgeted_and_main_lowers_a_budget_only_past_the_tolerance(_tmp):
     rows = [PERF.compare(measured, failed, {"a": 1000}, Decimal("0.02")) for measured, failed in (({"a": 1020}, ()), ({"a": 1021}, ()), ({}, ()), ({}, {"a"}), ({"a": 1, "b": 5}, ()))]
     assert [[v for *_, v in r] for r in rows] == [["ok"], ["over budget"], ["missing"], ["failed to measure"], ["ok", "unbudgeted"]], rows
-    doc = {"schema_version": 1, "counter": "callgrind Ir", "tolerance": 0.02, "python": "3.13.14", "workloads": {"a": 1000}}
+    doc = {**BUDGET, "workloads": {"a": 1000}}
     assert [(PERF.tighten(doc, {"a": n}) or {}).get("workloads") for n in (970, 980, 990, 1100)] == [{"a": 970}, None, None, None] and doc["workloads"] == {"a": 1000}
+    assert [PERF.spent(*runs) for runs in ((5, 5), (None, 9), (5, None), (5, 9))] == [None, None, None, 4]  # Ir(K) - Ir(0); no cost is a failed run
+    with contextlib.suppress(ValueError):
+        PERF.counts({"python": "3.13.14", "environment": None, "failed": [], "workloads": {"a": 0}})
+        raise AssertionError("a zero instruction count was accepted")
 
 
-def test_a_perf_budget_raise_needs_a_budget_only_commit_whose_trailer_names_it(_tmp):
+def test_a_perf_budget_raise_drop_or_addition_needs_its_own_commit_to_touch_only_the_budget_and_name_it(_tmp):
     alone, touching, base = [".github/perf-budget.json"], [".github/perf-budget.json", "run_tests.py"], ({"a": 1000, "c": 9}, Decimal("0.01"), "3.13.14")
-    assert [PERF.raises(head, base) for head in (({"a": 1001, "c": 9, "d": 1}, *base[1:]), ({"a": 1000}, Decimal("0.02"), base[2]), (*base[:2], "3.13.15"))] == [{"a", "d"}, {"*"}, {"*"}]
-    for files, named, undeclared in ((alone, ["a"], []), (touching, ["a"], ["a"]), (alone, ["b"], ["a"]), (alone, ["*"], [])):
-        assert PERF.undeclared_raises({"a"}, [{"files": files, "raises": named}]) == undeclared, (files, named)
+    assert [PERF.raises(head, base) for head in (({"a": 1001, "c": 9, "d": 1}, *base[1:]), ({"a": 1000}, Decimal("0.02"), base[2]), (*base[:2], "3.13.15"))] == [{"a", "d"}, {"*", "c"}, {"*"}]
+    laundered = [{"files": touching, "declares": [], "raised": {"a"}}, {"files": alone, "declares": ["a"], "raised": set()}]  # a later budget-only commit cannot declare it; nor can no commit
+    for commits, undeclared in [([{"files": f, "declares": d, "raised": {"a"}}], u) for f, d, u in ((alone, ["a"], []), (touching, ["a"], ["a"]), (alone, ["b"], ["a"]), (alone, ["*"], []))] + [(laundered, ["a"]), ([], ["a"])]:
+        assert PERF.undeclared_raises({"a"}, commits) == undeclared, commits
+    with contextlib.redirect_stdout(io.StringIO()):  # an undeclared raise, a Python other than the budget's, then a declared raise
+        codes = [PERF.check({"python": "3.13.14", "environment": None, "failed": [], "workloads": {"a": 1000}}, {**BUDGET, "python": python, "workloads": {"a": 1500}}, {**BUDGET, "python": python}, [{"files": files, "declares": ["a"], "raised": {"a"}}]) for python, files in (("3.13.14", touching), ("3.13.15", alone), ("3.13.14", alone))]
+    assert codes == [1, 1, 0], codes
 
 
 def main():
