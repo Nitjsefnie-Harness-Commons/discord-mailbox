@@ -695,11 +695,12 @@ if mode == "count":
 def test_connector_log_background_rotation_recovers_at_every_step(tmp):
     """A background rotation killed at each step restarts to one ordered window holding every completed write."""
     child = r'''
-step, W, real_replace, real_write, active = sys.argv[3], mod._ConnectorLogWriter, os.replace, os.write, None
+import threading
+step, on_worker, W, real_replace, real_write, active = sys.argv[3], sys.argv[4] in ("worker", "repeat"), mod._ConnectorLogWriter, os.replace, os.write, None
 W._BACKGROUND_ROTATION_MIN_BYTES, W._BACKGROUND_ROTATION_HEADROOM = 0, 1024
 real_manifest, real_stage, real_adopt = W._write_migration_manifest, W._stage_rotation_copy, W._adopt_rotated_identities
-def at(name, result=None):
-    return os._exit(190) if step == name else result
+def at(name, result=None):  # 191: a step meant for the worker thread ran on the caller
+    return os._exit(191 if on_worker and threading.current_thread() is threading.main_thread() else 190) if step == name else result
 W._write_migration_manifest = lambda self, m, kind="migrate", create=False: at(kind == "rotate" and (
     "after-create" if create else "after-prepared" if m["state"] == "prepared" else ""), real_manifest(self, m, kind, create=create))
 W._stage_rotation_copy = lambda self, *args: at("after-stage", real_stage(self, *args))
@@ -710,25 +711,30 @@ os.write = lambda fd, data: at("after-truncate" if os.fstat(fd).st_ino == active
 writer = W(sys.argv[2], max_bytes=4096, backup_count=3)
 active = os.stat(sys.argv[2]).st_ino
 for n in range(240, 440):
+    worker = writer._rotation_worker
+    if on_worker and worker is not None and writer._active_bytes + 50 > 4096:
+        worker.join()  # the caller stays below the ceiling, so the worker swaps on its own thread
     writer.write(f"{n:05d}".ljust(49, "."))
     print(n, flush=True)
 '''
     lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
     lines = [f"{n:05d}".ljust(49, ".").encode() + b"\n" for n in range(450)]
-    # A forged tail refuses before recovery goes on; appended lines model a finish outside the lock.
-    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prepared", ""), ("after-prepared", "digest"),
-                        ("after-prepared", "length"), ("after-prepared", "version"), ("after-rename-1", ""), ("after-rename-2", ""), ("after-stage-publish", ""),
-                        ("after-truncate", ""), ("after-rewrite", ""), ("after-rewrite", "appended")):
+    # A forged tail refuses before recovery goes on; appended lines model a finish outside the lock; "worker" rows
+    # swap on the worker thread; "repeat" seeds an active whose prefix begins with the tail, as repeated lines do.
+    in_lock = ("after-prepared", "after-rename-1", "after-rename-2", "after-stage-publish", "after-truncate", "after-rewrite")
+    for step, extra in (("after-create", ""), ("after-stage", ""), *((step, "") for step in in_lock), ("after-prepared", "digest"),
+                        ("after-prepared", "length"), ("after-prepared", "version"), ("after-rewrite", "appended"),
+                        *((step, "worker") for step in in_lock), ("after-prepared", "repeat")):
         case = Path(tmp) / f"{step}-{extra}"
         case.mkdir()
         slots = [case / name for name in ("c.log.3", "c.log.2", "c.log.1", "c.log")]
         for index, slot in enumerate(slots):
-            slot.write_bytes(b"".join(lines[60 * index:60 * index + 60]))
-        done = int(_run_child(child, slots[-1], step, code=190, text=True).stdout.split()[-1])
+            slot.write_bytes(b"".join(lines[60 * index:60 * index + 60] if index < 3 or extra != "repeat" else lines[241:261] + lines[200:240]))
+        done = int(_run_child(child, slots[-1], step, extra, code=190, text=True).stdout.split()[-1])
         if extra == "appended":
             done = int(slots[-1].read_bytes().splitlines()[-1][:5]) + 3
             slots[-1].write_bytes(slots[-1].read_bytes() + b"".join(lines[done - 2:done + 1]))
-        elif extra:
+        elif extra in ("digest", "length", "version"):
             journal = next(lock_root.glob("*.rotate.json"))
             saved, tail = journal.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
             record = json.loads(saved.splitlines()[-1])
@@ -745,6 +751,11 @@ for n in range(240, 440):
                 _restart(slots[-1], 4096, 3)
             journal.write_bytes(saved)
         _restart(slots[-1], 4096, 3)
+        if extra == "repeat":  # the prefix moved to .1 and the active holds only the tail, a run of lines 241 on
+            tail = slots[-1].read_bytes()
+            assert slots[2].read_bytes() == b"".join(lines[241:261] + lines[200:241]) and tail and b"".join(lines[241:]).startswith(tail), step
+            assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.json")), step
+            continue
         window = [int(line[:5]) for slot in slots if slot.exists() for line in slot.read_bytes().splitlines()]
         assert window == list(range(window[0], window[0] + len(window))) and window[-1] >= done, (step, window, done)
         with contextlib.closing(_mod()._ConnectorLogWriter(slots[-1], max_bytes=4096, backup_count=3)) as writer:
@@ -760,7 +771,7 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
     W, path = m._ConnectorLogWriter, Path(tmp) / "bg" / "bg.log"
     path.parent.mkdir()
     slots = [path.with_name("bg.log.2"), path.with_name("bg.log.1"), path]
-    lines = [f"{n:04d}".ljust(31, "-").encode() + b"\n" for n in range(49)]
+    lines = [f"{n:04d}".ljust(31, "-").encode() + b"\n" for n in range(73)]
     cut = next(32 * n for n in range(40) if 32 * n + 32 > 1024 - 256)
     appended, held = threading.Event(), threading.Event()
     real_read, real_stage, real_await = W._read_rotation_prefix, W._stage_rotation_copy, W._await_rotation_worker
@@ -776,9 +787,14 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
         writer = W(path, max_bytes=1024, backup_count=2)
         try:
             for index, line in enumerate(lines):
-                if index == 40:
-                    assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == b"".join(lines[:40])
-                    assert slots[1].read_bytes() == b"".join(lines[:cut // 32]) and len(waits) == 1, waits
+                if index == 49:  # the second rotation swaps on the worker thread while the caller stays out
+                    worker, _ = writer._rotation_worker, held.set()
+                    worker.join()
+                if index in (40, 49):  # a caller swap, then a worker swap, each leaving no worker registered
+                    assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == b"".join(lines[:index])
+                    first = 0 if index == 40 else cut // 32  # both cuts fall 768 bytes into their active
+                    assert slots[1].read_bytes() == b"".join(lines[first:first + cut // 32]), index
+                    assert writer._rotation_worker is None and len(waits) == 1, waits
                     held.clear()
                 writer.write(line.decode()[:-1])
                 if path.stat().st_size > cut:
@@ -788,16 +804,19 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
             real_join, worker.join = worker.join, lambda *args: held.set() or real_join(*args)
             writer.close()
             assert errors == [] and not worker.is_alive(), errors
-            assert slots[1].read_bytes() == b"".join(lines[:cut // 32]) and path.read_bytes() == b"".join(lines[cut // 32:])
+            assert slots[1].read_bytes() == b"".join(lines[24:48]) and path.read_bytes() == b"".join(lines[48:])
             assert _hidden(path.parent) == [] and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.json"))
             writer._rotation_worker = threading.Thread(target=print)
             for call in (lambda: writer._write_migration_temp(b"x", None), lambda: writer._adopt_rotated_identities({})):
                 with _refuses("the caller staged or adopted beside a running worker", AssertionError):
                     call()
-            with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=1025), contextlib.closing(W(path.with_name("sync.log"), max_bytes=1024)) as small:
-                for line in lines[:30]:  # past the threshold, but below the minimum limit
-                    small.write(line.decode()[:-1])
-                    assert small._rotation_worker is None
+            # No worker starts below the minimum limit, nor once close() has set the stop flag.
+            for minimum, stopped in ((1025, False), (1024, True)):
+                with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=minimum), contextlib.closing(W(path.with_name(f"{minimum}.log"), max_bytes=1024)) as small:
+                    small._rotation_stop = stopped
+                    for line in lines[:30]:
+                        small.write(line.decode()[:-1])
+                        assert small._rotation_worker is None, minimum
         finally:
             appended.set()
             held.set()
