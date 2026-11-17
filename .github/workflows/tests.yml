@@ -163,6 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -252,8 +253,43 @@ jobs:
 
       - name: Coverage gate
         if: ${{ !cancelled() && steps.measure.conclusion == 'success' }}
-        # A RATCHET, not a target. 48 sits just under the 50.3%
-        # measured when this landed, so ordinary churn stays green and a real
-        # regression goes red. Raise the floor by hand as coverage climbs —
-        # never lower it to make a red build green.
-        run: python -m coverage report --fail-under=48 --precision=1
+        # The floor is .github/ci-thresholds.json. Each green push to main
+        # raises it to measured coverage minus its gap; nothing lowers it,
+        # so a pull request gates on its base's floor too.
+        run: |
+          base=()
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git cat-file -e HEAD^1:.github/ci-thresholds.json 2>/dev/null; then
+            git show HEAD^1:.github/ci-thresholds.json > "$RUNNER_TEMP/base-thresholds.json"
+            base=(--base "$RUNNER_TEMP/base-thresholds.json")
+          fi
+          floor="$(python scripts/ci/coverage_floor.py floor --thresholds .github/ci-thresholds.json "${base[@]}")"
+          python -m coverage report --fail-under="$floor" --precision=1
+
+      - name: Stage the coverage floor raise
+        id: raise
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          DISCORD_MAILBOX_BASE_SHA: ${{ github.sha }}
+        run: |
+          measured="$(python -m coverage report --format=total --precision=1)"
+          data="$RUNNER_TEMP/ratchet-data"
+          mkdir -p "$data/.github"
+          status=0
+          python scripts/ci/coverage_floor.py raise --thresholds .github/ci-thresholds.json \
+            --measured "$measured" --output "$data/.github/ci-thresholds.json" || status=$?
+          case "$status" in
+            0) printf '%s\n' "$DISCORD_MAILBOX_BASE_SHA" > "$data/base.txt"
+               echo "changed=true" >> "$GITHUB_OUTPUT" ;;
+            3) echo "changed=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Upload the coverage floor raise
+        if: ${{ steps.raise.outputs.changed == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ratchet-push
+          path: ${{ runner.temp }}/ratchet-data/
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error

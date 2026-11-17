@@ -1,0 +1,156 @@
+name: ratchet push
+
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
+    # Only a successful push-on-main run passes the job condition, and the
+    # artifact comes from that run. The job reads its environment's deploy
+    # key, runs no repository code, installs no packages, and installs the
+    # staged records at their repo-relative paths; base.txt names the commit
+    # they were measured on. A records-only push stages nothing, so it never
+    # loops.
+    workflows: [tests]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ratchet-push
+  # A cancellation could stop between commit and push.
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    environment: main-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+    steps:
+      - name: List the triggering run's artifacts
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_MAILBOX_REPO: ${{ github.repository }}
+          DISCORD_MAILBOX_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          names="$(gh api -H 'Cache-Control: no-cache' --paginate \
+            "repos/$DISCORD_MAILBOX_REPO/actions/runs/$DISCORD_MAILBOX_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired != true) | .name')"
+          ratchet=false
+          if printf '%s\n' "$names" | grep -qx 'ratchet-push'; then
+            ratchet=true
+          fi
+          echo "ratchet=$ratchet" >> "$GITHUB_OUTPUT"
+      - name: Download the ratchet data
+        if: steps.list.outputs.ratchet == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ratchet-push
+          path: ${{ runner.temp }}/ratchet-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.15'
+      - name: Push the ratchet commit to main
+        if: steps.list.outputs.ratchet == 'true'
+        env:
+          DISCORD_MAILBOX_PUSH_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          DISCORD_MAILBOX_REPO: ${{ github.repository }}
+        run: |
+          if [ -z "${DISCORD_MAILBOX_PUSH_KEY:-}" ]; then
+            echo "DISCORD_MAILBOX_PUSH_KEY is empty: the main-push environment is missing its secret" >&2
+            exit 1
+          fi
+          eval "$(ssh-agent -s)" >/dev/null
+          trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
+          ssh-add <(printf '%s\n' "$DISCORD_MAILBOX_PUSH_KEY") >/dev/null
+          # Published GitHub host keys: https://api.github.com/meta
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            'github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=' \
+            > "$RUNNER_TEMP/ratchet-known-hosts"
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/ratchet-known-hosts"
+          base="$(cat "$RUNNER_TEMP/ratchet-data/base.txt")"
+          git init -q "$RUNNER_TEMP/ratchet-repo"
+          git -C "$RUNNER_TEMP/ratchet-repo" config core.autocrlf false
+          git -C "$RUNNER_TEMP/ratchet-repo" remote add origin "git@github.com:${DISCORD_MAILBOX_REPO}.git"
+          git -C "$RUNNER_TEMP/ratchet-repo" fetch --quiet origin main
+          git -C "$RUNNER_TEMP/ratchet-repo" checkout -B push FETCH_HEAD
+          fetched="$(git -C "$RUNNER_TEMP/ratchet-repo" rev-parse HEAD)"
+          drop() {
+            echo '::notice::Main moved under the measurement; the next main push measures again'
+            {
+              echo '### Dropped: main moved while this run measured'
+              echo "$1"
+              echo 'This run is dropped; the next main push measures again.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          # Only a records file may sit between the measured base and main.
+          if [ -n "$(git -C "$RUNNER_TEMP/ratchet-repo" diff --name-only "$base" "$fetched" -- \
+              ':!.github/ci-thresholds.json' ':!.github/perf-budget.json' \
+              ':!.github/comment-share.json' ':!.github/size-baseline.json')" ]; then
+            drop "Non-records changes landed on main between the measured base and its tip."
+          fi
+          # Validate every destination before installing any record. NUL
+          # separators preserve spaces and other shell characters in paths.
+          python - "$RUNNER_TEMP/ratchet-data" "$RUNNER_TEMP/ratchet-repo" > "$RUNNER_TEMP/ratchet-files" <<'PYTHON'
+          import os
+          import sys
+          from pathlib import Path
+          data = Path(sys.argv[1])
+          repo = Path(sys.argv[2]).resolve()
+          for source in sorted(data.rglob('*')):
+              relative = source.relative_to(data)
+              if relative == Path('base.txt') or not source.is_file():
+                  continue
+              if relative.is_absolute() or not (repo / relative).resolve().is_relative_to(repo):
+                  sys.exit(f'unsafe staged path: {relative}')
+              sys.stdout.buffer.write(os.fsencode(relative.as_posix()) + b'\0')
+          PYTHON
+          installed=()
+          while IFS= read -r -d '' relative; do
+            destination="$RUNNER_TEMP/ratchet-repo/$relative"
+            mkdir -p "${destination%/*}"
+            if [ "$fetched" != "$base" ]; then
+              if ! git -C "$RUNNER_TEMP/ratchet-repo" show "$base:$relative" \
+                  > "$RUNNER_TEMP/ratchet-merge-base" 2>/dev/null; then
+                drop "The records at the measured base could not be read for a three-way merge."
+              fi
+              if ! git merge-file "$destination" "$RUNNER_TEMP/ratchet-merge-base" \
+                  "$RUNNER_TEMP/ratchet-data/$relative"; then
+                drop "Records edits made between the base and main conflict with this run's data."
+              fi
+              if ! python -I -m json.tool "$destination" > /dev/null; then
+                drop "The merged records are not valid JSON."
+              fi
+            else
+              cp -- "$RUNNER_TEMP/ratchet-data/$relative" "$destination"
+            fi
+            GIT_LITERAL_PATHSPECS=1 git -C "$RUNNER_TEMP/ratchet-repo" add -- "$relative"
+            installed+=("$relative")
+          done < "$RUNNER_TEMP/ratchet-files"
+          git -C "$RUNNER_TEMP/ratchet-repo" config user.name 'github-actions[bot]'
+          git -C "$RUNNER_TEMP/ratchet-repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ "${#installed[@]}" -eq 0 ] || [ -z "$(GIT_LITERAL_PATHSPECS=1 git -C "$RUNNER_TEMP/ratchet-repo" status --porcelain -- "${installed[@]}")" ]; then
+            echo "No ratchet move is justified by this run: nothing to commit."
+            exit 0
+          fi
+          git -C "$RUNNER_TEMP/ratchet-repo" commit -m 'ci: ratchet CI records'
+          if ! git -C "$RUNNER_TEMP/ratchet-repo" push origin HEAD:main; then
+            git -C "$RUNNER_TEMP/ratchet-repo" fetch --quiet origin main
+            if [ "$(git -C "$RUNNER_TEMP/ratchet-repo" rev-parse HEAD^)" = "$(git -C "$RUNNER_TEMP/ratchet-repo" rev-parse FETCH_HEAD)" ]; then
+              echo "the ratchet push was rejected while main stood still" >&2
+              exit 1
+            fi
+            echo "::notice::Main moved while this run measured; the next push raises instead"
+            {
+              echo "### Dropped: main moved while this run measured"
+              echo "This run's raise is dropped; the next main push raises instead."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

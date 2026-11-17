@@ -520,9 +520,12 @@ python3 -m coverage combine && python3 -m coverage report
 
 Each suite in its own subprocess, because that is what `run_tests.py`
 does — measuring a different execution shape than CI runs would report
-coverage for a program nobody executes. Gated at **48%**, a ratchet
-under the current 50.3%, not a target. Raise it as coverage climbs;
-never lower it to turn a build green.
+coverage for a program nobody executes. Python child processes the
+suites start are measured too (`patch = ["subprocess"]` in
+`pyproject.toml`). The floor is `.github/ci-thresholds.json`: a green
+push to `main` raises it to measured coverage minus the recorded gap
+when that is higher and commits it, and a pull request that lowers it
+fails, so nothing in CI lowers it.
 
 ### CI
 
