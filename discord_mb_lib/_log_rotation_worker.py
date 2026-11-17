@@ -22,7 +22,7 @@ class _RotationWorker:
                 return False
             self._await_rotation_worker()
             over = self._active_bytes + size > self._max_bytes
-        if (not over and self._active_bytes and not self._rotation_stop and
+        if (not over and self._active_bytes and not self._rotation_stop and not self._rotation_failed and
                 self._max_bytes >= self._BACKGROUND_ROTATION_MIN_BYTES and
                 self._active_bytes + size > self._max_bytes - self._BACKGROUND_ROTATION_HEADROOM):
             self._start_rotation_worker(self._active_bytes)
@@ -40,30 +40,49 @@ class _RotationWorker:
         if worker is not None and worker is not threading.current_thread():
             raise AssertionError('connector log staged or adopted beside its rotation worker')
 
+    def _after_fork_in_child(self: Any) -> None:
+        """A forked child: a free lock, and no rotation on a worker."""
+        self._thread_lock = threading.RLock()
+        self._rotation_worker = self._rotation_context = None
+        self._rotation_stop = True
+
     def _run_rotation_worker(self: Any, cut: int) -> None:
-        context = None
         try:
             context = self._prepare_rotation(cut)
-        finally:
-            # No context after a failure: the caller rotates synchronously at the ceiling.
-            self._rotation_context = context
-            self._rotation_staged.set()
+        except BaseException as exc:  # a thread drops what escapes it, SystemExit included
+            context = exc
+        self._rotation_context = context
+        self._rotation_staged.set()
         with self._thread_lock:
             if self._rotation_worker is not threading.current_thread():
                 return  # the caller swapped it
             self._rotation_worker = self._rotation_context = None
-            if self._rotation_stop:
-                self._rollback_rotation(context)
-            else:
-                self._swap_rotation(context)
+            try:
+                if not self._rotation_stop:
+                    self._apply_staged_rotation(context)
+                elif not isinstance(context, BaseException):
+                    self._rollback_rotation(context)
+            except BaseException as exc:
+                self._rotation_error = exc  # the next write raises it
 
     def _await_rotation_worker(self: Any) -> None:
         """Backpressure: wait for the stage, then swap under the lock already held."""
         self._rotation_staged.wait()
         context = self._rotation_context
         self._rotation_worker = self._rotation_context = None
-        if context is not None:
+        self._apply_staged_rotation(context)
+
+    def _apply_staged_rotation(self: Any, context: Any) -> None:
+        """Lock held: swap; a failure drops the handle and makes rotation synchronous."""
+        try:
+            if isinstance(context, BaseException):
+                raise context
             self._swap_rotation(context)
+        except BaseException:
+            fh, self._fh, self._rotation_failed = self._fh, None, True
+            if fh is not None:
+                fh.close()
+            raise
 
     def _prepare_rotation(self: Any, cut: int) -> dict:
         try:
