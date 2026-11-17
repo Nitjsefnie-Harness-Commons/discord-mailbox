@@ -96,7 +96,7 @@ that identity runs.
 
 The connector keeps its gateway state in `<temp>/discord-mailbox/<identity>/connector.state`,
 also mode 0600 on POSIX, as `{"pid": <connector pid>, "state": "<state>"}`:
-`starting` until its first gateway READY, `connected` after each READY or
+`starting` until its first gateway READY or disconnect, `connected` after each READY or
 resume, `disconnected` while it has no gateway session (including while
 discord.py waits to retry), and `reconnecting` once a later session's READY has
 arrived and discord.py's `on_ready` has not run yet. A state whose PID is
