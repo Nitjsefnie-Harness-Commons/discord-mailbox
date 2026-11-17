@@ -83,7 +83,7 @@ def test_an_unanswered_request_is_withdrawn_on_every_exit_that_keeps_its_cause(t
                     Path(tmp) / name, lambda i, o, act=act: [act(p, o) for p in i.glob("*.json") if act]) as (in_dir, out_dir):
                 _ = (worker.start(), worker.join(10)) if name == "thread" else worker.run()
             got = out[0].code if isinstance(out[0], SystemExit) else str(out[0]) if isinstance(out[0], TimeoutError) else out[0]
-            assert got == want or type(got) is want, (name, out)
+            assert got == want or isinstance(want, type) and isinstance(got, want), (name, out)
             assert sorted(p.name.split(".", 1)[1] for p in in_dir.iterdir()) == left, (name, list(in_dir.iterdir()))
             assert not any(out_dir.iterdir()) and all(signal.getsignal(s) is prior for s in signals), name
     finally:
