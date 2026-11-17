@@ -108,6 +108,7 @@
 !/discord_mb_lib/_log_chunks.py
 !/discord_mb_lib/_log_rotation.py
 !/discord_mb_lib/_log_rotation_recovery.py
+!/discord_mb_lib/_log_rotation_worker.py
 !/discord_mb_lib/_meta_claim.py
 !/discord_mb_lib/_pins.py
 !/discord_mb_lib/_prog.py
