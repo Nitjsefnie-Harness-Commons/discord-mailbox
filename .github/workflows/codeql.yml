@@ -87,10 +87,11 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # `security-extended` over the default `security` pack: this code parses
-          # untrusted transcript and config files off disk and builds paths
-          # from their contents, which is what the extra precision-medium
-          # queries are good at.
+          # `security-extended` over the default `security` pack, for both
+          # languages: the Python parses untrusted transcript and config files
+          # off disk and builds paths from their contents, and the workflows
+          # take pull-request input; the extra precision-medium queries cover
+          # both (for actions: code and env injection, untrusted checkout).
           queries: security-extended
 
       - name: Analyze
