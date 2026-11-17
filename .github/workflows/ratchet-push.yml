@@ -117,6 +117,9 @@ jobs:
           while IFS= read -r -d '' relative; do
             destination="$RUNNER_TEMP/ratchet-repo/$relative"
             mkdir -p "${destination%/*}"
+            # Main moved by records only: merge this run's records onto it
+            # three ways, and drop the run when the base is unreadable, the
+            # merge conflicts or the result is not JSON.
             if [ "$fetched" != "$base" ]; then
               if ! git -C "$RUNNER_TEMP/ratchet-repo" show "$base:$relative" \
                   > "$RUNNER_TEMP/ratchet-merge-base" 2>/dev/null; then
@@ -141,6 +144,8 @@ jobs:
             echo "No ratchet move is justified by this run: nothing to commit."
             exit 0
           fi
+          # Commit and push. A refused push drops the raise when main moved
+          # meanwhile and fails the run when main stood still.
           git -C "$RUNNER_TEMP/ratchet-repo" commit -m 'ci: ratchet CI records'
           if ! git -C "$RUNNER_TEMP/ratchet-repo" push origin HEAD:main; then
             git -C "$RUNNER_TEMP/ratchet-repo" fetch --quiet origin main

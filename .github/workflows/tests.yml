@@ -254,9 +254,10 @@ jobs:
       - name: Coverage gate
         if: ${{ !cancelled() && steps.measure.conclusion == 'success' }}
         # The floor is .github/ci-thresholds.json. A green push to main stages
-        # measured coverage minus its gap when that is higher; ratchet-push.yml
-        # commits it, or drops it when main moved under the measurement and
-        # the next main push measures again. A pull request fails when it
+        # measured coverage minus its gap when that is higher, and the floor
+        # rises through .github/workflows/ratchet-push.yml, which commits the
+        # raise when this run's records still merge onto main and otherwise
+        # leaves it to the next main push. A pull request fails when it
         # lowers the floor or widens the gap.
         run: |
           base=()
