@@ -8,6 +8,7 @@ are intentionally separate concerns and are covered by their existing code.
 # pylint: disable=subprocess-run-check
 # Every subprocess.run below is a probe whose exit status is the
 # assertion; check=True would raise before the test could read it.
+import base64
 import os
 import sys
 import contextlib
@@ -15,6 +16,7 @@ import hashlib
 import io
 import json
 import subprocess
+import threading
 import types
 from pathlib import Path
 from unittest import mock
@@ -475,8 +477,7 @@ def test_connector_log_numeric_backups_require_canonical_positive_suffixes(tmp):
     retained.write_bytes(b"RETAINED\n")
     oversized.write_bytes(b"REMOVE\n")
 
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
+    m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
 
     assert suffix_zero.read_bytes() == b"ZERO\n"
     assert suffix_padded.read_bytes() == b"PADDED\n"
@@ -514,8 +515,7 @@ def test_connector_log_migration_packs_the_full_bounded_window(tmp):
     # Windows, and the assertions below compare exact bytes.
     path.write_bytes("".join(lines).encode("utf-8"))
 
-    writer = m._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-    writer.close()
+    m._ConnectorLogWriter(path, max_bytes=16, backup_count=2).close()
 
     files = [path.with_name(f"packed.log.{i}") for i in (2, 1)] + [path]
     assert "".join(p.read_text(encoding="utf-8") for p in files) == "".join(lines)
@@ -690,6 +690,117 @@ if mode == "count":
     assert path.with_name("rotation.log.1").read_bytes() == old_active
     assert path.with_name("rotation.log.2").read_bytes() == old_backup
     assert _hidden(case) == []
+
+
+def test_connector_log_background_rotation_recovers_at_every_step(tmp):
+    """A background rotation killed at each step restarts to one ordered window holding every completed write."""
+    child = r'''
+step, W, real_replace, real_write, active = sys.argv[3], mod._ConnectorLogWriter, os.replace, os.write, None
+W._BACKGROUND_ROTATION_MIN_BYTES, W._BACKGROUND_ROTATION_HEADROOM = 0, 1024
+real_manifest, real_stage, real_adopt = W._write_migration_manifest, W._stage_rotation_copy, W._adopt_rotated_identities
+def at(name, result=None):
+    return os._exit(190) if step == name else result
+W._write_migration_manifest = lambda self, m, kind="migrate", create=False: at(kind == "rotate" and (
+    "after-create" if create else "after-prepared" if m["state"] == "prepared" else ""), real_manifest(self, m, kind, create=create))
+W._stage_rotation_copy = lambda self, *args: at("after-stage", real_stage(self, *args))
+W._adopt_rotated_identities = lambda self, *args: at("after-rewrite") or real_adopt(self, *args)
+os.replace = lambda source, destination, **kwargs: at({"c.log.3": "after-rename-1", "c.log.2": "after-rename-2", "c.log.1": "after-stage-publish"}.get(
+    os.path.basename(destination)), real_replace(source, destination, **kwargs))
+os.write = lambda fd, data: at("after-truncate" if os.fstat(fd).st_ino == active else "") or real_write(fd, data)
+writer = W(sys.argv[2], max_bytes=4096, backup_count=3)
+active = os.stat(sys.argv[2]).st_ino
+for n in range(240, 440):
+    writer.write(f"{n:05d}".ljust(49, "."))
+    print(n, flush=True)
+'''
+    lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
+    lines = [f"{n:05d}".ljust(49, ".").encode() + b"\n" for n in range(450)]
+    # A forged tail refuses before recovery goes on; appended lines model a finish outside the lock.
+    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prepared", ""), ("after-prepared", "digest"),
+                        ("after-prepared", "length"), ("after-prepared", "version"), ("after-rename-1", ""), ("after-rename-2", ""), ("after-stage-publish", ""),
+                        ("after-truncate", ""), ("after-rewrite", ""), ("after-rewrite", "appended")):
+        case = Path(tmp) / f"{step}-{extra}"
+        case.mkdir()
+        slots = [case / name for name in ("c.log.3", "c.log.2", "c.log.1", "c.log")]
+        for index, slot in enumerate(slots):
+            slot.write_bytes(b"".join(lines[60 * index:60 * index + 60]))
+        done = int(_run_child(child, slots[-1], step, code=190, text=True).stdout.split()[-1])
+        if extra == "appended":
+            done = int(slots[-1].read_bytes().splitlines()[-1][:5]) + 3
+            slots[-1].write_bytes(slots[-1].read_bytes() + b"".join(lines[done - 2:done + 1]))
+        elif extra:
+            journal = next(lock_root.glob("*.rotate.json"))
+            saved, tail = journal.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
+            record = json.loads(saved.splitlines()[-1])
+            # Each forgery fails one check alone: the real tail in a version 4 record or under a wrong digest,
+            # or a tail the active begins with that is longer than max_bytes.
+            if extra == "version":
+                record["version"] = 4
+            elif extra == "digest":
+                record["destinations"][-1]["tail_sha256"] = "0" * 64
+            else:
+                record["destinations"][-1].update(tail=base64.b64encode(tail).decode(), tail_sha256=hashlib.sha256(tail).hexdigest())
+            journal.write_bytes(saved + json.dumps(record).encode() + b"\n")
+            with _refuses(f"recovery accepted a rotation tail failing its {extra} check"):
+                _restart(slots[-1], 4096, 3)
+            journal.write_bytes(saved)
+        _restart(slots[-1], 4096, 3)
+        window = [int(line[:5]) for slot in slots if slot.exists() for line in slot.read_bytes().splitlines()]
+        assert window == list(range(window[0], window[0] + len(window))) and window[-1] >= done, (step, window, done)
+        with contextlib.closing(_mod()._ConnectorLogWriter(slots[-1], max_bytes=4096, backup_count=3)) as writer:
+            writer.write(lines[window[-1] + 1].decode()[:-1])
+        assert slots[-1].read_bytes().endswith(lines[window[-1] + 1]) and all(
+            slot.stat().st_size <= 4096 for slot in slots if slot.exists()), step
+        assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.json")), (step, _hidden(case))
+
+
+def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
+    """Lines appended while the worker copies the prefix keep their order under the ceiling; close() joins the worker."""
+    m, errors, waits = _mod(), [], []
+    W, path = m._ConnectorLogWriter, Path(tmp) / "bg" / "bg.log"
+    path.parent.mkdir()
+    slots = [path.with_name("bg.log.2"), path.with_name("bg.log.1"), path]
+    lines = [f"{n:04d}".ljust(31, "-").encode() + b"\n" for n in range(49)]
+    cut = next(32 * n for n in range(40) if 32 * n + 32 > 1024 - 256)
+    appended, held = threading.Event(), threading.Event()
+    real_read, real_stage, real_await = W._read_rotation_prefix, W._stage_rotation_copy, W._await_rotation_worker
+    # A worker reads the prefix once lines past the cut are in the file, and stages it at the caller's backpressure.
+
+    def worker_waits(event):  # the caller never waits, so a mutant rotating synchronously fails instead of hanging
+        return threading.current_thread() is threading.main_thread() or event.wait()
+    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=1024, _BACKGROUND_ROTATION_HEADROOM=256,
+                  _read_rotation_prefix=lambda self, *args: worker_waits(appended) and real_read(self, *args),
+                  _stage_rotation_copy=lambda self, *args: worker_waits(held) and real_stage(self, *args),
+                  _await_rotation_worker=lambda self: waits.append(self._active_bytes) or held.set() or real_await(self)), \
+            _patched(threading, excepthook=lambda args: errors.append(args.exc_value)):
+        writer = W(path, max_bytes=1024, backup_count=2)
+        try:
+            for index, line in enumerate(lines):
+                if index == 40:
+                    assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == b"".join(lines[:40])
+                    assert slots[1].read_bytes() == b"".join(lines[:cut // 32]) and len(waits) == 1, waits
+                    held.clear()
+                writer.write(line.decode()[:-1])
+                if path.stat().st_size > cut:
+                    appended.set()
+                assert all(slot.stat().st_size <= 1024 for slot in slots if slot.exists()), index
+            worker = writer._rotation_worker
+            real_join, worker.join = worker.join, lambda *args: held.set() or real_join(*args)
+            writer.close()
+            assert errors == [] and not worker.is_alive(), errors
+            assert slots[1].read_bytes() == b"".join(lines[:cut // 32]) and path.read_bytes() == b"".join(lines[cut // 32:])
+            assert _hidden(path.parent) == [] and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.json"))
+            writer._rotation_worker = threading.Thread(target=print)
+            for call in (lambda: writer._write_migration_temp(b"x", None), lambda: writer._adopt_rotated_identities({})):
+                with _refuses("the caller staged or adopted beside a running worker", AssertionError):
+                    call()
+            with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=1025), contextlib.closing(W(path.with_name("sync.log"), max_bytes=1024)) as small:
+                for line in lines[:30]:  # past the threshold, but below the minimum limit
+                    small.write(line.decode()[:-1])
+                    assert small._rotation_worker is None
+        finally:
+            appended.set()
+            held.set()
 
 
 def test_connector_log_migration_crash_loop_has_bounded_hidden_artifacts(tmp):
@@ -929,8 +1040,7 @@ def test_connector_log_preserves_symlink_target_and_bounded_metadata(tmp):
     before = target.stat()
     alias.symlink_to(target)
 
-    writer = m._ConnectorLogWriter(alias, max_bytes=128, backup_count=2)
-    writer.close()
+    m._ConnectorLogWriter(alias, max_bytes=128, backup_count=2).close()
 
     after = target.stat()
     assert alias.is_symlink()
@@ -998,8 +1108,7 @@ def test_connector_log_hardlink_alias_stays_bounded_during_migration(tmp):
     alias = Path(tmp) / "inode-migration-alias.log"
     target.write_bytes(("historical status\n" * 20).encode("utf-8"))
     os.link(target, alias)
-    writer = m._ConnectorLogWriter(target, max_bytes=32, backup_count=1)
-    writer.close()
+    m._ConnectorLogWriter(target, max_bytes=32, backup_count=1).close()
     assert target.stat().st_ino == alias.stat().st_ino
     assert target.stat().st_size <= 32
     assert alias.stat().st_size <= 32
@@ -1317,8 +1426,7 @@ def test_connector_log_malformed_history_is_bounded_with_replacement(tmp):
     path = Path(tmp) / "malformed.log"
     original = b"good\n\xff\xfe\xfd\n" * 5
     path.write_bytes(original)
-    writer = m._ConnectorLogWriter(path, max_bytes=8, backup_count=2)
-    writer.close()
+    m._ConnectorLogWriter(path, max_bytes=8, backup_count=2).close()
     files = [path.with_name("malformed.log.2"),
              path.with_name("malformed.log.1"), path]
     assert all(p.stat().st_size <= 8 for p in files if p.exists())
@@ -1348,8 +1456,7 @@ def test_connector_log_count_decrease_removes_old_backups(tmp):
     path.with_name("decrease.log.1").write_text("one\n", encoding="utf-8")
     path.with_name("decrease.log.2").write_text("two\n", encoding="utf-8")
     path.with_name("decrease.log.3").write_text("three\n", encoding="utf-8")
-    writer = m._ConnectorLogWriter(path, max_bytes=10, backup_count=1)
-    writer.close()
+    m._ConnectorLogWriter(path, max_bytes=10, backup_count=1).close()
     assert not path.with_name("decrease.log.2").exists()
     assert not path.with_name("decrease.log.3").exists()
     assert path.with_name("decrease.log.1").read_text(encoding="utf-8") == "one\n"
@@ -1732,8 +1839,7 @@ def test_connector_log_exact_temp_collision_is_never_adopted_or_deleted(tmp):
                 except (FileExistsError, RuntimeError):
                     pass
 
-        restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        restarted.close()
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
         assert collision.read_bytes() == b"KEEP-ME-COLLISION"
 
 
@@ -2320,8 +2426,7 @@ def test_connector_log_preserves_forged_journal_staging_file(tmp):
         "log_name": path.name,
     }), encoding="utf-8")
 
-    restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    restarted.close()
+    m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
     assert staging.read_text(encoding="utf-8")
 
 
@@ -2369,8 +2474,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
         return payload
     m._ConnectorLogWriter._read_staged_payload = validate_then_replace
     try:
-        restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        restarted.close()
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
     finally:
         m._ConnectorLogWriter._read_staged_payload = real_read
     assert swapped["done"]
@@ -2445,9 +2549,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
     assert any(not item.read_bytes().endswith(b"\n") for item in partials)
     assert len(partials) <= 1, [item.name for item in partials]
 
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-    writer.close()
+    _restart(path, 16, 2)
     assert not list(case.glob(".loop.log.migrate-*.tmp"))
 
 
@@ -2486,9 +2588,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
     for _ in range(5):
         _run_child(child, path, lock_root, code=179)
 
-        restarted = _mod()._ConnectorLogWriter(
-            path, max_bytes=16, backup_count=2, lock_root=lock_root)
-        restarted.close()
+        _restart(path, 16, 2, lock_root=lock_root)
         path.write_bytes(original)
 
     leftovers = sorted(case.glob(".loop.log.migrate-*.tmp"))
@@ -2643,9 +2743,7 @@ writer.write("x")
     assert deleted["publish_state"] == "publishing"
     assert deleted["publish_identity"] is not None
 
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-    writer.close()
+    _restart(path, 32, 2)
     assert not stale.exists()
     assert path.with_name("sparse.log.1").read_bytes() == b"A" * 31
     assert path.read_bytes() == b""
@@ -3659,9 +3757,7 @@ if kind == "rotate":
                 restarted.close()
             assert len((lock_root / journal_name).read_bytes()) == 32
         elif kind == "migrate":
-            restarted = _mod()._ConnectorLogWriter(
-                path, max_bytes=16, backup_count=1, lock_root=lock_root)
-            restarted.close()
+            _restart(path, 16, 1, lock_root=lock_root)
         else:
             restarted = _mod()._ConnectorLogWriter(
                 path, max_bytes=32, backup_count=1, lock_root=lock_root)
@@ -3927,9 +4023,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
     _run_child(child, path, lock_root, code=184)
 
     for _ in range(4):
-        restarted = _mod()._ConnectorLogWriter(
-            path, max_bytes=16, backup_count=2, lock_root=lock_root)
-        restarted.close()
+        _restart(path, 16, 2, lock_root=lock_root)
         slots = [path.with_name("migration.log.2"),
                  path.with_name("migration.log.1"), path]
         assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
@@ -4174,8 +4268,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
     Path.read_bytes = reject_legacy_whole_read
     m._ConnectorLogWriter._recover_migration = recover_then_disarm
     try:
-        restarted = m._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-        restarted.close()
+        m._ConnectorLogWriter(path, max_bytes=16, backup_count=2).close()
     finally:
         Path.read_bytes = original_read_bytes
         m._ConnectorLogWriter._recover_migration = original_recover

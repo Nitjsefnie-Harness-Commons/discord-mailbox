@@ -1,6 +1,7 @@
 """Recovery of an interrupted connector log rotation from its journal."""
 # The writer in storage.py supplies every attribute these methods use.
 # pylint: disable=no-member,attribute-defined-outside-init
+import base64
 import os
 import stat
 import uuid
@@ -90,7 +91,8 @@ class _RotationRecovery:
     def _rotation_entries(self: Any, manifest: dict, root: Path,
                           log_name: str) -> list[dict[str, Any]]:
         """Read journal slots as entries; a v3 journal's active is a rewrite with an empty tail."""
-        backup_count, v4 = int(manifest['backup_count']), int(manifest['version']) >= 4
+        backup_count, version = int(manifest['backup_count']), int(manifest['version'])
+        v4, v5 = version >= 4, version >= 5
         if not isinstance(manifest['destinations'], list) or backup_count < 0:
             raise ValueError('connector log journal has invalid rotation slots')
         slot_names = {log_name, *(f'{log_name}.{index}'
@@ -103,7 +105,7 @@ class _RotationRecovery:
             method = item['method'] if v4 else (
                 'rewrite' if item.get('in_place') else 'stage' if item['present'] else 'unlink')
             entry: dict[str, Any] = {
-                'destination': destination, 'method': method, 'v4': v4,
+                'destination': destination, 'method': method, 'v4': v4, 'v5': v5,
                 'before': self._journal_pair(item, 'before'),
                 'marked': bool(item.get('publish_state')),
                 'temporary': None, 'staged': _ABSENT, 'post': _ABSENT,
@@ -112,11 +114,15 @@ class _RotationRecovery:
                             'expected_nonce': manifest.get('transaction_nonce'),
                             'expected_staging': manifest.get('staging')}}
             if method == 'rewrite':
-                if v4 and item['tail']:
+                tail = base64.b64decode(item['tail'], validate=True) if v4 else b''
+                if tail and not v5:
                     raise ValueError('connector log journal has an unsupported rotation tail')
+                if (len(tail) > self._max_bytes or
+                        v5 and self._sha256_bytes(tail) != item['tail_sha256']):
+                    raise ValueError('connector log journal has a damaged rotation tail')
                 entry.update(cut=int(item['cut' if v4 else 'before_size']),
                              prefix_sha256=str(item['prefix_sha256' if v4 else 'before_sha256']),
-                             tail=b'', size=0, sha256=self._sha256_bytes(b''))
+                             tail=tail, size=0, sha256=self._sha256_bytes(b''))
             elif method == 'stage':
                 entry.update(size=int(item['size']), sha256=str(item['sha256']))
             elif method == 'rename':
@@ -195,16 +201,21 @@ class _RotationRecovery:
                 holds_prefix = holder is None or (
                     holder[1] in ('complete', 'publish') and
                     holder[0].get('sha256') == entry['prefix_sha256'])
+                whole = (data[cut:] == tail and len(data) == cut + len(tail) and
+                         self._sha256_bytes(data[:cut]) == entry['prefix_sha256'] and
+                         holds_prefix)
                 if data == tail:
                     outcome = 'complete'
-                elif (data[cut:] == tail and len(data) == cut + len(tail) and
-                      self._sha256_bytes(data[:cut]) == entry['prefix_sha256'] and
-                      holds_prefix):
+                elif whole or (entry['v5'] and holds_prefix and tail.startswith(data)):
+                    # Or a crash inside the tail's in-place write.
                     if temporary is not None and not staged_temp:
                         raise RuntimeError(
                             f'connector log rotation is incomplete: '
                             f'{destination.name} has no staged replacement')
                     outcome = 'rewrite'
+                elif entry['v5'] and data.startswith(tail):
+                    # The tail, then later appends: checked after prefix plus tail, which may begin with the tail.
+                    outcome = 'complete'
                 elif holder is not None and holder[1] == 'absent':
                     # The only copy of the active's bytes is the active itself.
                     outcome = 'keep'
@@ -256,7 +267,7 @@ class _RotationRecovery:
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
             elif outcome == 'rewrite' and temporary is None:
-                self._publish_in_place(destination, None, *entry['before'])
+                self._publish_in_place(destination, None, *entry['before'], entry['tail'])
             elif outcome == 'rewrite':
                 self._validate_and_remember_staged(
                     temporary, expected_size=entry['size'],
