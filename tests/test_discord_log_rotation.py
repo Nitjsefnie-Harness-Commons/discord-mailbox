@@ -2906,7 +2906,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
                 return plan
             with _patched(m._ConnectorLogWriter, _classify_rotation=classify), _refuses("recovery dropped a foreign symlink"):
                 m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-            assert os.readlink(path.with_name("shared.log.2")) == str(path.with_name("other"))
+            assert Path(os.readlink(path.with_name("shared.log.2"))).name == "other"  # Windows may add a \\?\ prefix
             continue
         with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)) as writer:
             writer.write("x")
