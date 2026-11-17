@@ -333,24 +333,14 @@ def test_connector_log_bounded_window_check_streams_instead_of_reading_whole_fil
 
 
 def test_connector_log_bounded_window_check_rejects_malformed_utf8(tmp):
-    """A bounded but malformed file still goes through UTF-8-safe migration."""
+    """A bounded but malformed file, or one ending mid-sequence though each block decodes, is migrated UTF-8-safe."""
     m = _mod()
-    path = Path(tmp) / "malformed-window.log"
-    path.write_bytes(b"good\n\xff\xfe bad\n")
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
-    assert b"\xff\xfe" not in path.read_bytes()
-    path.read_bytes().decode("utf-8")
-
-
-def test_connector_log_bounded_window_check_rejects_truncated_utf8_tail(tmp):
-    """A file ending mid-sequence is malformed even though each block decodes."""
-    m = _mod()
-    path = Path(tmp) / "truncated-window.log"
-    path.write_bytes("ok\n".encode("utf-8") + "é".encode("utf-8")[:1])
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
-    path.read_bytes().decode("utf-8")
+    for name, data in (("malformed", b"good\n\xff\xfe bad\n"), ("truncated", "ok\n".encode("utf-8") + "é".encode("utf-8")[:1])):
+        path = Path(tmp) / f"{name}-window.log"
+        path.write_bytes(data)
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
+        assert b"\xff\xfe" not in path.read_bytes(), name
+        path.read_bytes().decode("utf-8")
 
 
 def test_connector_log_in_place_publish_requires_a_verified_staged_payload(tmp):
@@ -2842,50 +2832,20 @@ def test_connector_log_hardlinked_backup_replacement_preserves_external_inode(tm
     assert path.with_name("backup-chronology.log.2").read_bytes() == b"BACKUP-ONE\n"
 
 
-def test_connector_log_preserves_unrelated_migration_notes(tmp):
-    """Startup cleanup does not delete a user-owned migrate-notes file."""
+def test_connector_log_preserves_user_notes_and_temps_with_embedded_tokens(tmp):
+    """Startup cleanup deletes no user-owned notes file, even a temp whose name merely contains our token."""
     m = _mod()
     path = Path(tmp) / "custom.log"
-    path.write_text("bounded\n", encoding="utf-8")
-    note = path.with_name(".custom.log.migrate-notes")
-    note.write_text("keep me", encoding="utf-8")
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
-    assert note.read_text(encoding="utf-8") == "keep me"
-
-
-def test_connector_log_preserves_user_temp_with_embedded_migration_token(tmp):
-    """Cleanup cannot delete a user temp whose name merely contains our token."""
-    m = _mod()
-    path = Path(tmp) / "custom.log"
+    path.write_bytes(b"bounded\n")
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
     digest = writer._identity_digest
     writer.close()
-
-    note = path.with_name(
-        f".{path.name}.user-notes.migrate-{digest}-42.tmp")
-    note.write_text("KEEP-ME", encoding="utf-8")
-
-    restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    restarted.close()
-    assert note.read_text(encoding="utf-8") == "KEEP-ME"
-
-
-def test_connector_log_preserves_user_temp_with_embedded_rotation_token(tmp):
-    """Rotation recovery cannot delete a user temp with an embedded token."""
-    m = _mod()
-    path = Path(tmp) / "custom.log"
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    digest = writer._identity_digest
-    writer.close()
-
-    note = path.with_name(
-        f".{path.name}.user-notes.rotate-{digest}-42.tmp")
-    note.write_text("KEEP-ME", encoding="utf-8")
-
-    restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    restarted.close()
-    assert note.read_text(encoding="utf-8") == "KEEP-ME"
+    notes = [path.with_name(f".{path.name}.{name}") for name in
+             ("migrate-notes", f"user-notes.migrate-{digest}-42.tmp", f"user-notes.rotate-{digest}-42.tmp")]
+    for note in notes:
+        note.write_bytes(b"KEEP-ME")
+    m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
+    assert [note.read_bytes() for note in notes] == [b"KEEP-ME"] * 3
 
 
 def test_connector_log_ownership_excludes_a_second_process(tmp):
