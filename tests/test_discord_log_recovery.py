@@ -378,8 +378,11 @@ def test_a_slot_swapped_after_the_rotation_journal_is_prepared_is_never_moved(tm
 def test_a_version_3_journal_left_by_the_previous_release_recovers_or_refuses(tmp):
     """That release's journal, crashed at .1's replace, finishes; without the active's staged temp it refuses."""
     m = _mod()
-    sha, ident, nonce = m._ConnectorLogWriter._sha256_bytes, lambda p: list(m._ConnectorOwnership._identity_for(p)), "7a" * 16
+    sha, nonce = m._ConnectorLogWriter._sha256_bytes, "7a" * 16
     active, backup = b"A" * 20 + b"\n", b"B" * 10 + b"\n"
+
+    def ident(path):
+        return list(m._ConnectorOwnership._identity_for(path))
     for drop in (False, True):
         path = Path(tmp) / f"v3-{drop}" / "c.log"
         path.parent.mkdir()
