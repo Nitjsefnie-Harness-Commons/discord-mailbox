@@ -4,9 +4,9 @@ import contextlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
-from . import _control_files
+from . import _control_files, _gateway_state
 
 _INTERRUPTED = ('interrupted: the connector stopped while running this request; its outcome is '
                 'unknown (it may or may not have taken effect), so check before retrying')
@@ -78,7 +78,8 @@ def _take_response(response: Path) -> Any:
     return data
 
 
-def _withdraw(request: Path, response: Path, timeout: float, identity: Any) -> Any:
+def _withdraw(request: Path, response: Path, timeout: float, identity: Any,
+              pid_alive: Callable[[Any], bool], is_connector_process: Callable[[Any, Any], bool | None]) -> Any:
     try:
         request.unlink()
     except FileNotFoundError:
@@ -90,4 +91,8 @@ def _withdraw(request: Path, response: Path, timeout: float, identity: Any) -> A
             f'connector writes goes to {response}, which the connector removes once it is 15 minutes old') from None
     except OSError:
         pass
-    raise TimeoutError(f'connector did not respond within {timeout}s (is it running for {identity!r}?)')
+    state_dir = response.parent.parent
+    state = _gateway_state.current(state_dir, identity, pid_alive, is_connector_process)
+    if state is None:
+        raise TimeoutError(f'connector did not respond within {timeout}s (is it running for {identity!r}?)')
+    raise TimeoutError(f'connector did not respond within {timeout}s (it is running for {identity!r}, gateway state {state!r})')

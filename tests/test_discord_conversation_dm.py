@@ -147,8 +147,9 @@ def _run(c, discord, tmp, world, requests):
             self.guilds = [guild]
             self.loop = types.SimpleNamespace(create_task=self.tasks.append)
 
-        def event(self, function):
+        def event(self, function):    # discord.Client.event binds the attribute a wrapper chains
             self.handlers[function.__name__] = function
+            setattr(self, function.__name__, function)
             return function
 
         def is_closed(self):
