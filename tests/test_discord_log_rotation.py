@@ -2683,6 +2683,50 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x")
     assert _hidden(case) == []
 
 
+def test_connector_log_anonymous_rotation_stage_crashes_leave_no_temp_of_ours(tmp):
+    """A crash after the link, or around a refused link's portable retry, leaves no temp; a rebound name stays."""
+    if not _mod()._anonymous_publication_available():
+        _util.skip("these crash points are on the anonymous staging path")
+    # The refused link keeps a dup of its inode open, so the retry's create cannot reuse its number.
+    child = r'''
+import errno, pathlib
+mode, real_link, real_open, real_stage, kept = sys.argv[3], mod._ConnectorLogWriter._link_anonymous_fd, os.open, mod._ConnectorLogWriter._write_migration_temp, []
+def link(fd, name):
+    if ".rotate-" in str(name) and mode in ("create", "staged"):
+        kept.append(os.dup(fd))
+        raise OSError(errno.EPERM, "no flink")
+    real_link(fd, name)
+    if ".rotate-" in str(name) and mode == "rebind":
+        pathlib.Path(str(name) + ".f").write_bytes(b"FOREIGN\n")
+        os.replace(str(name) + ".f", name)
+    elif ".rotate-" in str(name):
+        os._exit(178)
+def open_then_crash(name, flags, *args):
+    fd = real_open(name, flags, *args)
+    if mode == "create" and flags & os.O_EXCL and ".rotate-" in str(name):
+        os._exit(178)
+    return fd
+def stage_then_crash(self, *args, **kwargs):
+    staged = real_stage(self, *args, **kwargs)
+    if mode == "staged":
+        os._exit(178)
+    return staged
+mod._ConnectorLogWriter._link_anonymous_fd = staticmethod(link)
+mod._ConnectorLogWriter._write_migration_temp = stage_then_crash
+os.open = open_then_crash
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x")
+'''
+    for mode, code, left in (("link", 178, []), ("staged", 178, []), ("create", 178, []), ("rebind", 1, [b"FOREIGN\n"])):
+        case = Path(tmp) / mode
+        case.mkdir()
+        path = case / "a.log"
+        path.write_bytes(b"A" * 31)
+        _run_child(child, path, mode, code=code)
+        _restart(path, 32, 1)
+        assert path.read_bytes() == b"A" * 31, mode
+        assert [(case / name).read_bytes() for name in _hidden(case)] == left, (mode, _hidden(case))
+
+
 def test_connector_log_rotation_recovers_completed_sparse_backup_deletion(tmp):
     """A journaled deletion that already completed is safe to resume."""
     m = _mod()
@@ -4259,8 +4303,8 @@ if "{kind}" == "rotate":
 def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
     """A staged name the writer cannot prove it wrote survives cleanup: a bad MAC, or a new inode."""
     m = _mod()
-    for kind in ("migrate", "rotate"):
-        case = Path(tmp) / f"forged-envelope-{kind}"
+    for kind, forged in (("migrate", None), ("rotate", b"FOREIGN-AT-CLAIMED-NAME\n"), ("rotate", b"")):
+        case = Path(tmp) / f"forged-envelope-{kind}-{len(forged or b'')}"
         case.mkdir()
         path = case / "forged.log"
         if kind == "migrate":
@@ -4279,9 +4323,8 @@ def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
         manifest = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
         staged = Path(manifest["planned_temporaries"][0])
         if kind == "rotate":
-            # The journal claimed the staged inode; foreign bytes on a new inode at its name stay.
+            # The journal claimed the staged inode; a new inode at its name stays, even an empty one.
             assert str(staged) in manifest["created_temporaries"], manifest
-            forged = b"FOREIGN-AT-CLAIMED-NAME\n"
             _rebind(staged, forged)
         else:
             header, payload = staged.read_bytes().split(b"\n", 1)
