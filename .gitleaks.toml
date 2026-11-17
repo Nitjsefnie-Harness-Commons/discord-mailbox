@@ -1,0 +1,3 @@
+# Keeps gitleaks's default rules as the gate; this file only extends them.
+[extend]
+useDefault = true

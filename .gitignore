@@ -29,6 +29,7 @@
 
 # ─── root ───
 !/.gitignore
+!/.gitleaks.toml
 !/.pylintrc
 !/CONTRIBUTING.md
 !/LICENSE
@@ -66,6 +67,7 @@
 !/.github/workflows/release.yml
 !/.github/workflows/requirements-runtime.in
 !/.github/workflows/requirements-runtime.txt
+!/.github/workflows/secrets.yml
 !/.github/workflows/size-baseline.yml
 !/.github/workflows/tag.yml
 !/.github/workflows/tests.yml
