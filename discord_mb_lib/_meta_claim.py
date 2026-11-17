@@ -1,16 +1,54 @@
 """A meta request is claimed by the connector or withdrawn by the CLI, never both."""
+import asyncio
 import contextlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Iterator
+
+from . import _control_files
+
+_INTERRUPTED = ('interrupted: the connector stopped while running this request; its outcome is '
+                'unknown (it may or may not have taken effect), so check before retrying')
 
 
 class MetaRequestPending(Exception):
     'Claimed by the connector, not answered yet: not a failure.'
 
 
+def _answer(claimed: Path, out_dir: Path, error: str) -> None:
+    response = out_dir / claimed.name.removesuffix('.claimed')
+    if not response.exists():
+        _control_files.write_private(response, json.dumps({'ok': False, 'error': error}, indent=2))
+
+
+def _overdue(claimed: Path) -> str | None:
+    'The expiry error, or None when the request is within its wait or lacks the fields.'
+    try:
+        req = json.loads(claimed.read_text(encoding='utf-8'))
+        created, wait = req['created'], req['timeout']
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in (created, wait)):
+        return None
+    # The CLI withdraws at its deadline, so an answer due then reaches nobody.
+    age = time.time() - created
+    return f'expired: the request is {age:.0f}s old and its caller waits {wait}s, so it was not run' if age >= wait else None
+
+
+def recover_control_files(in_dir: Path, out_dir: Path) -> None:
+    'Answer each claim a dead connector left as interrupted, then sweep stale responses.'
+    for claimed in sorted(in_dir.glob('*.json.claimed')):
+        try:
+            _answer(claimed, out_dir, _INTERRUPTED)
+            claimed.unlink(missing_ok=True)
+        except OSError:
+            continue
+    _control_files.sweep_stale_responses(out_dir)
+
+
 @contextlib.contextmanager
-def _claim(request: Path) -> Iterator[Path | None]:
+def _claim(request: Path, out_dir: Path) -> Iterator[Path | None]:
     # Out of the connector's *.json scan.
     claimed = request.with_name(request.name + '.claimed')
     try:
@@ -19,7 +57,14 @@ def _claim(request: Path) -> Iterator[Path | None]:
         yield None
         return
     try:
-        yield claimed
+        expired = _overdue(claimed)
+        if expired:
+            _answer(claimed, out_dir, expired)
+        yield None if expired else claimed
+    except asyncio.CancelledError:
+        with contextlib.suppress(OSError):    # a failed write must not replace the cancellation
+            _answer(claimed, out_dir, _INTERRUPTED)
+        raise
     finally:
         claimed.unlink(missing_ok=True)
 

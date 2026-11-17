@@ -19,7 +19,7 @@ from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._send_errors import _send_failure, _send_nonce
 from . import _linked
-from ._meta_claim import _claim
+from . import _meta_claim
 from . import _control_files
 from . import _ext_trust
 from . import _retention
@@ -367,7 +367,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         except OSError as e:
             log(f'event stream unavailable ({e}) — leeches will see no stream')
         try:
-            _control_files.sweep_stale_responses(meta_out_dir(identity))
+            _meta_claim.recover_control_files(meta_in_dir(identity), meta_out_dir(identity))
         except Exception as e:
             log(f'control-response startup sweep failed: {type(e).__name__}: {e}')
 
@@ -465,7 +465,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             try:
                 _control_files.sweep_stale_responses(out_dir)
                 for f in sorted(in_dir.glob('*.json')):
-                    with _claim(f) as claimed:
+                    with _meta_claim._claim(f, out_dir) as claimed:
                         if claimed:
                             await dispatch_meta_file(claimed, out_dir)
             except Exception as e:
@@ -2847,10 +2847,10 @@ __all__ = [
     '_DeliveryGates',
     '_Directory',
     '_attachments',
-    '_claim',
     '_claim_ownership',
     '_ext_trust',
     '_linked',
+    '_meta_claim',
     '_open_dm_channel',
     '_recorded_owner',
     '_resolve_dm_user_id',
