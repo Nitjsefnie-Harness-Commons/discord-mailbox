@@ -103,6 +103,12 @@ def test_a_hard_split_lands_on_the_last_cluster_boundary_in_the_window(tmp):
     assert [len(c) for c in MB.chunk_body(chr(9) * 2 + chr(0x301) * 3000, 2000)] == [2000, 1002]
     for ws in (chr(9), chr(0x3000), ' ', chr(10)):   # a window of whitespace is no chunk: the text after it survives and a blank body has none
         assert MB.chunk_body(ws * 5000, 2000) == [] and [c.strip() for c in MB.chunk_body(ws * 2001 + 'x', 2000)] == ['x'], ws
+    for limit, body in ((0, ''), (0, 'abc'), (-3, 'abc')):   # a limit that holds no character is an error, never a hang
+        try:
+            MB.chunk_body(body, limit)
+        except ValueError:
+            continue
+        raise AssertionError((body, limit))
     for lead in (0x600, 9, 0x200D):   # a first cut inside a cluster leaves the later cuts between flags
         chunks = MB.chunk_body(chr(lead) * 1899 + chr(0x1F1E8) * 6000, 1900)
         assert all(sum(map(len, chunks[:k])) % 2 for k in range(2, len(chunks))), (lead, [len(c) for c in chunks])

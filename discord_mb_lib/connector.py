@@ -1990,8 +1990,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         dm_mode = isinstance(channel, (discord.DMChannel, discord.GroupChannel))
         if not dm_mode and not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            raise SendError(f'channel {getattr(channel, "id", "?")} is '
-                            f'{type(channel).__name__}; cannot send there')
+            raise SendError(f'channel {getattr(channel, "id", "?")} is {type(channel).__name__}; cannot send there')
 
         # --- mention + frame ---
         if dm_mode:
@@ -2018,8 +2017,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 if unknown:
                     raise unknown_name(f'unknown recipient identities {unknown!r}')
                 mention = ' '.join(mentions)
-            frame = (f'**[{identity}→{to}]** {subject}'.rstrip() if subject
-                     else f'**[{identity}→{to}]**')
+            frame = f'**[{identity}→{to}]** {subject}'.rstrip() if subject else f'**[{identity}→{to}]**'
             allowed = discord.AllowedMentions(roles=True, users=True)
         prefix = f'{mention} ' if mention else ''
 
@@ -2038,6 +2036,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         # --- chunk the body to fit under Discord's 2000-char message cap ---
         overhead = max(len(f'{prefix}{frame}'), len(f'{frame} (99/99)')) + 2
+        if overhead >= 2000:
+            raise SendError(f'send header too long (subject or recipients): it takes {overhead} of the 2000-character cap, leaving no room for the body')
         parts = chunk_body(body, 2000 - overhead) or ['']
 
         ref = None
