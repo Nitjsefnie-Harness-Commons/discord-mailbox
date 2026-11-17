@@ -18,7 +18,7 @@ from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._send_errors import _send_failure, _send_nonce
-from . import _linked
+from . import _linked, _prog
 from . import _meta_claim
 from . import _control_files
 from . import _ext_trust
