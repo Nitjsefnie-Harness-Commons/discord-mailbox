@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import _fixture_lock_root, _mod, _restart  # noqa: E402
+from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _restart  # noqa: E402
 
 LIMIT = 32
 
@@ -274,7 +274,7 @@ def test_a_backup_deleted_while_a_rotation_journal_is_pending_is_absent(tmp):
                 writer.write(f"after {i}")
         finally:
             writer.close()
-        assert not journal.exists(), victim
+        assert not journal.exists() and _hidden(path.parent) == [], (victim, _hidden(path.parent))
         _restart(path, LIMIT, 2)
         assert all(p.stat().st_size <= LIMIT for p in _window(path)), victim
         kept = [ln for p in reversed(_window(path)) for ln in p.read_text(encoding="utf-8").splitlines()]
