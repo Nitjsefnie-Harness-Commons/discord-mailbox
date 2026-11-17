@@ -59,6 +59,7 @@
 !/.github/zizmor.yml
 !/.github/workflows/actionlint.yml
 !/.github/workflows/audit.yml
+!/.github/workflows/ci-gate.yml
 !/.github/workflows/claim.yml
 !/.github/workflows/codeql.yml
 !/.github/workflows/comment-share.yml
@@ -82,6 +83,7 @@
 # ─── scripts/ci ───
 !/scripts/
 !/scripts/ci/
+!/scripts/ci/ci_gate.py
 !/scripts/ci/coverage_floor.py
 !/scripts/ci/gate_base_freshness.py
 !/scripts/ci/perf_gate.py
