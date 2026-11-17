@@ -4,10 +4,13 @@ Not a suite itself -- run_tests.py only loads `test_*.py`.
 
 Stdlib only, OS-agnostic (SETUP.md edit discipline).
 """
+import contextlib
 import importlib.util
+import io
 import os
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # This project IS the mailbox, so its "scripts" root resolves to its root.
@@ -26,6 +29,19 @@ def load(path, name=None):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def run_cli(call, answer):
+    """Run `call()` with the connector's meta channel answering `answer` -> (exit code or None, stdout, stderr, (identity, payload) pairs sent)."""
+    from discord_mb_lib import core
+    sent, out, err, code = [], io.StringIO(), io.StringIO(), None
+    stand_in = mock.patch.object(core, "_meta_request", lambda identity, payload, timeout: sent.append((identity, payload)) or answer)
+    with stand_in, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            call()
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue(), err.getvalue(), sent
 
 
 POSIX_MODES = os.name != "nt"
