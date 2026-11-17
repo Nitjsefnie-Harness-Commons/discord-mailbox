@@ -2810,7 +2810,7 @@ mod._ConnectorLogWriter._mark_generation_publishing = lambda self, manifest: (re
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
 '''
     for link, name, crashed in ((os.link, "shared.log.1", False), (os.symlink, "shared.log.2", False), (os.symlink, "shared.log.2", True),
-                                (os.symlink, "shared.log.2", "swap")):
+                                (os.symlink, "shared.log.2", "swap"), (os.symlink, "shared.log.2", "rename"), (os.symlink, "shared.log.2", "regular")):
         path = Path(tmp) / f"{link.__name__}-{crashed}" / "shared.log"
         path.parent.mkdir()
         external, backup = path.with_name("external"), path.with_name("shared.log.1")
@@ -2823,16 +2823,39 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2).write("x")
             continue  # no symlinks here; the hard-link row still ran
         if crashed:
             _run_child(crash, path, code=178)
-        if crashed == "swap":  # a foreign symlink put at .2 after recovery decided to drop it is kept
+        if crashed in ("swap", "rename", "regular"):  # a foreign entry put at .2 after recovery decided to drop it is kept
+            slot, moved = path.with_name("shared.log.2"), types.SimpleNamespace(entry=None)
 
-            def classify(self, entries, real=m._ConnectorLogWriter._classify_rotation, path=path):
+            def foreign(regular, path=path, slot=slot):  # swap: before the first identity check; rename, regular: at the quarantine rename
+                if regular:
+                    os.unlink(slot)
+                    slot.write_bytes(b"FOREIGN\n")
+                else:
+                    os.symlink(path.with_name("other"), path.with_name("foreign"))
+                    os.replace(path.with_name("foreign"), slot)
+
+            def classify(self, entries, real=m._ConnectorLogWriter._classify_rotation, crashed=crashed, foreign=foreign):
                 plan = real(self, entries)
-                os.symlink(path.with_name("other"), path.with_name("foreign"))
-                os.replace(path.with_name("foreign"), path.with_name("shared.log.2"))
+                if crashed == "swap":
+                    foreign(False)
                 return plan
-            with _patched(m._ConnectorLogWriter, _classify_rotation=classify), _refuses("recovery dropped a foreign symlink"):
+
+            def rename(src, dst, *args, real=os.rename, real_lstat=os.lstat, crashed=crashed, foreign=foreign, moved=moved, **kwargs):
+                if ".drop-" in str(dst) and moved.entry is None:
+                    moved.entry = real_lstat(src)
+                    if crashed != "swap":
+                        foreign(crashed == "regular")
+                return real(src, dst, *args, **kwargs)
+
+            def lstat(name, *args, real=os.lstat, crashed=crashed, moved=moved, **kwargs):  # the regular file reports the recorded identity
+                info, entry = real(name, *args, **kwargs), moved.entry
+                drop = crashed == "regular" and entry is not None and ".drop-" in str(name)
+                return os.stat_result((info.st_mode, entry.st_ino, entry.st_dev, *tuple(info)[3:])) if drop else info
+            with _patched(m._ConnectorLogWriter, _classify_rotation=classify), _patched(m.os, rename=rename, lstat=lstat), _refuses(f"recovery dropped a foreign entry: {crashed}"):
                 m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-            assert Path(os.readlink(path.with_name("shared.log.2"))).name == "other"  # Windows may add a \\?\ prefix
+            assert (moved.entry is None) == (crashed == "swap"), (crashed, moved.entry)  # the swap row's foreign name is never moved
+            assert not slot.is_symlink() and slot.read_bytes() == b"FOREIGN\n" if crashed == "regular" else Path(os.readlink(slot)).name == "other"  # Windows may add a \\?\ prefix
+            assert not list(path.parent.glob(".*drop-*")), crashed
             continue
         with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)) as writer:
             writer.write("x")
