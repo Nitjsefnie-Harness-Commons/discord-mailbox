@@ -17,7 +17,7 @@ from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
-from ._send_errors import _send_failure
+from ._send_errors import _send_failure, _send_nonce
 from . import _linked
 from ._meta_claim import _claim
 from . import _control_files
@@ -524,7 +524,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 # send --wait: same payload as an outbox file, but the caller
                 # blocks for the result (msg_id/channel/chunks/pin outcome).
                 # SendRetry/SendError both surface as the error response.
-                resp.update(await perform_send(req))
+                resp.update(await perform_send(req, f))
                 resp['ok'] = True
             elif op == 'list-agents':
                 resp['agents'] = await op_list_agents()
@@ -1942,14 +1942,13 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             f'reached an inbox on this host, run `conversation` on its channel first '
             f'(results are cached and become reply-able), or pass --channel explicitly')
 
-    async def perform_send(data):
-        '''Shared send core for the outbox watcher (fire-and-forget) and the
-        `send --wait` meta op. Handles reply routing, proactive DMs, recipient
-        mentions, auto-chunking (>MAX_BODY bodies become a numbered chunk
-        train; mention + reply-ref + attachments ride the first chunk), and
-        pin-on-send. Returns {'msg_id', 'msg_ids', 'channel_id', 'chunks',
-        'pinned'}. Raises SendRetry (transient — caller may retry the same
-        payload) or SendError (permanent — report and drop).'''
+    async def perform_send(data, request):
+        '''Shared send core for the outbox watcher and the `send --wait` meta op;
+        `request`'s id keys each chunk's nonce, so a retried chunk is the same
+        message. Handles reply routing, DMs, mentions, chunking (>MAX_BODY bodies
+        become a numbered train; mention + reply-ref + attachments ride the first
+        chunk) and pin-on-send. Returns {'msg_id', 'msg_ids', 'channel_id',
+        'chunks', 'pinned'}. Raises SendRetry (transient) or SendError (permanent).'''
         to = data.get('to', '')
         subject = data.get('subject', '')
         body = data.get('body', '')
@@ -2060,7 +2059,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             head = f'{prefix}{frame}' if i == 0 else f'{frame} ({i + 1}/{n})'
             kwargs: dict[str, Any] = {
                 'content': f'{head}\n{part}' if part else head,
-                'allowed_mentions': allowed,
+                'allowed_mentions': allowed, 'nonce': _send_nonce(request, i),
             }
             if i == 0 and ref is not None:
                 # Quiet reply: the content mention is the ONE ping; the reply
@@ -2135,7 +2134,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 pass
             return
         try:
-            result = await perform_send(data)
+            result = await perform_send(data, f)
         except SendRetry as e:
             log(f'send retry ({f.name}): {e}')  # leave file; next tick retries
             return
@@ -2858,6 +2857,7 @@ __all__ = [
     '_run_connector',
     '_secrets',
     '_send_failure',
+    '_send_nonce',
     'connector_main',
     'leech_main',
 ]
