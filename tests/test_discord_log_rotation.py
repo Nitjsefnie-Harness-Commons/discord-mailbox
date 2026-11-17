@@ -214,6 +214,29 @@ def test_connector_log_rotates_with_bounded_backups(tmp):
     assert "scheduled status update 079" in joined
 
 
+def test_connector_log_rotation_keeps_a_line_spelling_the_staging_header(tmp):
+    """A log that begins like a staging envelope rotates as plain bytes, live and through recovery."""
+    m = _mod()
+    line = m._ConnectorLogWriter._TEMP_MAGIC + b":0:0\n"
+    child = r'''
+real_replace = os.replace
+def crash_before_backup(source, destination, **kwargs):
+    if str(destination).endswith(".1"):
+        os._exit(178)
+    real_replace(source, destination, **kwargs)
+os.replace = crash_before_backup
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x" * 20)
+'''
+    for crash in (False, True):
+        path = Path(tmp) / f"header-line-{crash}.log"
+        path.write_bytes(line)
+        if crash:
+            _run_child(child, path, code=178)
+        with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)) as writer:
+            writer.write("x" * 20)
+        assert path.with_name(path.name + ".1").read_bytes() == line, crash
+
+
 def test_connector_log_is_line_buffered_and_reopens_after_rollover(tmp):
     """A write is visible immediately, including after a close/reopen cycle."""
     m = _mod()
@@ -1488,30 +1511,31 @@ def test_connector_log_failed_staging_temp_cleanup_preserves_rebound_path(tmp):
         _util.skip("the rebinding this checks is a rename over a file the "
                    "writer holds open, which Windows refuses")
     m = _mod()
-    path = Path(tmp) / "failed-staging-temp.log"
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer._transaction_nonce = "test-staging-nonce"
-    temporary = writer._owned_temp_path("rotate", 0)
-    writer._staging_kind = "rotate"
-    writer._staging_slot = 0
-    writer._staging_destination = path
-    swapped = []
+    real_write, staged, failed = os.write, [], []
 
-    def claim_then_replace(staged):
-        swapped.append(True)
-        _rebind(Path(staged), b"FOREIGN-STAGING-TEMP")
+    def claim_then_replace(name, *args):
+        staged.append(os.stat(name).st_ino)
+        _rebind(Path(name), b"FOREIGN-STAGING-TEMP")
 
-    def fail_key():
-        raise OSError("injected staging temp key failure")
+    def fail_staged_write(fd, data):
+        if staged and os.fstat(fd).st_ino == staged[0]:
+            failed.append(fd)
+            raise OSError("injected staging temp write failure")
+        return real_write(fd, data)
 
-    writer._current_staging_key = fail_key
-    with contextlib.closing(writer), _patched(writer, _staging_claim_callback=claim_then_replace):
-        with _refuses("staging temp failure was swallowed", OSError) as failure:
-            writer._write_migration_temp(b"payload", None, name=temporary)
-    assert "injected staging temp key failure" in str(failure[0])
-    assert swapped
-    assert temporary.exists(), "failed temp cleanup removed the rebound pathname"
-    assert temporary.read_bytes() == b"FOREIGN-STAGING-TEMP"
+    for kind in ("migrate", "rotate"):
+        path = Path(tmp) / f"failed-staging-temp-{kind}.log"
+        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
+        writer._transaction_nonce = "test-staging-nonce"
+        temporary = writer._owned_temp_path(kind, 0)
+        writer._staging_kind, writer._staging_slot, writer._staging_destination = kind, 0, path
+        staged.clear()
+        failed.clear()
+        with contextlib.closing(writer), _patched(writer, _staging_claim_callback=claim_then_replace):
+            with _patched(m.os, write=fail_staged_write), _refuses(f"{kind} temp failure was swallowed", OSError) as failure:
+                writer._write_migration_temp(b"payload", None, name=temporary)
+        assert "injected staging temp write failure" in str(failure[0]) and failed, kind
+        assert temporary.read_bytes() == b"FOREIGN-STAGING-TEMP", f"{kind} temp cleanup removed the rebound path"
 
 
 def test_connector_log_exact_boundary_accepts_newline_record(tmp):
@@ -2626,55 +2650,37 @@ writer.write("x")
     assert len(leftovers) <= 1, [item.name for item in leftovers]
 
 
-def test_connector_log_partial_empty_rotation_stage_crash_loop_has_bounded_temps(tmp):
-    """A torn empty rotation envelope cannot accumulate nonce artifacts."""
-    m = _mod()
-    magic_length = len(m._ConnectorLogWriter._TEMP_MAGIC)
-    del m
-    case = Path(tmp) / "partial-empty-rotation-stage-crash-loop"
+def test_connector_log_partial_rotation_stage_crash_loop_has_bounded_temps(tmp):
+    """A staged payload torn after its claim is reclaimed, so crashes never accumulate temps."""
+    lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
+    case = Path(tmp) / "partial-rotation-stage-crash-loop"
     case.mkdir()
     path = case / "loop.log"
-    path.write_bytes(b"a" * 31)
+    payload = b"a" * 31
+    path.write_bytes(payload)
+    # The portable path names the temp before writing it, so only its claim makes a torn one ours.
     child = r'''
-# Keep this fallback-specific torn-envelope test meaningful after anonymous
-# staging was added for the normal rotation path.
-mod._ConnectorLogWriter._write_anonymous_migration_temp = lambda *args, **kwargs: None
+os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "1"
 real_write = os.write
-real_manifest = mod._ConnectorLogWriter._write_migration_manifest
-active = {"armed": False}
-def record_claim(self, manifest, kind="migrate", create=False):
-    result = real_manifest(self, manifest, kind=kind, create=create)
-    if (kind == "rotate" and not create and manifest.get("created_temporaries")
-            and any(entry.get("size") == 0 and
-                    entry.get("temporary") in manifest["created_temporaries"]
-                    for entry in manifest.get("destinations", []))):
-        active["armed"] = True
-    return result
-mod._ConnectorLogWriter._write_migration_manifest = record_claim
 def partial_write(fd, data):
-    if active["armed"]:
-        active["armed"] = False
-        real_write(fd, data[:len(mod._ConnectorLogWriter._TEMP_MAGIC) - 1])
+    if bytes(data) == b"a" * 31:
+        real_write(fd, bytes(data)[:15])
         os._exit(178)
     return real_write(fd, data)
 os.write = partial_write
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
-writer.write("x")
+mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x")
 '''
     for _ in range(8):
         _run_child(child, path, code=178)
 
-    # Slot 1 is the empty active-stage envelope; slot 0 is the real backup
-    # and may have completed before the hard exit.
-    partials = sorted(case.glob(".loop.log.rotate-*-1.tmp"))
-    assert partials, "the crash did not leave a non-vacuous partial temp"
-    assert all(len(item.read_bytes()) < magic_length for item in partials)
-    assert len(partials) <= 1, [item.name for item in partials]
-
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
-    assert not list(case.glob(".loop.log.rotate-*.tmp"))
+    journal = next(lock_root.glob("*.rotate.json"))
+    partial = Path(json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])["planned_temporaries"][0])
+    assert len(partial.read_bytes()) < len(payload), "the crash did not tear the staged payload"
+    temps = sorted(case.glob(".loop.log.rotate-*.tmp"))
+    assert temps == [partial], [item.name for item in temps]
+    _restart(path, 32, 1)
+    assert path.read_bytes() == payload
+    assert _hidden(case) == []
 
 
 def test_connector_log_rotation_recovers_completed_sparse_backup_deletion(tmp):
@@ -4251,7 +4257,7 @@ if "{kind}" == "rotate":
 
 
 def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
-    """A public-looking temp without the private MAC survives cleanup."""
+    """A staged name the writer cannot prove it wrote survives cleanup: a bad MAC, or a new inode."""
     m = _mod()
     for kind in ("migrate", "rotate"):
         case = Path(tmp) / f"forged-envelope-{kind}"
@@ -4272,15 +4278,20 @@ def test_connector_log_preparing_cleanup_rejects_forged_envelope(tmp):
         journal = lock_root / f"{token}.{kind}.json"
         manifest = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
         staged = Path(manifest["planned_temporaries"][0])
-        raw = staged.read_bytes()
-        header, payload = raw.split(b"\n", 1)
-        fields = header.split(b":")
-        # The data, size and digest remain valid; only the unforgeable field is
-        # changed.  A v1/public-only parser would incorrectly delete this.
-        assert len(fields) == 9, fields
-        fields[-1] = (b"0" if fields[-1] != b"0" else b"1") * len(fields[-1])
-        forged = b":".join(fields) + b"\n" + payload
-        staged.write_bytes(forged)
+        if kind == "rotate":
+            # The journal claimed the staged inode; foreign bytes on a new inode at its name stay.
+            assert str(staged) in manifest["created_temporaries"], manifest
+            forged = b"FOREIGN-AT-CLAIMED-NAME\n"
+            _rebind(staged, forged)
+        else:
+            header, payload = staged.read_bytes().split(b"\n", 1)
+            fields = header.split(b":")
+            # The data, size and digest remain valid; only the unforgeable field is
+            # changed.  A v1/public-only parser would incorrectly delete this.
+            assert len(fields) == 9, fields
+            fields[-1] = (b"0" if fields[-1] != b"0" else b"1") * len(fields[-1])
+            forged = b":".join(fields) + b"\n" + payload
+            staged.write_bytes(forged)
 
         restarted = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
                                           lock_root=lock_root)
@@ -4429,7 +4440,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2, lock_root=sys
             (*rotate, ".1", "before", ((1, T, None),), gone),  # .1 marked and never published
             (*rotate, ".1", "after", ((2, T, None),), gone),  # the active's empty temp
             # .2 still awaits its publish when a later slot refuses
-            (*rotate, ".2", "before", ((1, T, lambda p: p.write_bytes(p.read_bytes()[:-4] + b"XXXX")),), "temp is not owned"),
+            (*rotate, ".2", "before", ((1, T, lambda p: p.write_bytes(p.read_bytes()[:-4] + b"XXXX")),), "temp digest mismatch"),
             (*rotate, ".2", "before", ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"),
             (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"))
     for i, (kind, max_bytes, seed, child, code, slot, when, damage, refusal) in enumerate(rows):

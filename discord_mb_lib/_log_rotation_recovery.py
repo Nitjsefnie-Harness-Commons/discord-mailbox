@@ -65,7 +65,8 @@ class _RotationRecovery:
                 'temporary': None, 'staged': _ABSENT,
                 'context': {'expected_kind': 'rotate', 'expected_slot': index,
                             'expected_destination': destination,
-                            'expected_nonce': manifest.get('transaction_nonce')}}
+                            'expected_nonce': manifest.get('transaction_nonce'),
+                            'expected_staging': manifest.get('staging')}}
             if item.get('in_place'):
                 entry.update(method='rewrite', cut=int(item['before_size']),
                              prefix_sha256=str(item['before_sha256']), tail=b'',
