@@ -10,7 +10,8 @@ from typing import Any
 class _RotationJournal:
     """Rotation methods of the connector log writer."""
 
-    def _adopt_rotated_identities(self: Any, expected: dict) -> None:
+    def _adopt_rotated_identities(
+            self: Any, expected: dict[Path, tuple[str, str] | None]) -> None:
         """Hold each slot to the identity this rotation published into it.
 
         ``expected`` maps a rotated slot to that identity.  A name that
