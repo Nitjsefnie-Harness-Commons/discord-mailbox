@@ -94,7 +94,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_ROOT))
 from ._settings import setting  # noqa: E402  (env -> ~/.agent-bundle/settings.json)
 from ._temp_provenance import _linklike, ensure_owned_temp_dir  # noqa: E402
-from ._meta_claim import MetaRequestPending, _take_response, _withdraw  # noqa: E402
+from ._meta_claim import MetaRequestPending, _submitted, _take_response, _withdraw  # noqa: E402
 
 # --- Server topology (resolved by name at connector startup — no hardcoded IDs) ---
 # Overridable per machine: a server that lays its channels out differently sets
@@ -1328,15 +1328,14 @@ def setup_main(token=None):
 def _meta_request(identity, payload, timeout):
     'Write request to inbox-metadata, poll outbox-metadata for response, delete, return parsed dict.'
     req_id = f'{uuid.uuid4()}.json'
-    in_path = meta_in_dir(identity) / req_id
-    out_path = meta_out_dir(identity) / req_id
-    _control_files.write_private(in_path, json.dumps({**payload, 'created': time.time(), 'timeout': timeout}))
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if out_path.exists():
-            return _take_response(out_path)
-        time.sleep(0.2)
-    return _withdraw(in_path, out_path, timeout, identity, pid_alive, is_connector_process)
+    in_path, out_path = meta_in_dir(identity) / req_id, meta_out_dir(identity) / req_id
+    with _submitted(in_path, json.dumps({**payload, 'created': time.time(), 'timeout': timeout})):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if out_path.exists():
+                return _take_response(out_path)
+            time.sleep(0.2)
+        return _withdraw(in_path, out_path, timeout, identity, pid_alive, is_connector_process)
 
 
 def attachments_cli(args):
@@ -2704,6 +2703,7 @@ __all__ = [
     '_meta_request',
     '_prog',
     '_retention',
+    '_submitted',
     '_take_response',
     '_usage_segment',
     '_usage_windows',

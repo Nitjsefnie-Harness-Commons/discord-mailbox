@@ -1,6 +1,8 @@
 """A meta request is claimed by the connector or withdrawn by the CLI, never both."""
 import contextlib
 import json
+import signal
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -66,6 +68,28 @@ def _claim(request: Path, out_dir: Path) -> Iterator[Path | None]:
         raise
     finally:
         claimed.unlink(missing_ok=True)
+
+
+def _terminate(signum: int, _frame: Any) -> None:
+    raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def _submitted(request: Path, text: str) -> Iterator[None]:
+    'Write the request; any exception withdraws it.'
+    # Default SIGTERM/SIGHUP skip finally; main thread only.
+    signals = [getattr(signal, n) for n in ('SIGTERM', 'SIGHUP') if hasattr(signal, n)]
+    previous = {s: signal.signal(s, _terminate) for s in signals} if threading.current_thread() is threading.main_thread() else {}
+    try:
+        _control_files.write_private(request, text)
+        yield
+    except BaseException:
+        with contextlib.suppress(OSError):    # never replaces the exit
+            request.unlink()
+        raise
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
 
 
 def _take_response(response: Path) -> Any:
