@@ -119,6 +119,22 @@ def test_a_resent_chunk_carries_the_nonce_of_its_first_attempt(tmp):
     assert named["x.a.json"] != named["x.b.json"] and named["id.json"] == named["id.json.claimed"], named
 
 
+def test_a_subject_that_leaves_no_room_for_the_body_is_refused_before_chunking(tmp):
+    box, header = Path(tmp) / "state" / "outbox", len("**[gate-test→nobody]** ")
+
+    async def script(client):   # the room is 1990 minus the header: a subject of 1990 - header leaves none, one shorter leaves one character
+        for name, size in (("full", 1990 - header), ("tight", 1989 - header)):
+            (box / f"{name}.json").write_text(json.dumps({"to": "nobody", "subject": "s" * size, "body": "b"}), encoding="utf-8")
+        for _ in range(100):
+            if not any(box.iterdir()):
+                return
+            await asyncio.sleep(0.1)
+
+    client = _gateway.run(tmp, script, outbox=True)
+    errors = [e["error"] for e in client.events if e["event"] == "send_failed"]
+    assert len(errors) == 1 and "no room" in errors[0] and len(client.bridge.sent) == 1, (errors, client.bridge.sent)
+
+
 def main():
     return _util.runner(_util.collect(globals()), tmp_prefix="send_failures_")
 
