@@ -130,6 +130,7 @@ def test_setup_hints_name_the_invoked_command(tmp):
             pass
 
     Path(tmp, "f.txt").write_text("x", encoding="utf-8")
+
     def without(items, **kw):
         return None if kw["name"] == connector.ATTACHMENTS_CHANNEL_NAME else get(items, **kw)
 
