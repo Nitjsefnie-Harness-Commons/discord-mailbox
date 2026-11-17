@@ -3216,7 +3216,6 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
                     f'connector log journal changed after append: {journal}')
         finally:
             os.close(fd)
-        self._fsync_directory(journal.parent)
 
     def _mark_destination_publishing(self, manifest, index, kind):
         """Persist the identity contract before mutating a destination inode."""
