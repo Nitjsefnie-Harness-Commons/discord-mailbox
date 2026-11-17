@@ -11,7 +11,8 @@ exact path, and IMPLICIT, minus the EXCLUDED records the ratchets commit.
 Limits, each narrowing the set: a directory, glob or `.` names no file (the
 conflict-marker step reads every tracked file); what a named script reaches
 at run time (run_tests.py discovers tests/); a path built in `${{ }}`; a
-tool's own config file outside IMPLICIT; records, read at the base revision.
+tool's own config file outside IMPLICIT; records, read at the base revision;
+a local composite action's own steps (its action.yml is in the set).
 
 A push run passes a head main already holds. The reader models the block YAML
 these workflows use and refuses any other shape rather than shrink the set.
