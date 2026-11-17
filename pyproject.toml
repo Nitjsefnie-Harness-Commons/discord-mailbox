@@ -32,3 +32,7 @@ packages = ["discord_mb_lib"]
 [tool.setuptools.dynamic]
 # Single source of truth: the CLI's --version and the wheel can never disagree.
 version = { attr = "discord_mb_lib.core.__version__" }
+
+[tool.coverage.run]
+# Also measure the Python child processes the suites start.
+patch = ["subprocess"]
