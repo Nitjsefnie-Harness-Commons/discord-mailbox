@@ -2659,8 +2659,10 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
             expected_identity = recorded.get('identity')
             expected_entry_identity = recorded.get('entry_identity')
             if manifest.get('staging') == self._PAYLOAD_STAGING:
-                if temporary in created and self._unlink_if_identity(
-                        temporary, expected_identity, expected_entry_identity):
+                if temporary in created:
+                    # Only the claimed inode is ours: any other file at the name stays.
+                    self._unlink_if_identity(
+                        temporary, expected_identity, expected_entry_identity)
                     continue
             elif temporary in created and expected_identity is not None:
                 # A durable exclusive-create claim is sufficient to clean an
