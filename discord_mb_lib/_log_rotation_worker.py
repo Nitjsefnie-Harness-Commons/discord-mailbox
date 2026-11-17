@@ -47,6 +47,28 @@ class _RotationWorker:
         self._rotation_stop = True
 
     def _run_rotation_worker(self: Any, cut: int) -> None:
+        held = self._hold_oldest_backup()
+        try:
+            self._rotate_on_worker(cut)
+        finally:
+            if held is not None:
+                os.close(held)  # after the lock: the swap freed no inode
+
+    def _hold_oldest_backup(self: Any) -> int | None:
+        if os.name == 'nt' or not hasattr(os, 'posix_fadvise') or not self._backup_count:
+            return None  # Windows: os.replace fails over an open file
+        try:
+            held = os.open(str(self._backup_path(self._backup_count)), os.O_RDONLY | getattr(os, 'O_BINARY', 0) |
+                           getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        except OSError:
+            return None
+        try:
+            os.posix_fadvise(held, 0, 0, os.POSIX_FADV_DONTNEED)
+        except OSError:
+            pass
+        return held
+
+    def _rotate_on_worker(self: Any, cut: int) -> None:
         try:
             context = self._prepare_rotation(cut)
         except BaseException as exc:  # a thread drops what escapes it, SystemExit included
@@ -110,6 +132,9 @@ class _RotationWorker:
                 manifest['destinations'][-2]['sha256'] = digest
                 self._use_anonymous_staging = True
                 context['staged'] = self._stage_rotation_copy(manifest, data, mode, planned)
+            if hasattr(os, 'posix_fadvise'):  # the swap's truncate then frees no page
+                getattr(os, 'fdatasync', os.fsync)(src)
+                os.posix_fadvise(src, 0, cut, os.POSIX_FADV_DONTNEED)
         except BaseException:
             self._rollback_rotation(context)
             raise

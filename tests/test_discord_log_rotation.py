@@ -826,6 +826,9 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
             assert errors == [] and not worker.is_alive(), errors
             assert slots[1].read_bytes() == b"".join(lines[24:48]) and path.read_bytes() == b"".join(lines[48:])
             assert _hidden(path.parent) == [] and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.json"))
+            for name, evicts in (("nt", False), (os.name, hasattr(os, "posix_fadvise"))):  # Windows refuses os.replace over an open file
+                with _patched(os, name=name):
+                    assert ((fd := writer._hold_oldest_backup()) is not None) == evicts and (fd is None or os.close(fd) is None), name
             writer._rotation_worker = threading.Thread(target=print)
             for call in (lambda: writer._write_migration_temp(b"x", None), lambda: writer._adopt_rotated_identities({})):
                 with _refuses("the caller staged or adopted beside a running worker", AssertionError):
@@ -844,9 +847,13 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
 
 def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     """A worker's failure raises once from the next write, which appends nothing; logging then recovers, or refuses for good."""
-    m, log, case, locked, release, staged = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event()
+    m, log, case, locked, release, staged, held, opens = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event(), set(), []
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_start_rotation_worker", "_rotate", "_recover_and_open")}
+
+    def opened(path, fd):  # an fd on the oldest backup stays in `held` until closed; the worker's open is the eviction
+        _ = os.fspath(path).endswith("connector.log.2") and (held.add(fd), opens.append(threading.current_thread().name))
+        return fd
 
     def seam(name):  # the row's fault fires once: on the worker, or on the caller swapping at the ceiling
         def wrapped(self, *args):
@@ -873,7 +880,8 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:3]},
                   _recover_and_open=lambda self: real["_recover_and_open"](self) or log.append("recover"),
                   _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or wait(self),
-                  _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)):
+                  _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)), \
+            _patched(os, open=lambda path, *args, real=os.open, **kw: opened(path, real(path, *args, **kw)), close=lambda fd, real=os.close: held.discard(fd) or real(fd)):
         for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
                                                       ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
@@ -931,6 +939,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                 # The write after the report recovers; no worker starts again until a synchronous rotation succeeds.
                 assert [e if isinstance(e, str) else "start" for e in log][:5 + (lost or 0)] == ["rotate", "start", "recover", "rotate", *["rotate"] * (lost or 0), "start"], log
                 assert not writer._rotation_manifest_path().exists() and _hidden(path.parent) == [], _hidden(path.parent)
+                assert not held and ("connector-log-rotation" in opens) == hasattr(os, "posix_fadvise"), (name, held, opens)  # closed after a stage failure and a rotation
 
 
 def test_connector_log_migration_crash_loop_has_bounded_hidden_artifacts(tmp):
