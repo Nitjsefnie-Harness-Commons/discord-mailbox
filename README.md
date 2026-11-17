@@ -94,6 +94,15 @@ they are 15 minutes old, at startup and on every pass of its request watcher,
 so an answer no CLI collected outlives 15 minutes only while no connector for
 that identity runs.
 
+The connector keeps its gateway state in `<temp>/discord-mailbox/<identity>/connector.state`,
+also mode 0600 on POSIX, as `{"pid": <connector pid>, "state": "<state>"}`:
+`starting` until its first gateway READY, `connected` after each READY or
+resume, `disconnected` while it has no gateway session (including while
+discord.py waits to retry), and `reconnecting` once a later session's READY has
+arrived and discord.py's `on_ready` has not run yet. A state whose PID is
+not a live connector for that identity means the connector is not running. A
+control request that times out unclaimed names the state.
+
 ## Directory
 
 Each unpinned message in the directory channel that mentions a user and
