@@ -62,6 +62,47 @@ def test_short_message_stays_one_frame(tmp):
     assert len(MB.moved_frames('a', '2026-08-04T00:00:00', 'short')) == 1
 
 
+# One user-perceived character each; repeated with no whitespace, a body splits only between them.
+CLUSTERS = {
+    'combining mark': (0x65, 0x301),
+    'spacing mark': (0x915, 0x93E),
+    'zero-width-joiner sequence': (0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467),
+    'variation selector': (0x2764, 0xFE0F),
+    'emoji modifier': (0x1F44D, 0x1F3FD),
+    'regional-indicator pair': (0x1F1E8, 0x1F1FF),
+    'Hangul L L V V T T': (0x1100, 0x1100, 0x1161, 0x1161, 0x11A8, 0x11A8),
+    'Hangul L LVT T': (0x1100, 0xAC01, 0x11A8),
+    'Hangul LV V T': (0xAC00, 0x1161, 0x11A8),
+    'Hangul L LV': (0x1100, 0xAC00),
+    'Hangul LV T': (0xAC00, 0x11A8),
+    'Indic conjunct': (0x915, 0x94D, 0x937),
+    'prepended concatenation mark': (0x600, 0x61),
+    'Thai sara am': (0xE01, 0xE33),
+    'emoji tag sequence': (0x1F3F4, 0xE0067, 0xE0062, 0xE0065, 0xE006E, 0xE0067, 0xE007F),
+}
+
+
+def test_a_hard_split_lands_on_the_last_cluster_boundary_in_the_window(tmp):
+    if MB is None:
+        return
+    for family, cps in CLUSTERS.items():
+        unit = ''.join(map(chr, cps))
+        for lead in range(1, len(unit) + 1):   # every offset of the unit against the limit
+            body = 'x' * lead + unit * (6000 // len(unit))
+            chunks = MB.chunk_body(body, 2000)
+            assert ''.join(chunks) == body, (family, lead)
+            ends = [sum(map(len, chunks[:k + 1])) for k in range(len(chunks) - 1)]
+            assert all((e - lead) % len(unit) == 0 for e in ends), (family, lead, ends)
+            assert all(2000 - len(unit) < len(c) <= 2000 for c in chunks[:-1]), (family, lead, ends)
+    # A window that is one cluster splits at the limit: every chunk is non-empty.
+    assert [len(c) for c in MB.chunk_body('x' + chr(0x301) * 5000, 2000)] == [2000, 2000, 1001]
+    assert [len(c) for c in MB.chunk_body('x' + chr(13) + chr(10) + chr(0x301) * 3000, 2000)] == [1, 2000, 1002]
+    assert [len(c) for c in MB.chunk_body(chr(9) * 2 + chr(0x301) * 3000, 2000)] == [2000, 1002]
+    for lead in (0x600, 9, 0x200D):   # a first cut inside a cluster leaves the later cuts between flags
+        chunks = MB.chunk_body(chr(lead) * 1899 + chr(0x1F1E8) * 6000, 1900)
+        assert all(sum(map(len, chunks[:k])) % 2 for k in range(2, len(chunks))), (lead, [len(c) for c in chunks])
+
+
 def main():
     return _util.runner(_util.collect(globals()), tmp_prefix="dmove_")
 
