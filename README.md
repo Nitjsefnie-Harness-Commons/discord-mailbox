@@ -56,7 +56,8 @@ When it connects, the connector looks up these channels and its broadcast
 role by name. Its main server is the one with the bridge channel; when no
 server has it, the connector takes the first server discord.py lists and logs
 a `WARN` line. It logs a `WARN` line naming each channel or role it does not
-find, and what needs one does not work until a restarted connector finds it.
+find, and what needs one does not work until the connector looks again: at
+each new gateway session (a restart, or a reconnect that cannot resume).
 A `send` to `all` notifies the role's members only when the role is
 mentionable or the bot has `mention_everyone`.
 
@@ -233,7 +234,8 @@ control request that times out unclaimed names the state.
 
 Every place the product keeps data, with what to treat as personal data or a
 secret. `<temp>` is Python's temp directory: the first of `TMPDIR`, `TEMP` and
-`TMP` that is set, otherwise the platform default (`/tmp` on POSIX). Whatever
+`TMP` that names a directory the user can create files in, otherwise the first
+such platform default (`/tmp` first on POSIX). Whatever
 cleans that directory on a host also removes what the product keeps there.
 
 | Store | Location | Contents | Sensitivity | Kept until |
@@ -286,8 +288,9 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
      ([Credentials](#credentials)); find the others with
      `conversation <identity> 100 --channel <credentials channel id> --json`,
      which lists a channel's messages, 100 a page (`--before` pages back),
-     each with its `from_user_id`. `topic <identity> get --channel credentials`
-     prints that channel's id as `channel_id`.
+     each with its `from_user_id`.
+     `topic <identity> get --channel credentials --json` prints that
+     channel's id as `channel_id`.
    - Their DMs with the bot: `conversation <identity> 100 --dm <user id> --json`.
 
    Each carries its `msg_id`: delete it with
@@ -332,7 +335,10 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
    `forum delete`, `channels delete` and `emoji delete`. When nothing else uses
    them, delete the channels `setup` created and those you created for the bot,
    usage-board and lease channels included, with
-   `channels <identity> delete --channel <name or id>`. Delete the broadcast
+   `channels <identity> delete --channel <name or id>`. On messages and
+   channels you keep, the ✅ receipts, reactions, pins and topics the bot left
+   stay until you undo them with `message unreact`, `pins unpin`,
+   `thread unpin` and `topic set`. Delete the broadcast
    role in Discord: no command removes a role. The audit-log entries naming
    each identity stay for Discord's 45 days.
 2. Stop every connector ([Starting and stopping](#starting-and-stopping)); a
