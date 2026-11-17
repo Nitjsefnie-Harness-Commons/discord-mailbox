@@ -1,6 +1,7 @@
 """Read and raise the coverage floor kept in .github/ci-thresholds.json.
 
-floor: print max(head floor, base floor); exit 1 when the head lowers it.
+floor: print max(head floor, base floor); exit 1 when the head lowers the
+floor or widens the gap.
 raise: write the floor raised to round(measured - gap, 1) and exit 0, or
 write nothing and exit 3 when that does not exceed the floor.
 Exit 2 on a malformed document or argument.
@@ -35,10 +36,12 @@ def thresholds(document):
 
 
 def gate_floor(head, base=None):
-    floor = thresholds(head)[0]
-    base_floor = floor if base is None else thresholds(base)[0]
+    floor, gap = thresholds(head)
+    base_floor, base_gap = (floor, gap) if base is None else thresholds(base)
     if floor < base_floor:
         raise Lowered(f'the head floor {floor} is below the base floor {base_floor}')
+    if gap > base_gap:
+        raise Lowered(f'the head gap {gap} is above the base gap {base_gap}')
     return floor
 
 
