@@ -523,11 +523,12 @@ does — measuring a different execution shape than CI runs would report
 coverage for a program nobody executes. Python child processes the
 suites start are measured too (`patch = ["subprocess"]` in
 `pyproject.toml`). The floor is `.github/ci-thresholds.json`: a green
-push to `main` raises it to measured coverage minus the recorded gap
-when that is higher, and `ratchet-push.yml` commits the raise or drops
-it when `main` moved under the measurement, for the next push to `main`
-to measure again. A pull request that lowers the floor fails, so nothing
-in CI lowers it.
+push to `main` stages measured coverage minus the recorded gap when
+that is higher, and the floor rises through
+`.github/workflows/ratchet-push.yml`, which commits the raise when the
+run's records still merge onto `main` and otherwise leaves it to the
+next push to `main`. A pull request that lowers the floor fails, so
+nothing in CI lowers it.
 
 ### CI
 
