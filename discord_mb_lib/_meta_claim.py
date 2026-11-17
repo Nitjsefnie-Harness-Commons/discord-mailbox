@@ -76,10 +76,11 @@ def _terminate(signum: int, _frame: Any) -> None:
 
 @contextlib.contextmanager
 def _submitted(request: Path, text: str) -> Iterator[None]:
-    'Write the request; any exception withdraws it.'
-    # Default SIGTERM/SIGHUP skip finally; main thread only.
+    'Writes it; any exception withdraws it.'
+    # Replaces only the default action (skips finally); main thread only.
     signals = [getattr(signal, n) for n in ('SIGTERM', 'SIGHUP') if hasattr(signal, n)]
-    previous = {s: signal.signal(s, _terminate) for s in signals} if threading.current_thread() is threading.main_thread() else {}
+    main = threading.current_thread() is threading.main_thread()
+    previous = {s: signal.signal(s, _terminate) for s in signals if main and signal.getsignal(s) is signal.SIG_DFL}
     try:
         _control_files.write_private(request, text)
         yield
