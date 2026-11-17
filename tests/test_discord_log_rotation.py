@@ -2568,86 +2568,39 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
 
 
 def test_connector_log_claim_callback_crash_loop_reclaims_created_temp(tmp):
-    """A crash before the identity callback cannot strand an O_EXCL temp."""
-    m = _mod()
-    del m
-    case = Path(tmp) / "claim-callback-crash-loop"
-    case.mkdir()
-    path = case / "loop.log"
-    original = b"historic line\n" * 12
-    path.write_bytes(original)
-    lock_root = case / "lock-root"
+    """A crash before the identity callback cannot strand a staged temp, in a migration or a rotation."""
     child = r'''
 from pathlib import Path
+crash_kind = sys.argv[4]
 real_manifest = mod._ConnectorLogWriter._write_migration_manifest
 real_identity = mod._ConnectorOwnership._identity_for
 armed = {"value": False}
 def record_intent(self, manifest, kind="migrate", create=False):
     result = real_manifest(self, manifest, kind=kind, create=create)
-    if create and kind == "migrate":
+    if create and kind == crash_kind:
         armed["value"] = True
     return result
 def crash_before_claim(pathname):
-    if armed["value"] and ".migrate-" in Path(pathname).name:
+    if armed["value"] and f".{crash_kind}-" in Path(pathname).name:
         os._exit(180)
     return real_identity(pathname)
 mod._ConnectorLogWriter._write_migration_manifest = record_intent
 mod._ConnectorOwnership._identity_for = staticmethod(crash_before_claim)
-mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2,
-                        lock_root=sys.argv[3])
-'''
-
-    for _ in range(5):
-        _run_child(child, path, lock_root, code=180)
-
-        restarted = _mod()._ConnectorLogWriter(
-            path, max_bytes=16, backup_count=2, lock_root=lock_root)
-        restarted.close()
-        path.write_bytes(original)
-
-    leftovers = sorted(case.glob(".loop.log.migrate-*.tmp"))
-    assert len(leftovers) <= 1, [item.name for item in leftovers]
-
-
-def test_connector_log_rotation_claim_callback_crash_loop_reclaims_temp(tmp):
-    """Rotation staging has the same no-orphan callback crash guarantee."""
-    m = _mod()
-    del m
-    case = Path(tmp) / "rotation-claim-callback-crash-loop"
-    case.mkdir()
-    path = case / "loop.log"
-    lock_root = case / "lock-root"
-    child = r'''
-from pathlib import Path
-real_manifest = mod._ConnectorLogWriter._write_migration_manifest
-real_identity = mod._ConnectorOwnership._identity_for
-armed = {"value": False}
-def record_intent(self, manifest, kind="migrate", create=False):
-    result = real_manifest(self, manifest, kind=kind, create=create)
-    if create and kind == "rotate":
-        armed["value"] = True
-    return result
-def crash_before_claim(pathname):
-    if armed["value"] and ".rotate-" in Path(pathname).name:
-        os._exit(181)
-    return real_identity(pathname)
-mod._ConnectorLogWriter._write_migration_manifest = record_intent
-mod._ConnectorOwnership._identity_for = staticmethod(crash_before_claim)
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
+writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=int(sys.argv[5]), backup_count=int(sys.argv[6]),
                                  lock_root=sys.argv[3])
-writer.write("x")
+if crash_kind == "rotate":
+    writer.write("x")
 '''
-
-    for _ in range(5):
-        path.write_bytes(b"A" * 31)
-        _run_child(child, path, lock_root, code=181)
-
-        restarted = _mod()._ConnectorLogWriter(
-            path, max_bytes=32, backup_count=1, lock_root=lock_root)
-        restarted.close()
-
-    leftovers = sorted(case.glob(".loop.log.rotate-*.tmp"))
-    assert len(leftovers) <= 1, [item.name for item in leftovers]
+    for kind, seed, max_bytes, backups in (("migrate", b"historic line\n" * 12, 16, 2), ("rotate", b"A" * 31, 32, 1)):
+        case = Path(tmp) / f"{kind}-claim-callback-crash-loop"
+        case.mkdir()
+        path, lock_root = case / "loop.log", case / "lock-root"
+        for _ in range(5):
+            path.write_bytes(seed)
+            _run_child(child, path, lock_root, kind, max_bytes, backups, code=180)
+            _restart(path, max_bytes, backups, lock_root=lock_root)
+        leftovers = sorted(case.glob(f".loop.log.{kind}-*.tmp"))
+        assert len(leftovers) <= 1, (kind, [item.name for item in leftovers])
 
 
 def test_connector_log_partial_rotation_stage_crash_loop_has_bounded_temps(tmp):
@@ -2919,17 +2872,22 @@ def test_connector_log_rotation_renames_backups_and_writes_the_active_copy_once(
 
 
 def test_connector_log_rotation_refuses_a_backup_sharing_the_active_inode(tmp):
-    """A backup hard-linked to the active inode is refused before any journal: a rename would move the live inode."""
+    """A backup hard- or symlinked to the active is refused before any journal: a rename would carry it down."""
     m = _mod()
-    path = Path(tmp) / "shared.log"
-    path.write_bytes(b"A" * 31)
-    os.link(path, path.with_name("shared.log.1"))
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-    before = {slot.name: slot.read_bytes() for slot in Path(tmp).glob("shared.log*")}
-    with contextlib.closing(writer), _refuses("a backup sharing the active inode was rotated"):
-        writer.write("x")
-    assert not list(writer._owner.lock_root.glob("*.rotate.json"))
-    assert {slot.name: slot.read_bytes() for slot in Path(tmp).glob("shared.log*")} == before
+    for link in (os.link, os.symlink):
+        path = Path(tmp) / link.__name__ / "shared.log"
+        path.parent.mkdir()
+        path.write_bytes(b"A" * 31)
+        try:
+            link(path, path.with_name("shared.log.1"))
+        except (OSError, NotImplementedError):
+            _util.skip("this platform cannot create a symlink")
+        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
+        before = {slot.name: slot.read_bytes() for slot in path.parent.glob("shared.log*")}
+        with contextlib.closing(writer), _refuses(f"a {link.__name__} of the active was rotated"):
+            writer.write("x")
+        assert not list(writer._owner.lock_root.glob("*.rotate.json")), link
+        assert {slot.name: slot.read_bytes() for slot in path.parent.glob("shared.log*")} == before, link
 
 
 def test_connector_log_preserves_user_notes_and_temps_with_embedded_tokens(tmp):
