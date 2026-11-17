@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import _fixture_lock_root, _mod  # noqa: E402
+from test_discord_log_rotation import _fixture_lock_root, _mod, _restart  # noqa: E402
 
 LIMIT = 32
 
@@ -234,6 +234,114 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
     assert "healed 15" in path.read_text(encoding="utf-8")
     assert not journal.exists()
     assert all(p.stat().st_size <= LIMIT for p in _window(path))
+
+
+def test_a_backup_deleted_while_a_rotation_journal_is_pending_is_absent(tmp):
+    """A backup deleted after a rotation faulted mid-publish is absent to the recovery, restarts included."""
+    m = _mod()
+    real_replace, real_fsync = os.replace, m._ConnectorLogWriter.__dict__["_fsync_directory"]
+    fault = {}
+
+    def replace(src, dst, *args, **kwargs):
+        real_replace(src, dst, *args, **kwargs)
+        fault["published"] += Path(dst).name.startswith("connector.log.")
+
+    def fsync(directory):
+        if fault["left"] and fault["published"] == fault["after"]:
+            fault["left"] -= 1
+            raise OSError("injected fault after a published slot")
+        real_fsync.__func__(directory)
+    # A fault after .1 is published leaves the active's bytes in the active alone.
+    for victim, after in (("connector.log.1", 1), ("connector.log.2", 1), ("connector.log.1", 2)):
+        path = Path(tmp) / f"{victim}-{after}" / "connector.log"
+        path.parent.mkdir()
+        writer = _filled(m, path)
+        journal, active = writer._rotation_manifest_path(), path.read_text(encoding="utf-8").splitlines()
+        fault.update(published=0, left=1, after=after)
+        os.replace, m._ConnectorLogWriter._fsync_directory = replace, staticmethod(fsync)
+        try:
+            writer.write("y" * 25)
+        except OSError as exc:
+            assert "injected fault" in str(exc), exc
+        else:
+            raise AssertionError(f"{victim}: the rotation succeeded under the injected fault")
+        finally:
+            os.replace, m._ConnectorLogWriter._fsync_directory = real_replace, real_fsync
+        assert fault["left"] == 0 and journal.exists(), (victim, fault)
+        path.with_name(victim).unlink()
+        try:
+            for i in range(2):
+                writer.write(f"after {i}")
+        finally:
+            writer.close()
+        assert not journal.exists(), victim
+        _restart(path, LIMIT, 2)
+        assert all(p.stat().st_size <= LIMIT for p in _window(path)), victim
+        kept = [ln for p in reversed(_window(path)) for ln in p.read_text(encoding="utf-8").splitlines()]
+        assert kept[-2:] == ["after 0", "after 1"] and kept[:-2] == sorted(set(kept[:-2])), (victim, kept)
+        assert set(active) <= set(kept), (victim, after, kept)
+
+
+def test_a_finished_rotation_whose_journal_unlink_failed_is_discarded(tmp):
+    """A rotation that published every slot but kept its journal recovers as complete."""
+    m = _mod()
+    path = Path(tmp) / "connector.log"
+    writer = _filled(m, path)
+    journal = writer._rotation_manifest_path()
+    before = [p.read_bytes() for p in _window(path)]
+    real_unlink, fired = Path.unlink, []
+
+    def unlink(self, *args, **kwargs):
+        if self == journal and not fired:
+            fired.append(self)
+            raise OSError("injected rotation journal unlink failure")
+        return real_unlink(self, *args, **kwargs)
+    Path.unlink = unlink
+    try:
+        try:
+            writer.write("y" * 25)
+        except OSError as exc:
+            assert "journal unlink failure" in str(exc), exc
+        else:
+            raise AssertionError("the rotation succeeded under the injected unlink fault")
+        assert fired and journal.exists()
+        writer.write("z" * 25)
+    finally:
+        Path.unlink = real_unlink
+        writer.close()
+    assert not journal.exists()
+    assert [p.read_bytes() for p in _window(path)] == [b"z" * 25 + b"\n", before[0], before[1]]
+
+
+def test_a_slot_swapped_while_a_rotation_journal_recovers_is_refused(tmp):
+    """Recovery holds each slot to the identity it expects there, so a swap during it refuses every write."""
+    m = _mod()
+    cls, path = m._ConnectorLogWriter, Path(tmp) / "connector.log"
+    writer, real, backup = _filled(m, path), cls.__dict__["_publish_in_place"], path.with_name("connector.log.2")
+
+    def fault(*args):  # the rotation's active publish faults, leaving its journal pending
+        cls._publish_in_place = staticmethod(swap)
+        raise OSError("injected fault before the active publish")
+
+    def swap(*args):  # the recovery's active publish lands, then a foreign file takes .2
+        cls._publish_in_place = real
+        real.__func__(*args)
+        backup.with_name("foreign").write_bytes(b"FOREIGN\n")
+        os.replace(backup.with_name("foreign"), backup)
+    cls._publish_in_place = staticmethod(fault)
+    try:
+        for attempt in range(3):
+            try:
+                writer.write("y" * 25)
+            except (OSError, m._ConnectorOwnershipError) as exc:
+                assert str(exc) == ("injected fault before the active publish" if attempt == 0 else
+                                    f"connector log namespace path was replaced while owned: {backup}"), exc
+            else:
+                raise AssertionError(f"write {attempt} accepted a slot swapped during recovery")
+    finally:
+        cls._publish_in_place = real
+        writer.close()
+    assert backup.read_bytes() == b"FOREIGN\n"
 
 
 def test_the_watchdog_closes_first_and_a_failed_log_write_falls_back_to_stderr(tmp):
