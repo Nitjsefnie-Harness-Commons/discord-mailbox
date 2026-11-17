@@ -237,14 +237,14 @@ cleans that directory on a host also removes what the product keeps there.
 
 | Store | Location | Contents | Sensitivity | Kept until |
 | --- | --- | --- | --- | --- |
-| Inbox records ([Local records](#local-records)) | `<temp>/discord-mailbox/<identity>/inbox/` | each delivered message: body, attachment names and URLs, author id, username, display name, roles and label, channel and server names, and the pinned, replied-to, linked and forwarded messages around it | personal data | the message, its channel or its thread is deleted on Discord while a connector runs, or `erase` removes it; never pruned by age |
+| Inbox records ([Local records](#local-records)) | `<temp>/discord-mailbox/<identity>/inbox/` | each delivered message: body, attachment names and URLs, author id, username, display name, roles and label, channel and server names, and the pinned, replied-to, linked and forwarded messages around it | personal data | the message, its channel or its thread is deleted on Discord while a connector runs, with the exceptions [Local records](#local-records) lists, or `erase` removes it; never pruned by age |
 | Message and pin caches ([Local records](#local-records)) | `<temp>/discord-mailbox/messages/` and `pins/`, shared by every identity | each message fetched, sent, listed or pinned: body, author id and label, attachments | personal data | as inbox records |
 | Outbox | `<temp>/discord-mailbox/<identity>/outbox/` | each queued `send`: recipient, subject, body | personal data | the connector sends it or gives up on it; while no connector runs, it waits |
-| Control requests and answers ([Local records](#local-records)) | `inbox-metadata/` and `outbox-metadata/` beside the inbox | each request's arguments (a `creds add` password) and the connector's answer (`creds get` and `creds list` passwords, `conversation` messages) | secrets, personal data | a request until a connector takes it or its CLI stops waiting; an answer until its CLI reads it or, while a connector runs, 15 minutes |
+| Control requests and answers ([Local records](#local-records)) | `inbox-metadata/` and `outbox-metadata/` beside the inbox | each request's arguments (a `creds add` password) and the connector's answer (`creds get` and `creds list` passwords, `conversation` messages) | secrets, personal data | a request until a connector takes it or its CLI withdraws it at its timeout; a CLI that is interrupted leaves it for the next connector to take; an answer until its CLI reads it or, while a connector runs, 15 minutes |
 | Event stream | `<temp>/discord-mailbox/<identity>/events.<generation>.jsonl` | the connector's stdout events, which `leech` follows: each delivered message's sender label, user id, subject and record path | personal data | the active 2 MiB segment and the two before it; each connector start deletes its predecessor's |
 | Connector log | `<temp>/discord-mailbox/<identity>/connector.log`, or the `--log` path, and its backups `.1` to `.3` | the connector's log lines and discord.py's, including the user and message ids of refused deliveries and the user ids and names of directory entries it ignores | personal data (user ids) | 10 MiB per file, the active file and three backups |
 | Leech log | `<temp>/discord-mailbox/<identity>/leech.log` and `leech.log.1` | each leech's status lines | none | 2 MiB per file, the active file and one backup |
-| Process files | in `<temp>/discord-mailbox/<identity>/`: `connector.pid`, `connector.state`, `leeches/`, `status-plugin/` (a copy of the installed status plugin), and the `.lock` files beside each log | process ids, gateway state, the status plugin | none | `connector.pid` and `connector.state` are rewritten at each start, a leech's file is removed once it has exited, `status-plugin/` at each start and when the plugin is removed; the `.lock` files are never pruned |
+| Process files | in `<temp>/discord-mailbox/<identity>/`: `connector.pid`, `connector.state`, `leeches/`, `status-plugin/` (a copy of the installed status plugin), and the `.lock` files beside `connector.pid` and each log | process ids, gateway state, the status plugin | none | `connector.pid` and `connector.state` are rewritten at each start, a leech's file is removed once it has exited, `status-plugin/` at each start and shutdown and when the plugin is removed or fails; the `.lock` files stay, except that a start removes a `.connector.pid.lock` it cannot open once its connector is gone |
 | Root files | `<temp>/discord-mailbox/.agent-bundle-owner` and `.usage-status-gate-<server id>.json` | the directory's ownership marker; the last usage-board period claimed on this host | none | never pruned |
 | Lock root | `~/.discord-mailbox-log-locks/` | lock files, the connector log's random staging key and its SQLite authority file, and, while a log migration or rotation runs, its journal (log paths, sizes and hashes) | no personal data | never pruned |
 | Extension registry ([Extensions](#extensions)) | `~/.agent-bundle/discord/extensions/<identity>.json` | the registered extension's path, the date of the last daily heartbeat, and whatever the extension saves with `ctx.save()` | whatever the extension saves | never pruned |
@@ -254,53 +254,68 @@ cleans that directory on a host also removes what the product keeps there.
 
 On Discord, the product writes:
 
-| What | Where | Contents | Sensitivity | Written |
-| --- | --- | --- | --- | --- |
-| Directory entry ([Directory](#directory)) | directory channel | `**<identity>** · <@bot user id>`, then the host's `sys.platform`, the Python version and the local start time; `register` replaces all of it after the first line | host details | at connector startup when the bot has no entry there; by `register` |
-| Credentials entries ([Credentials](#credentials)) | credentials channel | domain, login and password, in plain text | secrets | by `creds add` |
-| Receipts ([Delivery](#delivery)) | each delivered message | a ✅ reaction | none | at each delivery |
-| Usage board and lease ([Settings](#settings)) | voice channel names in a server with a usage board | usage figures; `claim · <identity>@<host> · <HH:MM>Z` | host name | when a figure or the lease changes, at most once per 5-minute period |
-| Presence | the bot's status | the text the installed status plugin sets | what the plugin shows | while the plugin runs; cleared when it is removed or fails |
-| What a command creates | the channel or server the command names | messages and files (`send`, `attachments upload`, `move`), forum posts, pins, reactions, topics, channels and categories (`setup`, `channels create`), emoji | personal data when the content is | by that command |
-| Audit-log reasons | the server's audit log | `… via discord_mb by <identity>` on pin, topic, channel, thread, forum-post and emoji changes and moves into a forum | the identity name | by that command |
+| What | Where | Contents | Sensitivity | Written | Kept until |
+| --- | --- | --- | --- | --- | --- |
+| Directory entry ([Directory](#directory)) | directory channel | `**<identity>** · <@bot user id>`, then the host's `sys.platform`, the Python version and the local start time; `register` replaces all of it after the first line | host details | at connector startup when the bot has no entry there; by `register` | deleted |
+| Credentials entries ([Credentials](#credentials)) | credentials channel | domain, login and password, in plain text | secrets | by `creds add` | deleted |
+| Receipts ([Delivery](#delivery)) | each delivered message | a ✅ reaction | none | at each delivery | the message is deleted or `message unreact` removes it |
+| Usage board and lease ([Settings](#settings)) | voice channel names in a server with a usage board | usage figures; `claim · <identity>@<host> · <HH:MM>Z` | host name | when a figure or the lease changes, at most once per 5-minute period | the next rename, or the channel is deleted |
+| Presence | the bot's status | the text the installed status plugin sets | what the plugin shows | while the plugin runs | the plugin is removed or fails; after its `run()` returns, the last text stays until the connector stops |
+| What a command creates | the channel or server the command names | messages and files (`send`, `attachments upload`, `move`), forum posts, pins, reactions, topics, channels and categories (`setup`, `channels create`), emoji | personal data when the content is | by that command | deleted |
+| Audit-log reasons | the server's audit log | the reason on each logged change: `… by <identity>` for a command's change (`pinned via discord_mb by <identity>`, `pinned on send by <identity>`), `discord_mb.py setup`, `usage status lease`, `usage status refresh` | the identity name | by that change | 45 days, by Discord; no command removes an entry |
 
-Apart from the usage-board names it renames and the presence it clears, what
-the product writes on Discord stays until someone deletes it: the product
-deletes there only through `message delete`, `move`, `forum delete`,
-`channels delete` and `emoji delete`, and undoes a pin or a reaction only
-through `pins unpin` and `message unreact`.
+The product deletes on Discord only through `message delete`, `move`,
+`forum delete`, `channels delete` and `emoji delete`, and undoes a pin or a
+reaction only through `pins unpin`, `thread unpin` (a forum post) and
+`message unreact`.
 
 ### Deleting one user's data
 
 `erase --user-id` ([Local records](#local-records)) removes only the records
-that user wrote, on the host where it runs. For the rest:
+that user wrote, under the `<temp>` of the process that runs it. For the rest:
 
 1. While a connector runs, delete on Discord what that user posted that the
    product reads, and any message, theirs or a bot's, you are asked to remove.
-   Their directory entries are the `list-agents <identity> --json` entries
-   whose `author_id` is their id; their credentials entries are the
-   `creds <identity> list --json` entries with that `author_id`, but with
-   `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS` set that list holds only trusted
-   authors' entries ([Credentials](#credentials)), while
-   `conversation <identity> 100 --channel <id> --json` lists a channel's
-   messages, 100 a page (`--before` pages back), each with its `from_user_id`.
+   - Directory entries: the `list-agents <identity> --json` entries whose
+     `author_id` is their id, and those other accounts wrote whose `user_id`
+     is their id.
+   - Credentials entries: the `creds <identity> list --json` entries whose
+     `author_id` is their id. With `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS`
+     set that list holds only trusted authors' entries
+     ([Credentials](#credentials)); find the others with
+     `conversation <identity> 100 --channel <credentials channel id> --json`,
+     which lists a channel's messages, 100 a page (`--before` pages back),
+     each with its `from_user_id`.
+   - Their DMs with the bot: `conversation <identity> 100 --dm <user id> --json`.
+
    Each carries its `msg_id`: delete it with
    `discord-mb message <identity> delete <msg_id> --channel <channel>`
-   (`directory`, `credentials` or a channel id), which for another account's
-   message needs `manage_messages` ([Bot](#bot)). Every running connector that
-   receives the deletion removes that message's local records on its host.
-2. Run `discord-mb erase --user-id <id>` on every host that runs a connector.
+   (`directory`, `credentials` or a channel id). Deleting another account's
+   message in a server channel needs `manage_messages` ([Bot](#bot)); Discord
+   grants that permission in server channels only, so in a DM the bot deletes
+   its own messages and only the user can delete theirs. Every running
+   connector that receives a deletion removes that message's local records on
+   its host. The server's audit log keeps its entries for 45 days whatever you
+   delete.
+2. Run `discord-mb erase --user-id <id>` on every host that runs a connector,
+   as each connector's user and with that connector's `TMPDIR`, `TEMP` and
+   `TMP`, so it works on that connector's `<temp>`. Run with another `<temp>`,
+   it never sees that connector's records, and with no `discord-mailbox`
+   directory there it prints `"removed": 0`.
 3. `erase` leaves the user in records other authors wrote: their label in the
    `reply_to`, `linked_messages` and `pinned_messages` summaries, a forwarded
    copy of their message (which names no author), and their words in another
-   message's body. Search the inbox, `messages/` and `pins/` files for their
-   user id, username, directory names and the text in question, and delete the
-   files you need to, together with any of their attachments
-   `attachments download` saved.
+   message's body. It also leaves the outbox and control files, where a queued
+   `send` or a request an interrupted CLI left behind can name them. Search the
+   `inbox/`, `messages/`, `pins/`, `outbox/`, `inbox-metadata/` and
+   `outbox-metadata/` files for their user id, username, directory names and
+   the text in question, and delete the files you need to, together with any
+   of their attachments `attachments download` saved.
 4. Their user id stays in the event stream and the connector log until the
    limits above drop it. To remove it now, stop the connector, delete its
-   `events.*.jsonl` and `connector.log*` files, and start it again: a start
-   creates both afresh.
+   `events.*.jsonl` files and its `connector.log*` files (or its `--log` file
+   and that file's `.1` to `.3` backups), and start it again: a start creates
+   both afresh.
 5. Remove their id from `DISCORD_MAILBOX_ALLOWED_USER_IDS`,
    `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS` and what an extension saved in its
    registry file, then restart the connector so it reads the change.
@@ -315,11 +330,13 @@ that user wrote, on the host where it runs. For the rest:
    them, delete the channels `setup` created and those you created for the bot,
    usage-board and lease channels included, with
    `channels <identity> delete --channel <name or id>`. Delete the broadcast
-   role in Discord: no command removes a role.
+   role in Discord: no command removes a role. The audit-log entries naming
+   each identity stay for Discord's 45 days.
 2. Stop every connector ([Starting and stopping](#starting-and-stopping)); a
    leech exits when its connector stops.
-3. On every host, delete `<temp>/discord-mailbox/`, each `--log` file with its
-   backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`,
+3. On every host, for each user that ran a connector and each `<temp>` its
+   connectors used, delete `<temp>/discord-mailbox/`, each `--log` file with
+   its backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`,
    each `~/.agent-bundle/discord/<identity>.token`,
    `~/.agent-bundle/discord/extensions/<identity>.json`, the product's keys in
    the settings files, and the files `attachments download` saved.
