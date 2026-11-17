@@ -83,6 +83,7 @@
 !/scripts/
 !/scripts/ci/
 !/scripts/ci/coverage_floor.py
+!/scripts/ci/gate_base_freshness.py
 !/scripts/ci/perf_gate.py
 !/scripts/ci/perf_workloads.py
 
