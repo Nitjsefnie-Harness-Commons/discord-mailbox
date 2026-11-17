@@ -530,7 +530,7 @@ never lower it to turn a build green.
 | --- | --- |
 | `tests` | `run_tests.py` across 3 OSes × every supported Python, plus a single-run coverage job — the matrix would otherwise report the same coverage number once per leg. |
 | `lint` / `types` | pylint + pycodestyle, and pyright. |
-| `codeql` | Security analysis (Python only — no JS here). Findings go to the Security tab, never the build. Weekly cron on top of push, because a query published today would otherwise only ever run against files touched after it shipped. |
+| `codeql` | Security analysis of the Python package and the workflow files. Findings go to the Security tab, never the build. Weekly cron on top of push, because a query published today would otherwise only ever run against files touched after it shipped. |
 | `audit` | `pip-audit` over every hash-pinned manifest, each of which pins the full transitive tree. **Daily** cron: this answers "is a version we froze months ago still safe", and that answer changes with no commit here to hang it on. |
 | `actionlint` | `actionlint` + `zizmor` over the workflow YAML. A broken workflow does not go red, it silently stops running. |
 | `open pull request` | Called by each workflow above. On a push to the head of an open pull request that GitHub reports mergeable, their jobs skip: that pull request's run gates the same commit. A conflicted pull request gets no run of its own, so its pushes run the gates. |
