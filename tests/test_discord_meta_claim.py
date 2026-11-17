@@ -314,8 +314,8 @@ def test_a_cli_request_carries_its_creation_time_and_its_wait(tmp):
             (out_dir / p.name).write_text(json.dumps({"ok": True}), encoding="utf-8")
 
     with _cli_side(tmp, read):
-        core._meta_request("me", {"op": "list-agents"}, 7)
-    assert [(r["op"], r["timeout"], abs(r["created"] - time.time()) < 60) for r in seen] == [("list-agents", 7, True)], seen
+        core._meta_request("me", {"op": "list-agents"}, 3.5)
+    assert [(r["op"], r["timeout"], abs(r["created"] - time.time()) < 60) for r in seen] == [("list-agents", 3.5, True)], seen
 
 
 def main():
