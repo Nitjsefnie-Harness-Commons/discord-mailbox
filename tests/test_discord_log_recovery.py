@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""A connector log failure never disables logging for good or lifecycle control.
-
-A retained backup deleted from outside is absent rather than replaced, a writer
-whose rotation failed after publishing recovers once the fault clears, and the
-parent watchdog closes the client before logging, through a log() that falls
-back to stderr when the file write fails.
-"""
+"""A connector log failure never disables logging for good or lifecycle control."""
 import asyncio
 import contextlib
 import io
