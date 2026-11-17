@@ -17,6 +17,7 @@ import json
 import subprocess
 import types
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _util  # noqa: E402
@@ -27,6 +28,127 @@ TEST_LOCK_ROOT_ENV = "DISCORD_MB_TEST_LOCK_ROOT"
 
 def _mod():
     return _util.load(MB, "mb_connector_log_rotation")
+
+
+def _patched(owner, **attrs):
+    """Set `attrs` on `owner` (a module, class, instance or `sys.modules`) until the block exits."""
+    if isinstance(owner, dict):
+        return mock.patch.dict(owner, attrs)
+    return mock.patch.multiple(owner, create=True, **attrs)
+
+
+@contextlib.contextmanager
+def _fake_windows(m, probe=None):
+    """Make `m` take its Windows path over an inode-keyed CRT byte lock; `probe(fd)` sees each call."""
+    locked = set()
+
+    def locking(fd, mode, count):
+        del count
+        if probe is not None:
+            probe(fd)
+        key = os.fstat(fd).st_ino
+        if mode == fake_msvcrt.LK_NBLCK:
+            if key in locked:
+                raise OSError("already locked")
+            locked.add(key)
+        else:
+            locked.discard(key)
+
+    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
+    with _patched(m.sys, platform="win32"), _patched(sys.modules, msvcrt=fake_msvcrt):
+        yield
+
+
+@contextlib.contextmanager
+def _refuses(message, error=RuntimeError):
+    """Pass only when the block raises `error`, else fail with `message`; yields the caught errors."""
+    caught = []
+    try:
+        yield caught
+    except error as exc:
+        caught.append(exc)
+        return
+    raise AssertionError(message)
+
+
+# Opens every probe child: `mod` is the connector module loaded from argv[1].
+CHILD_HEAD = '''
+import importlib.util
+import os
+import sys
+spec = importlib.util.spec_from_file_location("mb_child", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+'''
+
+
+def _rebind(path, data=None, link=None):
+    """Put `data` (or a hard link to `link`) at `path` atomically, as a concurrent process would."""
+    foreign = path.with_name(path.name + ".foreign")
+    if link is None:
+        foreign.write_bytes(data)
+    else:
+        os.link(link, foreign)
+    os.replace(foreign, path)
+
+
+@contextlib.contextmanager
+def _after_staging(m, name, destination, act):
+    """Once, after the real `_ConnectorLogWriter.<name>` staged for `destination`, run `act(temporary)`.
+
+    Yields a list that holds one item after the swap ran.
+    """
+    real = getattr(m._ConnectorLogWriter, name)
+    swapped = []
+
+    def wrapper(self, temporary, *args, **kwargs):
+        result = real(self, temporary, *args, **kwargs)
+        target = kwargs.get("expected_destination")
+        if not swapped and target is not None and Path(target) == destination:
+            swapped.append(True)
+            act(Path(temporary))
+        return result
+
+    with _patched(m._ConnectorLogWriter, **{name: wrapper}):
+        yield swapped
+
+
+@contextlib.contextmanager
+def _swap_on_open(m, path):
+    """Rebind `path` to foreign bytes just before `m` first opens it for writing; yields the hits."""
+    real_open, swapped = open, []
+
+    # Mirrors open(file, mode='r', ...), which is the signature it stands in for.
+    # pylint: disable-next=keyword-arg-before-vararg
+    def open_then_swap(file, mode="r", *args, **kwargs):
+        if not swapped and Path(file) == path and mode in ("r+b", "w+b"):
+            swapped.append(True)
+            _rebind(path, b"LIVE-CONCURRENT\n")
+        return real_open(file, mode, *args, **kwargs)
+
+    with _patched(m, open=open_then_swap):
+        yield swapped
+
+
+def _child_argv(child, *args):
+    return [sys.executable, "-c", CHILD_HEAD + child, MB, *map(str, args)]
+
+
+def _run_child(child, *args, code=None, **kwargs):
+    """Run `child` after CHILD_HEAD with the connector path and `args`; `code` is its exit status."""
+    run = subprocess.run(_child_argv(child, *args), capture_output=True, **kwargs)
+    assert code is None or run.returncode == code, (code, run.returncode, run.stderr)
+    return run
+
+
+def _restart(path, max_bytes, backup_count, **kwargs):
+    """Open and close a writer from a fresh module load: a restart that recovers an interrupted run."""
+    _mod()._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=backup_count, **kwargs).close()
+
+
+def _hidden(case):
+    """The hidden temps and journals left in `case`, lock files aside."""
+    return [p.name for p in case.iterdir() if p.name.startswith(".") and not p.name.endswith(".lock")]
 
 
 def _fixture_lock_root(test):
@@ -152,12 +274,8 @@ def test_connector_log_migration_streams_history_without_whole_file_reads(tmp):
             raise AssertionError("historical source was read as one byte string")
         return original_read_bytes(candidate)
 
-    Path.read_bytes = reject_whole_history
-    try:
-        writer = m._ConnectorLogWriter(path, max_bytes=16, backup_count=1)
-        writer.close()
-    finally:
-        Path.read_bytes = original_read_bytes
+    with _patched(Path, read_bytes=reject_whole_history):
+        m._ConnectorLogWriter(path, max_bytes=16, backup_count=1).close()
 
     assert backup.read_bytes() == b"OLD0001\nNEW0000\n"
     assert path.read_bytes() == b"NEW0001\nNEW0002\n"
@@ -184,12 +302,8 @@ def test_connector_log_bounded_window_check_streams_instead_of_reading_whole_fil
             raise AssertionError("bounded window was read as one byte string")
         return original_read_bytes(candidate)
 
-    Path.read_bytes = reject_whole_window
-    try:
-        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        writer.close()
-    finally:
-        Path.read_bytes = original_read_bytes
+    with _patched(Path, read_bytes=reject_whole_window):
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1).close()
 
     # An untouched window proves the bounded fast path really ran.
     assert path.read_bytes() == "courant\n".encode("utf-8")
@@ -231,12 +345,9 @@ def test_connector_log_in_place_publish_requires_a_verified_staged_payload(tmp):
     destination.write_bytes(b"LIVE")
     temporary = case / ".active.log.staged.tmp"
     temporary.write_bytes(b"UNVERIFIED")
-    try:
+    with _refuses("an unverified staged payload was published") as failure:
         m._ConnectorLogWriter._publish_in_place(destination, temporary)
-    except RuntimeError as exc:
-        assert "verified staged payload" in str(exc), str(exc)
-    else:
-        raise AssertionError("an unverified staged payload was published")
+    assert "verified staged payload" in str(failure[0]), failure
     assert destination.read_bytes() == b"LIVE"
     assert temporary.read_bytes() == b"UNVERIFIED"
 
@@ -246,7 +357,6 @@ def test_connector_log_append_retries_short_writes(tmp):
     m = _mod()
     path = Path(tmp) / "short-write.log"
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    real_handle = writer._fh
     written = bytearray()
 
     class ShortWriteHandle:
@@ -261,14 +371,10 @@ def test_connector_log_append_retries_short_writes(tmp):
         def close(self):
             return None
 
-    writer._fh = ShortWriteHandle()
-    try:
+    with contextlib.closing(writer), _patched(writer, _fh=ShortWriteHandle()):
         writer._append_record("abc")
         assert bytes(written) == b"abc"
         assert writer._active_bytes == 3
-    finally:
-        writer._fh = real_handle
-        writer.close()
 
 
 def test_connector_log_append_rejects_zero_progress_write(tmp):
@@ -276,7 +382,6 @@ def test_connector_log_append_rejects_zero_progress_write(tmp):
     m = _mod()
     path = Path(tmp) / "zero-write.log"
     writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    real_handle = writer._fh
 
     class ZeroWriteHandle:
         def write(self, data):
@@ -288,18 +393,11 @@ def test_connector_log_append_rejects_zero_progress_write(tmp):
         def close(self):
             return None
 
-    writer._fh = ZeroWriteHandle()
-    try:
-        try:
+    with contextlib.closing(writer), _patched(writer, _fh=ZeroWriteHandle()):
+        with _refuses("zero-progress write was accepted", OSError) as failure:
             writer._append_record("abc")
-        except OSError as exc:
-            assert "short write" in str(exc)
-        else:
-            raise AssertionError("zero-progress write was accepted")
+        assert "short write" in str(failure[0])
         assert writer._active_bytes == 0
-    finally:
-        writer._fh = real_handle
-        writer.close()
 
 
 def test_connector_log_numeric_backups_require_canonical_positive_suffixes(tmp):
@@ -365,20 +463,11 @@ def test_connector_log_migration_packs_the_full_bounded_window(tmp):
 
 def test_connector_log_migration_crash_keeps_recoverable_sources(tmp):
     """A crash at the first atomic publish leaves a recoverable history set."""
-    m = _mod()
-    del m
     path = Path(tmp) / "crash.log"
-    lines = [f"{i:02d}\n" for i in range(12)]
     # write_bytes, not write_text: the latter translates \n to \r\n on
     # Windows, and the assertions below compare exact bytes.
-    path.write_bytes("".join(lines).encode("utf-8"))
+    path.write_bytes("".join(f"{i:02d}\n" for i in range(12)).encode("utf-8"))
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 def crash_once(*args):
     os.replace = real_replace
@@ -386,11 +475,7 @@ def crash_once(*args):
 os.replace = crash_once
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
-    proc = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert proc.returncode == 73, proc.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=73)
     visible = []
     for candidate in path.parent.iterdir():
         if candidate.name == path.name or candidate.name.startswith(path.name + "."):
@@ -403,17 +488,8 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 
 def test_connector_log_migration_recovers_after_every_real_publish(tmp):
     """Every post-replace crash recovers one generation without duplicates."""
-    m = _mod()
-    del m
-    lines = [f"{i:02d}\n" for i in range(12)]
-    original = "".join(lines).encode("utf-8")
+    original = "".join(f"{i:02d}\n" for i in range(12)).encode("utf-8")
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_crash_generation", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 mode = sys.argv[3]
@@ -432,12 +508,7 @@ if mode == "count":
 
     probe = Path(tmp) / "publish-count"
     probe.write_bytes(original)
-    counted = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(probe), "count", "999"],
-        capture_output=True, text=True,
-    )
-    assert counted.returncode == 0, counted.stderr
-    publish_count = int(counted.stdout.strip())
+    publish_count = int(_run_child(child, probe, "count", "999", code=0, text=True).stdout.strip())
     assert publish_count >= 2, publish_count
 
     for crash_number in range(1, publish_count + 1):
@@ -445,48 +516,24 @@ if mode == "count":
         path = case / "generation.log"
         case.mkdir()
         path.write_bytes(original)
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             "crash", str(crash_number)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 100 + crash_number, (
-            crash_number, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
-
-        restarted = _mod()
-        writer = restarted._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-        writer.close()
+        _run_child(child, path, "crash", crash_number, code=100 + crash_number)
+        _restart(path, 16, 2)
         slots = [path.with_name("generation.log.2"),
                  path.with_name("generation.log.1"), path]
         recovered = b"".join(slot.read_bytes() for slot in slots if slot.exists())
         assert recovered == original, (crash_number, recovered)
         assert all(len(record) == 3 for record in recovered.splitlines(True))
-        hidden = [
-            item.name for item in case.iterdir()
-            if item.name.startswith(".")
-            and not item.name.endswith(".lock")
-        ]
-        assert hidden == [], (crash_number, hidden)
+        assert _hidden(case) == [], crash_number
 
 
 def test_connector_log_migration_recovers_partial_in_place_publish(tmp):
     """A torn active-inode copy resumes only from its durable staged temp."""
-    m = _mod()
-    del m
     case = Path(tmp) / "partial-in-place"
     case.mkdir()
     path = case / "partial.log"
     original = b"".join(f"{i:02d}\n".encode() for i in range(12))
     path.write_bytes(original)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_partial_in_place", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 def partial_publish(destination, temporary, *args):
     raw = temporary.read_bytes()
     data, _ = mod._ConnectorLogWriter._staged_payload(raw)
@@ -499,11 +546,7 @@ def partial_publish(destination, temporary, *args):
 mod._ConnectorLogWriter._publish_in_place = staticmethod(partial_publish)
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 176, crashed.stderr.decode("utf-8", "replace")
+    _run_child(child, path, code=176)
 
     lock_root = Path(os.environ[TEST_LOCK_ROOT_ENV])
     journals = list(lock_root.glob("*.migrate.json"))
@@ -518,29 +561,16 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
         staged.read_bytes())
     assert path.read_bytes() != staged_payload, "partial-write crash was vacuous"
 
-    restarted_mod = _mod()
-    writer = restarted_mod._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-    writer.close()
+    _restart(path, 16, 2)
     slots = [path.with_name("partial.log.2"),
              path.with_name("partial.log.1"), path]
     assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
-    assert [
-        item.name for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ] == []
+    assert _hidden(case) == []
 
 
 def test_connector_log_rotation_recovers_after_every_publish_and_truncate(tmp):
     """Every durable rotation boundary can restart to one exact history."""
-    m = _mod()
-    del m
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_rotation_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 mode = sys.argv[3]
 threshold = int(sys.argv[4])
 real_replace = os.replace
@@ -573,12 +603,7 @@ if mode == "count":
 
     probe = Path(tmp) / "rotation-publish-count"
     path = seed(probe)
-    counted = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path), "count", "999"],
-        capture_output=True, text=True,
-    )
-    assert counted.returncode == 0, counted.stderr
-    publish_count = int(counted.stdout.strip())
+    publish_count = int(_run_child(child, path, "count", "999", code=0, text=True).stdout.strip())
     assert publish_count == 2, publish_count
 
     old_active = b"aaaaaaa\n"
@@ -586,66 +611,34 @@ if mode == "count":
     for crash_number in range(1, publish_count + 1):
         case = Path(tmp) / f"rotation-publish-crash-{crash_number}"
         path = seed(case)
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             "replace", str(crash_number)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 130 + crash_number, (
-            crash_number, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
-
-        restarted = _mod()
-        writer = restarted._ConnectorLogWriter(path, max_bytes=8, backup_count=2)
-        writer.close()
+        _run_child(child, path, "replace", crash_number, code=130 + crash_number)
+        _restart(path, 8, 2)
         expected = {
             path.with_name("rotation.log.2"): old_backup,
             path.with_name("rotation.log.1"): old_active,
             path: b"",
         }
         assert {slot: slot.read_bytes() for slot in expected} == expected
-        assert [
-            item.name for item in case.iterdir()
-            if item.name.startswith(".") and not item.name.endswith(".lock")
-        ] == []
+        assert _hidden(case) == []
 
     case = Path(tmp) / "rotation-truncate-crash"
     path = seed(case)
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(path),
-         "truncate", "0"],
-        capture_output=True,
-    )
-    assert crashed.returncode == 180, crashed.stderr.decode("utf-8", "replace")
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=8, backup_count=2)
-    writer.close()
+    _run_child(child, path, "truncate", "0", code=180)
+    _restart(path, 8, 2)
     assert path.read_bytes() == b""
     assert path.with_name("rotation.log.1").read_bytes() == old_active
     assert path.with_name("rotation.log.2").read_bytes() == old_backup
-    assert [
-        item.name for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ] == []
+    assert _hidden(case) == []
 
 
 def test_connector_log_migration_crash_loop_has_bounded_hidden_artifacts(tmp):
     """Repeated hard crashes do not accumulate migration temps unboundedly."""
-    m = _mod()
-    del m
     case = Path(tmp) / "crash-loop"
     case.mkdir()
     path = case / "loop.log"
     original = b"".join(f"{i:02d}\n".encode() for i in range(12))
     path.write_bytes(original)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_crash_loop", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def publish_then_crash(*args):
@@ -658,35 +651,21 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
     outcomes = []
     for _ in range(8):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert crashed.returncode in (0, 119), crashed.stderr.decode("utf-8", "replace")
+        crashed = _run_child(child, path)
+        assert crashed.returncode in (0, 119), crashed.stderr
         outcomes.append(crashed.returncode)
         if crashed.returncode == 0:
             break
     assert outcomes.count(119) >= 2, outcomes
 
-    hidden_before_restart = [
-        item for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ]
     # Three staged slot temps plus one durable journal are the fixed on-disk
     # budget; a crash loop must not grow this list.
-    assert len(hidden_before_restart) <= (2 + 1) + 1, [
-        item.name for item in hidden_before_restart
-    ]
+    assert len(_hidden(case)) <= (2 + 1) + 1, _hidden(case)
 
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-    writer.close()
+    _restart(path, 16, 2)
     slots = [path.with_name("loop.log.2"), path.with_name("loop.log.1"), path]
     assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
-    assert [
-        item.name for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ] == []
+    assert _hidden(case) == []
 
 
 def test_connector_log_migration_uses_validated_payload_after_temp_rebound(tmp):
@@ -696,37 +675,23 @@ def test_connector_log_migration_uses_validated_payload_after_temp_rebound(tmp):
     original = b"".join(f"{i:02d}\n".encode() for i in range(12))
     path.write_bytes(original)
 
-    real_read = m._ConnectorLogWriter._read_staged_payload
-    swapped = {"done": False}
-    rebound = {"path": None}
+    rebound = []
 
-    def validate_then_replace(self, temporary, *args, **kwargs):
-        payload = real_read(self, temporary, *args, **kwargs)
-        destination = kwargs.get("expected_destination")
-        if (not swapped["done"] and destination is not None and
-                Path(destination) == path):
-            swapped["done"] = True
-            replacement = Path(temporary).with_name(
-                Path(temporary).name + ".foreign")
-            replacement.write_bytes(b"FOREIGN-PUBLISH")
-            os.replace(replacement, temporary)
-            rebound["path"] = Path(temporary)
-            assert temporary.read_bytes() == b"FOREIGN-PUBLISH"
-        return payload
-    m._ConnectorLogWriter._read_staged_payload = validate_then_replace
-    try:
-        writer = m._ConnectorLogWriter(path, max_bytes=16, backup_count=2)
-        writer.close()
-    finally:
-        m._ConnectorLogWriter._read_staged_payload = real_read
+    def replace_temp(temporary):
+        _rebind(temporary, b"FOREIGN-PUBLISH")
+        rebound.append(temporary)
+        assert temporary.read_bytes() == b"FOREIGN-PUBLISH"
 
-    assert swapped["done"]
+    with _after_staging(m, "_read_staged_payload", path, replace_temp) as swapped:
+        m._ConnectorLogWriter(path, max_bytes=16, backup_count=2).close()
+
+    assert swapped
     slots = [path.with_name("publish-rebound.log.2"),
              path.with_name("publish-rebound.log.1"), path]
     retained = b"".join(slot.read_bytes() for slot in slots if slot.exists())
     assert retained == original
     assert b"FOREIGN-PUBLISH" not in retained
-    assert rebound["path"].read_bytes() == b"FOREIGN-PUBLISH"
+    assert rebound[0].read_bytes() == b"FOREIGN-PUBLISH"
 
 
 def test_connector_log_migration_refuses_live_atomic_destination_swap(tmp):
@@ -736,30 +701,11 @@ def test_connector_log_migration_refuses_live_atomic_destination_swap(tmp):
     path.write_bytes(b"AAAAAAA\nBBBBBBB\nCCCCCCC\n")
     destination = path.with_name("migration-live-atomic.log.1")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    original_prepare = m._ConnectorLogWriter._prepare_staged_for_replace
-    swapped = {"done": False}
-
-    def prepare_then_swap(self, temporary, *args, **kwargs):
-        result = original_prepare(self, temporary, *args, **kwargs)
-        if (not swapped["done"] and
-                Path(kwargs["expected_destination"]) == destination):
-            swapped["done"] = True
-            replacement = destination.with_name(destination.name + ".foreign")
-            replacement.write_bytes(b"LIVE-CONCURRENT\n")
-            os.replace(replacement, destination)
-        return result
-
-    m._ConnectorLogWriter._prepare_staged_for_replace = prepare_then_swap
-    try:
-        try:
+    with _after_staging(m, "_prepare_staged_for_replace", destination,
+                        lambda _: _rebind(destination, b"LIVE-CONCURRENT\n")) as swapped:
+        with _refuses("migration replaced a rebound atomic destination"):
             m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("migration replaced a rebound atomic destination")
-    finally:
-        m._ConnectorLogWriter._prepare_staged_for_replace = original_prepare
-    assert swapped["done"]
+    assert swapped
     assert destination.read_bytes() == b"LIVE-CONCURRENT\n"
     assert list(lock_root.glob("*.migrate.json")), "migration journal was discarded"
 
@@ -773,32 +719,12 @@ def test_connector_log_atomic_stage_swap_never_truncates_external_hardlink(tmp):
     external = Path(tmp) / "external-stage-owner.log"
     external.write_bytes(b"EXTERNAL-STAGE-KEEP\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    real_read = m._ConnectorLogWriter._read_staged_payload
-    swapped = {"done": False}
-
-    def validate_then_hardlink(self, temporary, *args, **kwargs):
-        payload = real_read(self, temporary, *args, **kwargs)
-        if (not swapped["done"] and
-                Path(kwargs["expected_destination"]) == destination):
-            swapped["done"] = True
-            replacement = Path(temporary).with_name(
-                Path(temporary).name + ".foreign")
-            os.link(external, replacement)
-            os.replace(replacement, temporary)
-        return payload
-
-    m._ConnectorLogWriter._read_staged_payload = validate_then_hardlink
-    try:
-        try:
+    with _after_staging(m, "_read_staged_payload", destination,
+                        lambda temporary: _rebind(temporary, link=external)) as swapped:
+        with _refuses("staged hard-link swap was silently accepted"):
             m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("staged hard-link swap was silently accepted")
-    finally:
-        m._ConnectorLogWriter._read_staged_payload = real_read
 
-    assert swapped["done"]
+    assert swapped
     assert external.read_bytes() == b"EXTERNAL-STAGE-KEEP\n"
     assert list(lock_root.glob("*.migrate.json")), "migration journal was discarded"
 
@@ -812,32 +738,12 @@ def test_connector_log_atomic_stage_swap_after_prepare_keeps_journal(tmp):
     external = Path(tmp) / "external-after-prepare.log"
     external.write_bytes(b"EXTERNAL-AFTER-PREPARE\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    real_prepare = m._ConnectorLogWriter._prepare_staged_for_replace
-    swapped = {"done": False}
-
-    def prepare_then_hardlink(self, temporary, *args, **kwargs):
-        result = real_prepare(self, temporary, *args, **kwargs)
-        if (not swapped["done"] and
-                Path(kwargs["expected_destination"]) == destination):
-            swapped["done"] = True
-            replacement = Path(temporary).with_name(
-                Path(temporary).name + ".foreign")
-            os.link(external, replacement)
-            os.replace(replacement, temporary)
-        return result
-
-    m._ConnectorLogWriter._prepare_staged_for_replace = prepare_then_hardlink
-    try:
-        try:
+    with _after_staging(m, "_prepare_staged_for_replace", destination,
+                        lambda temporary: _rebind(temporary, link=external)) as swapped:
+        with _refuses("post-prepare staged swap was published"):
             m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("post-prepare staged swap was published")
-    finally:
-        m._ConnectorLogWriter._prepare_staged_for_replace = real_prepare
 
-    assert swapped["done"]
+    assert swapped
     assert external.read_bytes() == b"EXTERNAL-AFTER-PREPARE\n"
     assert not destination.exists()
     assert list(lock_root.glob("*.migrate.json")), "migration journal was discarded"
@@ -849,32 +755,10 @@ def test_connector_log_migration_refuses_live_in_place_destination_swap(tmp):
     path = Path(tmp) / "migration-live-in-place.log"
     path.write_bytes(b"AAAAAAA\nBBBBBBB\nCCCCCCC\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    real_open = __import__("builtins").open
-    swapped = {"done": False}
-
-    # Mirrors open(file, mode='r', ...), which is the signature it stands
-    # in for.
-    # pylint: disable-next=keyword-arg-before-vararg
-    def open_then_swap(file, mode="r", *args, **kwargs):
-        if (not swapped["done"] and Path(file) == path and
-                mode in ("r+b", "w+b")):
-            swapped["done"] = True
-            replacement = path.with_name(path.name + ".foreign")
-            replacement.write_bytes(b"LIVE-CONCURRENT\n")
-            os.replace(replacement, path)
-        return real_open(file, mode, *args, **kwargs)
-
-    m.open = open_then_swap
-    try:
-        try:
+    with _swap_on_open(m, path) as swapped:
+        with _refuses("migration truncated a rebound in-place destination"):
             m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("migration truncated a rebound in-place destination")
-    finally:
-        m.__dict__.pop("open", None)
-    assert swapped["done"]
+    assert swapped
     assert path.read_bytes() == b"LIVE-CONCURRENT\n"
     assert list(lock_root.glob("*.migrate.json")), "migration journal was discarded"
 
@@ -886,32 +770,12 @@ def test_connector_log_rotation_refuses_live_atomic_destination_swap(tmp):
     path.write_bytes(b"A" * 31)
     destination = path.with_name("rotation-live-atomic.log.1")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    original_prepare = m._ConnectorLogWriter._prepare_staged_for_replace
-    swapped = {"done": False}
-
-    def prepare_then_swap(self, temporary, *args, **kwargs):
-        result = original_prepare(self, temporary, *args, **kwargs)
-        if (not swapped["done"] and
-                Path(kwargs["expected_destination"]) == destination):
-            swapped["done"] = True
-            replacement = destination.with_name(destination.name + ".foreign")
-            replacement.write_bytes(b"LIVE-CONCURRENT\n")
-            os.replace(replacement, destination)
-        return result
-
-    m._ConnectorLogWriter._prepare_staged_for_replace = prepare_then_swap
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-    try:
-        try:
+    with _after_staging(m, "_prepare_staged_for_replace", destination,
+                        lambda _: _rebind(destination, b"LIVE-CONCURRENT\n")) as swapped:
+        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
+        with contextlib.closing(writer), _refuses("rotation replaced a rebound atomic destination"):
             writer.write("x")
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("rotation replaced a rebound atomic destination")
-    finally:
-        m._ConnectorLogWriter._prepare_staged_for_replace = original_prepare
-        writer.close()
-    assert swapped["done"]
+    assert swapped
     assert destination.read_bytes() == b"LIVE-CONCURRENT\n"
     assert list(lock_root.glob("*.rotate.json")), "rotation journal was discarded"
 
@@ -925,36 +789,13 @@ def test_connector_log_rotation_stage_swap_after_prepare_keeps_journal(tmp):
     external = Path(tmp) / "rotation-external-after-prepare.log"
     external.write_bytes(b"ROTATION-EXTERNAL-KEEP\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    real_prepare = m._ConnectorLogWriter._prepare_staged_for_replace
-    swapped = {"done": False}
-
-    def prepare_then_hardlink(self, temporary, *args, **kwargs):
-        result = real_prepare(self, temporary, *args, **kwargs)
-        if (not swapped["done"] and
-                Path(kwargs["expected_destination"]) == destination):
-            swapped["done"] = True
-            replacement = Path(temporary).with_name(
-                Path(temporary).name + ".foreign")
-            os.link(external, replacement)
-            os.replace(replacement, temporary)
-        return result
-
-    m._ConnectorLogWriter._prepare_staged_for_replace = prepare_then_hardlink
-    try:
+    with _after_staging(m, "_prepare_staged_for_replace", destination,
+                        lambda temporary: _rebind(temporary, link=external)) as swapped:
         writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        try:
-            try:
-                writer.write("x")
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("post-prepare rotation swap was published")
-        finally:
-            writer.close()
-    finally:
-        m._ConnectorLogWriter._prepare_staged_for_replace = real_prepare
+        with contextlib.closing(writer), _refuses("post-prepare rotation swap was published"):
+            writer.write("x")
 
-    assert swapped["done"]
+    assert swapped
     assert external.read_bytes() == b"ROTATION-EXTERNAL-KEEP\n"
     assert not destination.exists()
     assert list(lock_root.glob("*.rotate.json")), "rotation journal was discarded"
@@ -966,53 +807,22 @@ def test_connector_log_rotation_refuses_live_in_place_destination_swap(tmp):
     path = Path(tmp) / "rotation-live-in-place.log"
     path.write_bytes(b"A" * 31)
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    real_open = __import__("builtins").open
-    swapped = {"done": False}
-
-    # Mirrors open(file, mode='r', ...), which is the signature it stands
-    # in for.
-    # pylint: disable-next=keyword-arg-before-vararg
-    def open_then_swap(file, mode="r", *args, **kwargs):
-        if (not swapped["done"] and Path(file) == path and
-                mode in ("r+b", "w+b")):
-            swapped["done"] = True
-            replacement = path.with_name(path.name + ".foreign")
-            replacement.write_bytes(b"LIVE-CONCURRENT\n")
-            os.replace(replacement, path)
-        return real_open(file, mode, *args, **kwargs)
-
-    m.open = open_then_swap
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    try:
-        try:
+    with _swap_on_open(m, path) as swapped:
+        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
+        with contextlib.closing(writer), _refuses("rotation truncated a rebound in-place destination"):
             writer.write("x")
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("rotation truncated a rebound in-place destination")
-    finally:
-        m.__dict__.pop("open", None)
-        writer.close()
-    assert swapped["done"]
+    assert swapped
     assert path.read_bytes() == b"LIVE-CONCURRENT\n"
     assert list(lock_root.glob("*.rotate.json")), "rotation journal was discarded"
 
 
 def test_connector_log_rotation_first_stage_crash_loop_has_bounded_temps(tmp):
     """Rotation also establishes ownership before its first staged temp."""
-    m = _mod()
-    del m
     case = Path(tmp) / "rotation-first-stage-crash-loop"
     case.mkdir()
     path = case / "loop.log"
     path.write_bytes(b"a" * 31)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_rotation_first_stage", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_write = mod._ConnectorLogWriter._write_migration_temp
 def write_then_crash(self, data, mode, name=None, directory=None):
     result = real_write(self, data, mode, name=name, directory=directory)
@@ -1023,28 +833,13 @@ mod._ConnectorLogWriter._write_migration_temp = write_then_crash
 writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 writer.write("x")
 '''
-    outcomes = []
     for _ in range(8):
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 172, crashed.stderr.decode("utf-8", "replace")
-        outcomes.append(crashed.returncode)
-    hidden = [
-        item for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ]
-    assert len(hidden) <= 3, [item.name for item in hidden]
+        _run_child(child, path, code=172)
+    assert len(_hidden(case)) <= 3, _hidden(case)
 
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-    writer.close()
+    _restart(path, 32, 1)
     assert path.read_bytes() == b"a" * 31
-    assert [
-        item.name for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ] == []
+    assert _hidden(case) == []
 
 
 def test_connector_log_migration_propagates_unremovable_old_backup(tmp):
@@ -1061,16 +856,10 @@ def test_connector_log_migration_propagates_unremovable_old_backup(tmp):
             raise PermissionError("injected backup deletion failure")
         return original_unlink(candidate, *args, **kwargs)
 
-    m._ConnectorLogWriter._unlink_if_identity = staticmethod(deny_extra)
-    try:
-        try:
+    with _patched(m._ConnectorLogWriter, _unlink_if_identity=staticmethod(deny_extra)):
+        with _refuses("unremovable numeric backup was silently retained", PermissionError) as failure:
             m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        except PermissionError as exc:
-            assert "injected backup deletion failure" in str(exc)
-        else:
-            raise AssertionError("unremovable numeric backup was silently retained")
-    finally:
-        m._ConnectorLogWriter._unlink_if_identity = original_unlink
+    assert "injected backup deletion failure" in str(failure[0])
 
 
 def test_connector_log_rotation_propagates_backup_deletion_failure(tmp):
@@ -1087,18 +876,12 @@ def test_connector_log_rotation_propagates_backup_deletion_failure(tmp):
             raise PermissionError("injected rotation deletion failure")
         return original_unlink(candidate, *args, **kwargs)
 
-    m._ConnectorLogWriter._unlink_if_identity = staticmethod(deny_stale)
-    try:
-        try:
+    with contextlib.closing(writer), _patched(m._ConnectorLogWriter,
+                                              _unlink_if_identity=staticmethod(deny_stale)):
+        with _refuses("rotation swallowed a backup deletion failure", PermissionError) as failure:
             writer.write("1234567")
             writer.write("next")
-        except PermissionError as exc:
-            assert "injected rotation deletion failure" in str(exc)
-        else:
-            raise AssertionError("rotation swallowed a backup deletion failure")
-    finally:
-        m._ConnectorLogWriter._unlink_if_identity = original_unlink
-        writer.close()
+    assert "injected rotation deletion failure" in str(failure[0])
 
 
 def test_connector_log_preserves_symlink_target_and_bounded_metadata(tmp):
@@ -1148,16 +931,9 @@ def test_connector_log_symlink_aliases_share_canonical_lock(tmp):
     target = Path(tmp) / "canonical.log"
     alias = Path(tmp) / "alias.log"
     alias.symlink_to(target)
-    first = m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)
-    try:
-        try:
+    with contextlib.closing(m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)):
+        with _refuses("symlink aliases acquired separate ownership locks"):
             m._ConnectorLogWriter(target, max_bytes=32, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("symlink aliases acquired separate ownership locks")
-    finally:
-        first.close()
 
 
 def test_connector_log_hardlink_aliases_share_ownership_across_processes(tmp):
@@ -1169,11 +945,6 @@ def test_connector_log_hardlink_aliases_share_ownership_across_processes(tmp):
     os.link(target, alias)
     assert target.stat().st_ino == alias.stat().st_ino
     child = r'''
-import importlib.util
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_hardlink_child", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 writer.write("child-held")
 print("READY", flush=True)
@@ -1181,18 +952,14 @@ input()
 writer.close()
 '''
     proc = subprocess.Popen(
-        [sys.executable, "-c", child, str(Path(MB)), str(target)],
+        _child_argv(child, target),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True,
     )
     try:
         assert proc.stdout.readline().strip() == "READY"
-        try:
+        with _refuses("hard-link aliases acquired independent ownership"):
             m._ConnectorLogWriter(alias, max_bytes=32, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("hard-link aliases acquired independent ownership")
     finally:
         if proc.stdin is not None:
             proc.stdin.write("\n")
@@ -1252,13 +1019,7 @@ def test_connector_log_fork_child_closes_inherited_descriptor(tmp):
         return
     path = Path(tmp) / "fork.log"
     holder = r'''
-import importlib.util
-import os
-import sys
 import time
-spec = importlib.util.spec_from_file_location("discord_mb_holder", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 owner = mod._ConnectorOwnership(sys.argv[2])
 ready_r, ready_w = os.pipe()
 child = os.fork()
@@ -1273,22 +1034,12 @@ print("ready", flush=True)
 os._exit(0)
 '''
     proc = subprocess.Popen(
-        [sys.executable, "-c", holder, str(Path(MB)), str(path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        _child_argv(holder, path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:
         assert proc.stdout.readline().strip() == "ready"
         assert proc.wait(timeout=2) == 0
-        probe = subprocess.run(
-            [sys.executable, "-c", (
-                "import importlib.util, sys; "
-                "s=importlib.util.spec_from_file_location('mb', sys.argv[1]); "
-                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
-                "o=m._ConnectorOwnership(sys.argv[2]); o.close()"),
-             str(Path(MB)), str(path)],
-            capture_output=True,
-        )
-        assert probe.returncode == 0, probe.stderr.decode("utf-8", "replace")
+        _run_child("mod._ConnectorOwnership(sys.argv[2]).close()", path, code=0)
     finally:
         try:
             proc.wait(timeout=5)
@@ -1308,26 +1059,17 @@ def test_connector_log_close_releases_owner_when_handle_close_fails(tmp):
         def close(self):
             raise RuntimeError("injected active close failure")
 
-    writer._fh = BrokenHandle()
-    try:
-        try:
+    with contextlib.closing(real_handle), _patched(writer, _fh=BrokenHandle()):
+        with _refuses("active handle close failure was swallowed") as failure:
             writer.close()
-        except RuntimeError as exc:
-            assert "injected active close failure" in str(exc)
-        else:
-            raise AssertionError("active handle close failure was swallowed")
-        owner = m._ConnectorOwnership(path)
-        owner.close()
-    finally:
-        real_handle.close()
+        assert "injected active close failure" in str(failure[0])
+        m._ConnectorOwnership(path).close()
 
 
 def test_connector_log_constructor_preserves_migration_error_if_owner_close_fails(tmp):
     """A startup migration error remains the primary exception."""
     m = _mod()
     path = Path(tmp) / "constructor-error.log"
-    original_migrate = m._ConnectorLogWriter._migrate_existing
-    original_close = m._ConnectorOwnership.close
 
     def fail_migration(self):
         raise ValueError("primary migration failure")
@@ -1335,18 +1077,11 @@ def test_connector_log_constructor_preserves_migration_error_if_owner_close_fail
     def fail_close(self):
         raise RuntimeError("secondary ownership cleanup failure")
 
-    m._ConnectorLogWriter._migrate_existing = fail_migration
-    m._ConnectorOwnership.close = fail_close
-    try:
-        try:
+    with _patched(m._ConnectorLogWriter, _migrate_existing=fail_migration), \
+            _patched(m._ConnectorOwnership, close=fail_close):
+        with _refuses("migration failure was not raised", ValueError) as failure:
             m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        except ValueError as exc:
-            assert "primary migration failure" in str(exc)
-        else:
-            raise AssertionError("migration failure was not raised")
-    finally:
-        m._ConnectorLogWriter._migrate_existing = original_migrate
-        m._ConnectorOwnership.close = original_close
+    assert "primary migration failure" in str(failure[0])
 
 
 def test_connector_main_preserves_writer_failure_when_process_owner_close_fails(tmp):
@@ -1364,32 +1099,18 @@ def test_connector_main_preserves_writer_failure_when_process_owner_close_fails(
     class FakeDiscord:
         pass
 
-    old_owner = m._ConnectorOwnership
-    old_writer = m._ConnectorLogWriter
-    old_discord = sys.modules.get("discord")
-    m._ConnectorOwnership = lambda *args, **kwargs: FailingOwner()
-    m._ConnectorLogWriter = FailingWriter
-    sys.modules["discord"] = FakeDiscord()
-    try:
+    with _patched(m, _ConnectorOwnership=lambda *args, **kwargs: FailingOwner(),
+                  _ConnectorLogWriter=FailingWriter), _patched(sys.modules, discord=FakeDiscord()):
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
-            try:
+            with _refuses("writer startup failure was not raised", ValueError) as failure:
                 m.connector_main("identity", token="token", log_path=Path(tmp) / "writer.log",
                                  flavor="claude")
-            except ValueError as exc:
-                assert "primary writer startup failure" in str(exc)
-                context = repr(exc.__context__)
-                notes = " ".join(getattr(exc, "__notes__", ()))
-                assert "secondary process-owner cleanup failure" in context + notes
-            else:
-                raise AssertionError("writer startup failure was not raised")
+            exc = failure[0]
+            assert "primary writer startup failure" in str(exc)
+            context = repr(exc.__context__)
+            notes = " ".join(getattr(exc, "__notes__", ()))
+            assert "secondary process-owner cleanup failure" in context + notes
         assert "secondary process-owner cleanup failure" in stderr.getvalue()
-    finally:
-        m._ConnectorOwnership = old_owner
-        m._ConnectorLogWriter = old_writer
-        if old_discord is None:
-            sys.modules.pop("discord", None)
-        else:
-            sys.modules["discord"] = old_discord
 
 
 def test_connector_startup_cleanup_preserves_original_and_releases_process_owner(tmp):
@@ -1419,34 +1140,14 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
         Intents=types.SimpleNamespace(default=types.SimpleNamespace),
         Client=ExplodingClient,
     )
-    old_discord = sys.modules.get("discord")
-    old_state_dir = m.state_dir
-    old_sweep = m.sweep_status_plugin
-    old_writer = m._ConnectorLogWriter
-    m._real_writer_for_test = old_writer
-    m.state_dir = lambda identity: state
-    m.sweep_status_plugin = lambda identity: None
-    m._ConnectorLogWriter = FailingWriter
-    sys.modules["discord"] = fake_discord
-    try:
-        try:
+    with _patched(m, _real_writer_for_test=m._ConnectorLogWriter, state_dir=lambda identity: state,
+                  sweep_status_plugin=lambda identity: None, _ConnectorLogWriter=FailingWriter), \
+            _patched(sys.modules, discord=fake_discord):
+        with _refuses("primary startup exception was not preserved", ValueError) as failure:
             m.connector_main("identity", claude_pid=os.getpid(), token="token",
                              log_path=path, flavor="claude")
-        except ValueError as exc:
-            assert "primary startup failure" in str(exc)
-        else:
-            raise AssertionError("primary startup exception was not preserved")
-    finally:
-        m.state_dir = old_state_dir
-        m.sweep_status_plugin = old_sweep
-        m._ConnectorLogWriter = old_writer
-        del m._real_writer_for_test
-        if old_discord is None:
-            sys.modules.pop("discord", None)
-        else:
-            sys.modules["discord"] = old_discord
-    owner = m._ConnectorOwnership(pidfile)
-    owner.close()
+    assert "primary startup failure" in str(failure[0])
+    m._ConnectorOwnership(pidfile).close()
 
 
 def test_connector_shutdown_sweep_baseexception_does_not_skip_cleanup(tmp):
@@ -1477,10 +1178,6 @@ def test_connector_shutdown_sweep_baseexception_does_not_skip_cleanup(tmp):
         Intents=types.SimpleNamespace(default=types.SimpleNamespace),
         Client=FakeClient,
     )
-    old_discord = sys.modules.get("discord")
-    old_state_dir = m.state_dir
-    old_sweep = m.sweep_status_plugin
-    m.state_dir = lambda identity: state
     sweep_calls = []
 
     def sweep(identity):
@@ -1488,27 +1185,15 @@ def test_connector_shutdown_sweep_baseexception_does_not_skip_cleanup(tmp):
         if len(sweep_calls) > 1:
             raise KeyboardInterrupt("injected shutdown sweep failure")
 
-    m.sweep_status_plugin = sweep
-    sys.modules["discord"] = fake_discord
-    try:
-        try:
+    with _patched(m, state_dir=lambda identity: state, sweep_status_plugin=sweep), \
+            _patched(sys.modules, discord=fake_discord):
+        with _refuses("shutdown sweep replaced the primary exception", ValueError) as failure:
             m.connector_main("identity", claude_pid=os.getpid(), token="token",
                              log_path=path, flavor="claude")
-        except ValueError as exc:
-            assert "primary connector failure" in str(exc)
-        else:
-            raise AssertionError("shutdown sweep replaced the primary exception")
-    finally:
-        m.state_dir = old_state_dir
-        m.sweep_status_plugin = old_sweep
-        if old_discord is None:
-            sys.modules.pop("discord", None)
-        else:
-            sys.modules["discord"] = old_discord
+    assert "primary connector failure" in str(failure[0])
     assert not pidfile.exists()
     assert len(sweep_calls) == 2
-    owner = m._ConnectorOwnership(pidfile)
-    owner.close()
+    m._ConnectorOwnership(pidfile).close()
 
 
 def test_connector_stale_pid_startup_log_failure_closes_every_acquired_resource(tmp):
@@ -1524,13 +1209,8 @@ def test_connector_stale_pid_startup_log_failure_closes_every_acquired_resource(
     )
     pidfile.write_text(str(old_process.pid), encoding="utf-8")
     child = r'''
-import importlib.util
 import pathlib
-import sys
 import types
-spec = importlib.util.spec_from_file_location("discord_mb_stale_pid", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 state = pathlib.Path(sys.argv[3])
 marker = pathlib.Path(sys.argv[4])
 class FailingWriter:
@@ -1554,12 +1234,7 @@ except RuntimeError as exc:
     marker.write_text(previous + "|" + str(exc), encoding="utf-8")
 '''
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(path),
-             str(state), str(marker)],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
+        _run_child(child, path, state, marker, code=0, text=True)
     finally:
         old_process.terminate()
         try:
@@ -1569,8 +1244,7 @@ except RuntimeError as exc:
             old_process.wait(timeout=5)
     assert marker.read_text(encoding="utf-8") == "closed|first startup log write failure"
     assert not pidfile.exists()
-    owner = m._ConnectorOwnership(pidfile)
-    owner.close()
+    m._ConnectorOwnership(pidfile).close()
 
 
 def test_connector_live_legacy_pid_exit_closes_process_owner(tmp):
@@ -1590,32 +1264,12 @@ def test_connector_live_legacy_pid_exit_closes_process_owner(tmp):
         def close(self):
             closes.append("closed")
 
-    old_owner = m._ConnectorOwnership
-    old_state_dir = m.state_dir
-    old_pid_alive = m.pid_alive
-    old_is_connector = m.is_connector_process
-    old_discord = sys.modules.get("discord")
-    m._ConnectorOwnership = TrackingOwner
-    m.state_dir = lambda identity: state
-    m.pid_alive = lambda pid: True
-    m.is_connector_process = lambda pid, identity: True
-    sys.modules["discord"] = types.SimpleNamespace()
-    try:
-        try:
+    with _patched(m, _ConnectorOwnership=TrackingOwner, state_dir=lambda identity: state,
+                  pid_alive=lambda pid: True, is_connector_process=lambda pid, identity: True), \
+            _patched(sys.modules, discord=types.SimpleNamespace()):
+        with _refuses("live legacy PID did not exit", SystemExit) as failure:
             m.connector_main("identity", token="token", log_path=path, flavor="claude")
-        except SystemExit as exc:
-            assert exc.code == 1
-        else:
-            raise AssertionError("live legacy PID did not exit")
-    finally:
-        m._ConnectorOwnership = old_owner
-        m.state_dir = old_state_dir
-        m.pid_alive = old_pid_alive
-        m.is_connector_process = old_is_connector
-        if old_discord is None:
-            sys.modules.pop("discord", None)
-        else:
-            sys.modules["discord"] = old_discord
+    assert failure[0].code == 1
     assert closes == ["closed"]
 
 
@@ -1638,29 +1292,12 @@ def test_connector_ownership_error_exit_closes_process_owner(tmp):
         def __init__(self, *args, **kwargs):
             raise m._ConnectorOwnershipError("injected ownership conflict")
 
-    old_owner = m._ConnectorOwnership
-    old_writer = m._ConnectorLogWriter
-    old_state_dir = m.state_dir
-    old_discord = sys.modules.get("discord")
-    m._ConnectorOwnership = TrackingOwner
-    m._ConnectorLogWriter = FailingWriter
-    m.state_dir = lambda identity: state
-    sys.modules["discord"] = types.SimpleNamespace()
-    try:
-        try:
+    with _patched(m, _ConnectorOwnership=TrackingOwner, _ConnectorLogWriter=FailingWriter,
+                  state_dir=lambda identity: state), \
+            _patched(sys.modules, discord=types.SimpleNamespace()):
+        with _refuses("ownership conflict did not exit", SystemExit) as failure:
             m.connector_main("identity", token="token", log_path=path, flavor="claude")
-        except SystemExit as exc:
-            assert exc.code == 1
-        else:
-            raise AssertionError("ownership conflict did not exit")
-    finally:
-        m._ConnectorOwnership = old_owner
-        m._ConnectorLogWriter = old_writer
-        m.state_dir = old_state_dir
-        if old_discord is None:
-            sys.modules.pop("discord", None)
-        else:
-            sys.modules["discord"] = old_discord
+    assert failure[0].code == 1
     assert closes == ["closed"]
 
 
@@ -1718,28 +1355,19 @@ def test_connector_log_count_decrease_preserves_rebound_obsolete_backup(tmp):
     obsolete = path.with_name("decrease-rebound.log.3")
     obsolete.write_text("old\n", encoding="utf-8")
     original_bounded = m._ConnectorLogWriter._window_is_bounded
-    swapped = {"done": False}
+    swapped = []
 
     def bounded_then_replace(self, backups):
         result = original_bounded(self, backups)
-        if not swapped["done"]:
-            swapped["done"] = True
-            replacement = obsolete.with_name(obsolete.name + ".foreign")
-            replacement.write_bytes(b"FOREIGN-COUNT-DECREASE")
-            os.replace(replacement, obsolete)
+        if not swapped:
+            swapped.append(True)
+            _rebind(obsolete, b"FOREIGN-COUNT-DECREASE")
         return result
 
-    m._ConnectorLogWriter._window_is_bounded = bounded_then_replace
-    try:
-        try:
+    with _patched(m._ConnectorLogWriter, _window_is_bounded=bounded_then_replace):
+        with _refuses("rebound obsolete backup was silently removed"):
             m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("rebound obsolete backup was silently removed")
-    finally:
-        m._ConnectorLogWriter._window_is_bounded = original_bounded
-    assert swapped["done"]
+    assert swapped
     assert obsolete.read_bytes() == b"FOREIGN-COUNT-DECREASE"
 
 
@@ -1752,28 +1380,19 @@ def test_connector_log_migration_preserves_rebound_source_and_journal(tmp):
     obsolete.write_bytes(b"old\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
     original_replace = m.os.replace
-    swapped = {"done": False}
+    swapped = []
 
     def replace_then_swap(source, destination):
         result = original_replace(source, destination)
-        if not swapped["done"]:
-            swapped["done"] = True
-            replacement = obsolete.with_name(obsolete.name + ".foreign")
-            replacement.write_bytes(b"FOREIGN-MIGRATION-SOURCE")
-            original_replace(replacement, obsolete)
+        if not swapped:
+            swapped.append(True)
+            _rebind(obsolete, b"FOREIGN-MIGRATION-SOURCE")
         return result
 
-    m.os.replace = replace_then_swap
-    try:
-        try:
+    with _patched(m.os, replace=replace_then_swap):
+        with _refuses("rebound migration source was silently removed"):
             m._ConnectorLogWriter(path, max_bytes=10, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("rebound migration source was silently removed")
-    finally:
-        m.os.replace = original_replace
-    assert swapped["done"]
+    assert swapped
     assert obsolete.read_bytes() == b"FOREIGN-MIGRATION-SOURCE"
     assert list(lock_root.glob("*.migrate.json")), "migration journal was discarded"
 
@@ -1786,30 +1405,20 @@ def test_connector_log_journal_hardlink_swap_never_writes_external_inode(tmp):
     external = Path(tmp) / "external-journal-owner.log"
     external.write_bytes(b"EXTERNAL-JOURNAL-KEEP\n")
     real_write = m._ConnectorLogWriter._write_migration_manifest
-    swapped = {"done": False}
+    swapped = []
 
     def write_then_swap(self, manifest, kind="migrate", **kwargs):
         result = real_write(self, manifest, kind=kind, **kwargs)
-        if kind == "migrate" and not kwargs.get("create") and not swapped["done"]:
-            swapped["done"] = True
-            journal = self._migration_manifest_path()
-            replacement = journal.with_name(journal.name + ".foreign")
-            os.link(external, replacement)
-            os.replace(replacement, journal)
+        if kind == "migrate" and not kwargs.get("create") and not swapped:
+            swapped.append(True)
+            _rebind(self._migration_manifest_path(), link=external)
         return result
 
-    m._ConnectorLogWriter._write_migration_manifest = write_then_swap
-    try:
-        try:
+    with _patched(m._ConnectorLogWriter, _write_migration_manifest=write_then_swap):
+        with _refuses("journal hard-link replacement was accepted"):
             m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("journal hard-link replacement was accepted")
-    finally:
-        m._ConnectorLogWriter._write_migration_manifest = real_write
 
-    assert swapped["done"]
+    assert swapped
     assert external.read_bytes() == b"EXTERNAL-JOURNAL-KEEP\n"
 
 
@@ -1821,32 +1430,20 @@ def test_connector_log_rotation_preserves_rebound_sparse_destination(tmp):
     obsolete = path.with_name("sparse-rebound.log.2")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
     original_manifest = m._ConnectorLogWriter._write_migration_manifest
-    swapped = {"done": False}
+    swapped = []
 
     def manifest_then_swap(self, manifest, kind="migrate", **kwargs):
         result = original_manifest(self, manifest, kind=kind, **kwargs)
-        if (kind == "rotate" and manifest.get("state") == "prepared" and
-                not swapped["done"]):
-            swapped["done"] = True
-            replacement = obsolete.with_name(obsolete.name + ".foreign")
-            replacement.write_bytes(b"FOREIGN-SPARSE-DESTINATION")
-            os.replace(replacement, obsolete)
+        if kind == "rotate" and manifest.get("state") == "prepared" and not swapped:
+            swapped.append(True)
+            _rebind(obsolete, b"FOREIGN-SPARSE-DESTINATION")
         return result
 
-    m._ConnectorLogWriter._write_migration_manifest = manifest_then_swap
-    try:
+    with _patched(m._ConnectorLogWriter, _write_migration_manifest=manifest_then_swap):
         writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
-        try:
+        with contextlib.closing(writer), _refuses("rebound sparse destination was silently removed"):
             writer.write("x")
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("rebound sparse destination was silently removed")
-        finally:
-            writer.close()
-    finally:
-        m._ConnectorLogWriter._write_migration_manifest = original_manifest
-    assert swapped["done"]
+    assert swapped
     assert obsolete.read_bytes() == b"FOREIGN-SPARSE-DESTINATION"
     assert list(lock_root.glob("*.rotate.json")), "rotation journal was discarded"
 
@@ -1856,29 +1453,20 @@ def test_connector_log_failed_staging_key_cleanup_preserves_rebound_path(tmp):
     m = _mod()
     path = Path(tmp) / "failed-staging.key"
     original_write = m.os.write
-    original_replace = m.os.replace
-    swapped = {"done": False}
+    swapped = []
 
     def write_then_replace(fd, data):
-        if not swapped["done"]:
-            swapped["done"] = True
-            replacement = path.with_name(path.name + ".foreign")
-            replacement.write_bytes(b"FOREIGN-STAGING-KEY")
-            original_replace(replacement, path)
+        if not swapped:
+            swapped.append(True)
+            _rebind(path, b"FOREIGN-STAGING-KEY")
             raise OSError("injected staging key write failure")
         return original_write(fd, data)
 
-    m.os.write = write_then_replace
-    try:
-        try:
+    with _patched(m.os, write=write_then_replace):
+        with _refuses("staging key write failure was swallowed", OSError) as failure:
             m._ConnectorLogWriter._create_staging_key(path)
-        except OSError as exc:
-            assert "injected staging key write failure" in str(exc)
-        else:
-            raise AssertionError("staging key write failure was swallowed")
-    finally:
-        m.os.write = original_write
-    assert swapped["done"]
+    assert "injected staging key write failure" in str(failure[0])
+    assert swapped
     assert path.exists(), "failed key cleanup removed the rebound pathname"
     assert path.read_bytes() == b"FOREIGN-STAGING-KEY"
 
@@ -1896,31 +1484,21 @@ def test_connector_log_failed_staging_temp_cleanup_preserves_rebound_path(tmp):
     writer._staging_kind = "rotate"
     writer._staging_slot = 0
     writer._staging_destination = path
-    swapped = {"done": False}
+    swapped = []
 
     def claim_then_replace(staged):
-        swapped["done"] = True
-        replacement = Path(staged).with_name(Path(staged).name + ".foreign")
-        replacement.write_bytes(b"FOREIGN-STAGING-TEMP")
-        os.replace(replacement, staged)
-
-    writer._staging_claim_callback = claim_then_replace
+        swapped.append(True)
+        _rebind(Path(staged), b"FOREIGN-STAGING-TEMP")
 
     def fail_key():
         raise OSError("injected staging temp key failure")
 
     writer._current_staging_key = fail_key
-    try:
-        try:
+    with contextlib.closing(writer), _patched(writer, _staging_claim_callback=claim_then_replace):
+        with _refuses("staging temp failure was swallowed", OSError) as failure:
             writer._write_migration_temp(b"payload", None, name=temporary)
-        except OSError as exc:
-            assert "injected staging temp key failure" in str(exc)
-        else:
-            raise AssertionError("staging temp failure was swallowed")
-    finally:
-        writer._staging_claim_callback = None
-        writer.close()
-    assert swapped["done"]
+    assert "injected staging temp key failure" in str(failure[0])
+    assert swapped
     assert temporary.exists(), "failed temp cleanup removed the rebound pathname"
     assert temporary.read_bytes() == b"FOREIGN-STAGING-TEMP"
 
@@ -1952,53 +1530,20 @@ def test_connector_log_ownership_uses_windows_byte_lock_api(tmp):
     """The Windows source path uses a CRT byte lock and releases it cleanly."""
     m = _mod()
     path = Path(tmp) / "windows-owned.log"
-    locked = set()
-
-    def locking(fd, mode, count):
-        del count
-        key = os.fstat(fd).st_ino
-        if mode == fake_msvcrt.LK_NBLCK:
-            if key in locked:
-                raise OSError("already locked")
-            locked.add(key)
-        else:
-            locked.discard(key)
-
-    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
-    old_platform = m.sys.platform
-    old_msvcrt = sys.modules.get("msvcrt")
-    m.sys.platform = "win32"
-    sys.modules["msvcrt"] = fake_msvcrt
-    try:
-        owner = m._ConnectorOwnership(path)
-        try:
-            try:
+    with _fake_windows(m):
+        with contextlib.closing(m._ConnectorOwnership(path)):
+            with _refuses("Windows byte lock admitted a second owner"):
                 m._ConnectorOwnership(path)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("Windows byte lock admitted a second owner")
-        finally:
-            owner.close()
-        released = m._ConnectorOwnership(path)
-        released.close()
-    finally:
-        m.sys.platform = old_platform
-        if old_msvcrt is None:
-            sys.modules.pop("msvcrt", None)
-        else:
-            sys.modules["msvcrt"] = old_msvcrt
+        m._ConnectorOwnership(path).close()
 
 
 def test_connector_log_windows_does_not_lock_active_inode_or_prefix_nul(tmp):
     """Windows ownership uses interlocks, never a byte lock on the active log."""
     m = _mod()
     path = Path(tmp) / "windows-active.log"
-    locked = set()
     seen = []
 
-    def locking(fd, mode, count):
-        del count
+    def probe(fd):
         try:
             name = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve()
         except (FileNotFoundError, OSError):
@@ -2006,90 +1551,43 @@ def test_connector_log_windows_does_not_lock_active_inode_or_prefix_nul(tmp):
         seen.append(name)
         if name == path.resolve():
             raise AssertionError("active log must not use a CRT byte lock")
-        key = os.fstat(fd).st_ino
-        if mode == fake_msvcrt.LK_NBLCK:
-            if key in locked:
-                raise OSError("already locked")
-            locked.add(key)
-        else:
-            locked.discard(key)
 
-    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
-    old_platform = m.sys.platform
-    old_msvcrt = sys.modules.get("msvcrt")
-    m.sys.platform = "win32"
-    sys.modules["msvcrt"] = fake_msvcrt
-    try:
+    with _fake_windows(m, probe):
         writer = m._ConnectorLogWriter(path, max_bytes=8, backup_count=1)
         assert path.read_bytes() == b""
         writer.close()
-    finally:
-        m.sys.platform = old_platform
-        if old_msvcrt is None:
-            sys.modules.pop("msvcrt", None)
-        else:
-            sys.modules["msvcrt"] = old_msvcrt
     assert path.resolve() not in seen
 
 
 def test_connector_log_sidecar_rejects_windows_link_and_replacement_targets(tmp):
     """Sidecar locks never follow links/reparses or replacement identities."""
     m = _mod()
-    locked = set()
-
-    def locking(fd, mode, count):
-        del count
-        key = os.fstat(fd).st_ino
-        if mode == fake_msvcrt.LK_NBLCK:
-            if key in locked:
-                raise OSError("already locked")
-            locked.add(key)
-        else:
-            locked.discard(key)
-
-    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
-    old_platform = m.sys.platform
-    old_msvcrt = sys.modules.get("msvcrt")
     old_linklike = m._linklike
-    m.sys.platform = "win32"
-    sys.modules["msvcrt"] = fake_msvcrt
     owner = object.__new__(m._ConnectorOwnership)
     owner._windows = True
-    try:
+    with _fake_windows(m), _patched(m, _linklike=old_linklike):
         external = Path(tmp) / "sidecar-external.bin"
         external.write_bytes(b"EXTERNAL-SIDECAR\n")
 
         symlink = Path(tmp) / "symlink.lock"
         symlink.symlink_to(external)
-        try:
+        with _refuses("Windows sidecar symlink was followed"):
             owner._lock_sidecar(symlink)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("Windows sidecar symlink was followed")
         assert external.read_bytes() == b"EXTERNAL-SIDECAR\n"
 
         reparse = Path(tmp) / "reparse.lock"
         reparse.write_bytes(b"REPARSE-KEEP")
         m._linklike = lambda candidate: (
             Path(candidate) == reparse or old_linklike(candidate))
-        try:
+        with _refuses("Windows reparse sidecar was adopted"):
             owner._lock_sidecar(reparse)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("Windows reparse sidecar was adopted")
         assert reparse.read_bytes() == b"REPARSE-KEEP"
         m._linklike = old_linklike
 
         hardlink = Path(tmp) / "hardlink.lock"
         os.link(external, hardlink)
-        try:
+        with _refuses("Windows hard-linked sidecar was adopted"):
             owner._lock_sidecar(hardlink)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("Windows hard-linked sidecar was adopted")
         assert external.read_bytes() == b"EXTERNAL-SIDECAR\n"
 
         if os.name == "nt":
@@ -2104,26 +1602,19 @@ def test_connector_log_sidecar_rejects_windows_link_and_replacement_targets(tmp)
         foreign = Path(tmp) / "replacement-foreign.bin"
         foreign.write_bytes(b"FOREIGN-REPLACEMENT\n")
         real_open = m.os.open
-        swapped = {"done": False}
+        swapped = []
 
         def open_then_replace(name, flags, *args):
             fd = real_open(name, flags, *args)
-            if Path(name) == replacement and not swapped["done"]:
-                swapped["done"] = True
+            if Path(name) == replacement and not swapped:
+                swapped.append(True)
                 os.replace(foreign, replacement)
             return fd
 
-        m.os.open = open_then_replace
-        try:
-            try:
+        with _patched(m.os, open=open_then_replace):
+            with _refuses("Windows sidecar replacement was accepted"):
                 owner._lock_sidecar(replacement)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("Windows sidecar replacement was accepted")
-        finally:
-            m.os.open = real_open
-        assert swapped["done"]
+        assert swapped
         assert replacement.read_bytes() == b"FOREIGN-REPLACEMENT\n"
 
         posix = Path(tmp) / "posix-existing.lock"
@@ -2132,13 +1623,6 @@ def test_connector_log_sidecar_rejects_windows_link_and_replacement_targets(tmp)
         handle = owner._lock_sidecar(posix)
         owner._release_handle(handle)
         assert posix.read_bytes() == b"PRESERVE-ME"
-    finally:
-        m._linklike = old_linklike
-        m.sys.platform = old_platform
-        if old_msvcrt is None:
-            sys.modules.pop("msvcrt", None)
-        else:
-            sys.modules["msvcrt"] = old_msvcrt
 
 
 def test_connector_log_windows_hardlink_aliases_share_identity_lock(tmp):
@@ -2149,47 +1633,13 @@ def test_connector_log_windows_hardlink_aliases_share_identity_lock(tmp):
     target.write_bytes(b"")
     os.link(target, alias)
     assert target.stat().st_ino == alias.stat().st_ino
-    locked = set()
-
-    def locking(fd, mode, count):
-        del count
-        key = os.fstat(fd).st_ino
-        if mode == fake_msvcrt.LK_NBLCK:
-            if key in locked:
-                raise OSError("already locked")
-            locked.add(key)
-        else:
-            locked.discard(key)
-
-    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
-    old_platform = m.sys.platform
-    old_msvcrt = sys.modules.get("msvcrt")
-    m.sys.platform = "win32"
-    sys.modules["msvcrt"] = fake_msvcrt
-    try:
-        owner = m._ConnectorOwnership(target, lock_inode=True)
-        try:
-            try:
-                m._ConnectorOwnership(alias, lock_inode=True)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError(
-                    "Windows hard-link aliases bypassed the identity interlock")
-        finally:
-            owner.close()
-    finally:
-        m.sys.platform = old_platform
-        if old_msvcrt is None:
-            sys.modules.pop("msvcrt", None)
-        else:
-            sys.modules["msvcrt"] = old_msvcrt
+    with _fake_windows(m), contextlib.closing(m._ConnectorOwnership(target, lock_inode=True)):
+        with _refuses("Windows hard-link aliases bypassed the identity interlock"):
+            m._ConnectorOwnership(alias, lock_inode=True)
 
 
 def test_connector_log_hardlink_alias_recovers_identity_journal(tmp):
     """A restart through a hard-link alias resumes the original generation."""
-    m = _mod()
-    del m
     case = Path(tmp)
     target = case / "journal-target.log"
     alias = case / "journal-alias.log"
@@ -2197,12 +1647,6 @@ def test_connector_log_hardlink_alias_recovers_identity_journal(tmp):
     target.write_bytes(original)
     os.link(target, alias)
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_alias_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def publish_then_crash(*args):
@@ -2213,15 +1657,8 @@ def publish_then_crash(*args):
 os.replace = publish_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 '''
-    crashed = subprocess.run(
-        [sys.executable, "-c", child, str(Path(MB)), str(target)],
-        capture_output=True,
-    )
-    assert crashed.returncode == 117, crashed.stderr.decode("utf-8", "replace")
-
-    restarted = _mod()
-    writer = restarted._ConnectorLogWriter(alias, max_bytes=16, backup_count=2)
-    writer.close()
+    _run_child(child, target, code=117)
+    _restart(alias, 16, 2)
     slots = [target.with_name("journal-target.log.2"),
              target.with_name("journal-target.log.1"), target]
     assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
@@ -2230,16 +1667,8 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
 
 def test_connector_log_hardlink_recovery_is_filename_order_independent(tmp):
     """Journal recovery locks aliases in either filename order."""
-    m = _mod()
-    del m
     original = b"".join(f"{i:02d}\n".encode() for i in range(12))
     child = r'''
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location("discord_mb_ordered_alias_crash", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
 real_replace = os.replace
 calls = [0]
 def publish_then_crash(*args):
@@ -2265,19 +1694,8 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
         if restart_path != crash_path:
             os.link(crash_path, restart_path)
 
-        crashed = subprocess.run(
-            [sys.executable, "-c", child, str(Path(MB)), str(crash_path)],
-            capture_output=True,
-        )
-        assert crashed.returncode == 119, (
-            name, crashed.returncode,
-            crashed.stderr.decode("utf-8", "replace"),
-        )
-
-        restarted = _mod()
-        writer = restarted._ConnectorLogWriter(
-            restart_path, max_bytes=16, backup_count=2)
-        writer.close()
+        _run_child(child, crash_path, code=119)
+        _restart(restart_path, 16, 2)
         slots = [crash_path.with_name(f"{crash_name}.2"),
                  crash_path.with_name(f"{crash_name}.1"), crash_path]
         assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
