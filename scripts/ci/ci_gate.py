@@ -20,6 +20,7 @@ POLL_SECONDS = 45
 DEADLINE_MINUTES = 55
 RETRIES = 3
 RETRY_SECONDS = 10
+CALL_SECONDS = 30
 
 
 class GateError(Exception):
@@ -32,14 +33,15 @@ def api(endpoint):
     for attempt in range(RETRIES + 1):
         if attempt:
             time.sleep(RETRY_SECONDS)
-        done = subprocess.run(command, capture_output=True, text=True, check=False)
-        if done.returncode == 0:
-            try:
+        try:
+            done = subprocess.run(command, capture_output=True, text=True, check=False, timeout=CALL_SECONDS)
+            if done.returncode == 0:
                 return json.loads(done.stdout)
-            except ValueError as error:
-                reason = f'unreadable output: {error}'
-        else:
             reason = done.stderr.strip() or f'exit {done.returncode}'
+        except subprocess.TimeoutExpired:
+            reason = f'no answer within {CALL_SECONDS} s'
+        except ValueError as error:
+            reason = f'unreadable output: {error}'
         print(f'ci-gate: {endpoint} failed (attempt {attempt + 1}): {reason}', file=sys.stderr)
     raise GateError(f'{endpoint} failed {RETRIES + 1} times: {reason}')
 
