@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """A connector log failure never disables logging for good or lifecycle control.
 
-A retained backup deleted from outside is absent rather than replaced, and a
-writer whose rotation failed after publishing recovers once the fault clears.
+A retained backup deleted from outside is absent rather than replaced, a writer
+whose rotation failed after publishing recovers once the fault clears, and the
+parent watchdog closes the client before logging, through a log() that falls
+back to stderr when the file write fails.
 """
+import asyncio
+import contextlib
+import io
 import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gateway  # noqa: E402
 import _util  # noqa: E402
 from test_discord_log_rotation import _fixture_lock_root, _mod  # noqa: E402
 
@@ -134,6 +140,41 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
     assert "healed 11" in path.read_text(encoding="utf-8")
     assert not journal.exists()
     assert all(p.stat().st_size <= LIMIT for p in _window(path))
+
+
+def test_the_watchdog_closes_first_and_a_failed_log_write_falls_back_to_stderr(tmp):
+    """A dead parent closes the client even when the connector log write raises."""
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    from discord_mb_lib import connector as c
+    order, err = [], io.StringIO()
+    real_write, real_alive = c._ConnectorLogWriter.write, c.pid_alive
+
+    def failing_write(self, line):
+        if "gone, shutting down" not in line:
+            return real_write(self, line)
+        order.append("log")
+        raise c._ConnectorOwnershipError("injected connector log failure")
+
+    async def script(client):
+        async def close():
+            order.append("close")
+            client.closed = True
+        client.close = close
+        c._ConnectorLogWriter.write, c.pid_alive = failing_write, lambda pid: False
+        with contextlib.redirect_stderr(err):
+            for _ in range(100):  # the watchdog polls every 5 s
+                if "log" in order:
+                    break
+                await asyncio.sleep(0.1)
+
+    try:
+        _gateway.run(tmp, script, keep=("parent_watchdog",))
+    finally:
+        c._ConnectorLogWriter.write, c.pid_alive = real_write, real_alive
+    assert order == ["close", "log"], order
+    lines = [line for line in err.getvalue().splitlines() if "gone, shutting down" in line]
+    assert len(lines) == 1 and "injected connector log failure" in lines[0], err.getvalue()
 
 
 def main():
