@@ -885,8 +885,8 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
         for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
                                                       ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
-            if error == "fork" and not hasattr(os, "fork"):
-                _util.skip("this platform cannot fork")
+            if error == "fork" and not hasattr(os, "fork") or error == "connector.log" and os.name == "nt":  # rows 4 and 5 run last
+                _util.skip("this platform cannot fork" if error == "fork" else "Windows refuses to rename the active while the worker reads it")
             case.update(seam=name, error=error, refused=refused, fired=False, ceiling=threading.Event(), path=Path(tmp) / f"row-{row}" / "connector.log")
             case["path"].parent.mkdir()
             writer, path, _ = _filled(m, case["path"]), case["path"], log.clear()
