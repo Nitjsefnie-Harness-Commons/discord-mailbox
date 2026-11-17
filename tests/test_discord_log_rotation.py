@@ -848,39 +848,52 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_start_rotation_worker", "_rotate", "_recover_and_open")}
 
-    def fault(self, *args):  # once per row, on the worker thread: raise, let a foreign file take .1, or hold the stage
-        error, backup = case["error"], case["path"].with_name("connector.log.1")
-        if not case["fired"] and threading.current_thread() is not threading.main_thread():
-            case["fired"] = True
-            if isinstance(error, BaseException):
-                _ = len(case["refused"]) > 7 and case["ceiling"].wait()  # a long refused line reaps this failure at backpressure
-                raise error
-            _ = staged.wait() if error else (os.replace(backup, backup.with_name("aside")), backup.write_bytes(b"FOREIGN\n"))
-        return real[case["seam"]](self, *args)
-    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=lambda self: real["_rotate"](self) or log.append("rotate"),
+    def seam(name):  # the row's fault fires once: on the worker, or on the caller swapping at the ceiling
+        def wrapped(self, *args):
+            error, worker = case["error"], threading.current_thread() is not threading.main_thread()
+            if name == "_stage_rotation_copy" and worker and len(case["refused"]) > 7:  # the caller swaps at the ceiling
+                assert case["ceiling"].wait(60), "the caller never reached the ceiling"
+            if name == case["seam"] and not case["fired"] and (worker or case["ceiling"].is_set()):
+                case["fired"] = True
+                if isinstance(error, BaseException):
+                    raise error
+                if error == "fork":
+                    assert staged.wait(60), "the fork row never released the stage"
+                else:  # a foreign file takes the victim's name
+                    os.replace(case["path"].with_name(error), case["path"].with_name("aside"))
+                    case["path"].with_name(error).write_bytes(b"FOREIGN\n")
+            return real[name](self, *args)
+        return wrapped
+
+    def rotate(self):  # the SystemExit row's first synchronous rotation after the report then raises once
+        real["_rotate"](self)
+        log.append("rotate")
+        if case.pop("sync fault", False):
+            raise OSError("injected fault after a synchronous rotation")
+    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:3]},
                   _recover_and_open=lambda self: real["_recover_and_open"](self) or log.append("recover"),
                   _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or wait(self),
                   _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)):
-        for seam, error, refused in (("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
-                                     ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", None, "refused"),
-                                     ("_stage_rotation_copy", "fork", "")):
+        for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
+                                                      ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
+                                                      ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
             if error == "fork" and not hasattr(os, "fork"):
                 _util.skip("this platform cannot fork")
-            case.update(seam=seam, error=error, refused=refused, fired=False, ceiling=threading.Event(), path=Path(tmp) / f"{seam}-{type(error).__name__}" / "connector.log")
+            case.update(seam=name, error=error, refused=refused, fired=False, ceiling=threading.Event(), path=Path(tmp) / f"row-{row}" / "connector.log")
             case["path"].parent.mkdir()
             writer, path, _ = _filled(m, case["path"]), case["path"], log.clear()
-            with contextlib.closing(writer), _patched(W, **{seam: fault}):
+            with contextlib.closing(writer):
                 writer.write("y" * 15)  # a synchronous rotation leaves 16 bytes, so the next record starts the worker
                 writer.write("b" * 7)
                 if error == "fork":  # the worker stages, then waits on the lock another thread holds across the fork
                     holder = threading.Thread(target=lambda w=writer: w._thread_lock.acquire() and (locked.set(), release.wait(), w._thread_lock.release()))
                     worker, _ = log[1], holder.start()
                     try:
-                        _ = locked.wait() and (staged.set(), writer._rotation_staged.wait())
-                        before = [p.read_bytes() for p in _window(path)]
+                        assert locked.wait(60) and not staged.set() and writer._rotation_staged.wait(60), "the worker never staged beside the held lock"
+                        before, writer._rotation_error = [p.read_bytes() for p in _window(path)], OSError("the parent's unreported failure")
                         with warnings.catch_warnings(action="ignore"):
                             pid = os.fork()
-                        if pid == 0:  # the child writes on a free lock with no worker; a deadlock ends it at the alarm
+                        if pid == 0:  # the child writes on a free lock with no worker or parent's error; a deadlock ends it at the alarm
                             signal.alarm(60)
                             try:
                                 os._exit(3 if writer.write("child") or writer._rotation_worker or writer._rotation_context else 0)
@@ -889,30 +902,33 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                         assert (code := os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])) == 0 and [p.read_bytes() for p in _window(path)] == [before[0] + b"child\n", *before[1:]], code
                     finally:
                         _ = staged.set(), release.set()
-                    worker.join()
-                    assert path.read_bytes() == b"b" * 7 + b"\nchild\n", path.read_bytes()  # the parent's swap kept the child's line
+                    worker.join(60)
+                    assert not worker.is_alive() and path.read_bytes() == b"b" * 7 + b"\nchild\n", path.read_bytes()  # the parent's swap kept the child's line
                     continue
-                _ = len(refused) > 7 or log[1].join()  # the worker stores its failure, unless the caller reaps it at the ceiling
-                with _refuses(f"{seam}: the write after a failed rotation was accepted", BaseException) as caught:  # SystemExit too
+                _ = len(refused) > 7 or log[1].join(60)  # the worker stores its failure, unless the caller reaps it at the ceiling
+                assert len(refused) > 7 or not log[1].is_alive(), "the failed worker never finished"
+                with _refuses(f"{name}: the write after a failed rotation was accepted", BaseException) as caught:  # SystemExit too
                     writer.write(refused)
-                assert case["fired"] and (caught[0] is error if error else isinstance(caught[0], own)), (seam, caught)
-                assert b"refused" not in b"".join(p.read_bytes() for p in _window(path)), seam
-                if error is None:  # later writes refuse with no recovery: by revalidation, and still once the swap is undone
-                    for undo, message in ((False, "namespace path was replaced"), (True, "after an ownership error")):
-                        _ = undo and os.replace(path.with_name("aside"), path.with_name("connector.log.1"))
-                        with _refuses(f"a write was accepted after an ownership error, undo={undo}", own) as caught:
+                assert case["fired"] and (caught[0] is error if isinstance(error, BaseException) else isinstance(caught[0], own)), (name, caught)
+                assert b"refused" not in b"".join(p.read_bytes() for p in _window(path)), name
+                if isinstance(error, str):  # from either thread, later writes refuse with no recovery: by revalidation, and still once the swap is undone
+                    for undo, message in ((False, "was replaced while owned"), (True, "after an ownership error")):
+                        _ = undo and os.replace(path.with_name("aside"), path.with_name(error))
+                        with _refuses(f"{error}: a write was accepted after an ownership error, undo={undo}", own) as caught:
                             writer.write("refused")
                         assert message in str(caught[0]) and "recover" not in log and writer._rotation_manifest_path().exists(), (caught, log)
                     continue
-                for n in range(6):
-                    writer.write(f"{n:07d}")
+                case["sync fault"], lost = isinstance(error, SystemExit), 1 if isinstance(error, SystemExit) else None
+                for n in range(9):
+                    with _refuses("the injected synchronous rotation fault was not raised", OSError) if n == lost else contextlib.nullcontext():
+                        writer.write(f"{n:07d}")
                 for thread in (entry for entry in log if not isinstance(entry, str)):
-                    thread.join()
+                    thread.join(60)
                 window = b"".join(p.read_bytes() for p in reversed(_window(path)))
-                stream = "".join([*(f"line {i:02d}\n" for i in range(12)), "y" * 15 + "\n", "b" * 7 + "\n", *(f"{n:07d}\n" for n in range(6))]).encode()
-                assert stream.endswith(window) and window.endswith(stream[-24:]), (seam, window)
-                # The write after the report recovers, and no worker starts again before a synchronous rotation succeeds.
-                assert [e if isinstance(e, str) else "start" for e in log][:5] == ["rotate", "start", "recover", "rotate", "start"], log
+                stream = "".join([*(f"line {i:02d}\n" for i in range(12)), "y" * 15 + "\n", "b" * 7 + "\n", *(f"{n:07d}\n" for n in range(9) if n != lost)]).encode()
+                assert not any(t.is_alive() for t in log if not isinstance(t, str)) and stream.endswith(window) and window.endswith(stream[-24:]), (name, window)
+                # The write after the report recovers; no worker starts again until a synchronous rotation succeeds.
+                assert [e if isinstance(e, str) else "start" for e in log][:5 + (lost or 0)] == ["rotate", "start", "recover", "rotate", *["rotate"] * (lost or 0), "start"], log
                 assert not writer._rotation_manifest_path().exists() and _hidden(path.parent) == [], _hidden(path.parent)
 
 

@@ -721,6 +721,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
     rotated. Closing the writer releases it, and an OS process death releases
     it automatically on both POSIX and Windows.
     """
+    _PERMANENT_ROTATION_ERRORS = (_ConnectorOwnershipError,)
 
     def __init__(self, path, max_bytes=CONNECTOR_LOG_MAX_BYTES,
                  backup_count=CONNECTOR_LOG_BACKUP_COUNT, lock_root=None):
@@ -4019,14 +4020,13 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
         with self._thread_lock:
             if self._closed:
                 raise OSError('connector log is not open')
+            error, self._rotation_error = self._rotation_error, None
+            if error is not None:  # a rotation worker's failure, raised once with nothing appended
+                raise error
             if self._rotation_refusal is not None:  # no recovery or rebuild follows an ownership error
                 self._owner.revalidate()
                 raise _ConnectorOwnershipError(
                     f'connector log refuses writes after an ownership error: {self._path}') from self._rotation_refusal
-            error, self._rotation_error = self._rotation_error, None
-            if error is not None:  # a rotation worker's failure, raised once with nothing appended
-                self._rotation_refusal = error if isinstance(error, _ConnectorOwnershipError) else None
-                raise error
             if self._fh is None:
                 # A failed rotation left no handle. Accept the names it published only while
                 # their journal remains to validate them; otherwise any change still refuses.

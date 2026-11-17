@@ -43,7 +43,7 @@ class _RotationWorker:
     def _after_fork_in_child(self: Any) -> None:
         """A forked child: a free lock, and no rotation on a worker."""
         self._thread_lock = threading.RLock()
-        self._rotation_worker = self._rotation_context = None
+        self._rotation_worker = self._rotation_context = self._rotation_error = None
         self._rotation_stop = True
 
     def _run_rotation_worker(self: Any, cut: int) -> None:
@@ -78,8 +78,10 @@ class _RotationWorker:
             if isinstance(context, BaseException):
                 raise context
             self._swap_rotation(context)
-        except BaseException:
+        except BaseException as exc:
             fh, self._fh, self._rotation_failed = self._fh, None, True
+            if isinstance(exc, self._PERMANENT_ROTATION_ERRORS):  # on either thread
+                self._rotation_refusal = exc
             if fh is not None:
                 fh.close()
             raise
