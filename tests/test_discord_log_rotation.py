@@ -805,7 +805,7 @@ def test_connector_log_rotation_refuses_live_atomic_destination_swap(tmp):
     path.write_bytes(b"A" * 31)
     destination = path.with_name("rotation-live-atomic.log.1")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    with _after_staging(m, "_prepare_staged_for_replace", destination,
+    with _after_staging(m, "_claim_staged_for_replace", destination,
                         lambda _: _rebind(destination, b"LIVE-CONCURRENT\n")) as swapped:
         writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
         with contextlib.closing(writer), _refuses("rotation replaced a rebound atomic destination"):
@@ -824,7 +824,7 @@ def test_connector_log_rotation_stage_swap_after_prepare_keeps_journal(tmp):
     external = Path(tmp) / "rotation-external-after-prepare.log"
     external.write_bytes(b"ROTATION-EXTERNAL-KEEP\n")
     lock_root = m._ConnectorOwnership._IDENTITY_LOCK_ROOT
-    with _after_staging(m, "_prepare_staged_for_replace", destination,
+    with _after_staging(m, "_claim_staged_for_replace", destination,
                         lambda temporary: _rebind(temporary, link=external)) as swapped:
         writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1)
         with contextlib.closing(writer), _refuses("post-prepare rotation swap was published"):
@@ -2684,7 +2684,7 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x")
 
 
 def test_connector_log_anonymous_rotation_stage_crashes_leave_no_temp_of_ours(tmp):
-    """A crash after the link, or around a refused link's portable retry, leaves no temp; a rebound name stays."""
+    """A crash or a failed fsync after the link, or a crash around a refused link's retry, leaves no temp; a rebound name stays."""
     if not _mod()._anonymous_publication_available():
         _util.skip("these crash points are on the anonymous staging path")
     # The refused link keeps a dup of its inode open, so the retry's create cannot reuse its number.
@@ -2699,6 +2699,8 @@ def link(fd, name):
     if ".rotate-" in str(name) and mode == "rebind":
         pathlib.Path(str(name) + ".f").write_bytes(b"FOREIGN\n")
         os.replace(str(name) + ".f", name)
+    elif ".rotate-" in str(name) and mode == "fsync":
+        mod._ConnectorLogWriter._fsync_directory = staticmethod(lambda directory: os.fsync(-1))
     elif ".rotate-" in str(name):
         os._exit(178)
 def open_then_crash(name, flags, *args):
@@ -2716,7 +2718,8 @@ mod._ConnectorLogWriter._write_migration_temp = stage_then_crash
 os.open = open_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1).write("x")
 '''
-    for mode, code, left in (("link", 178, []), ("staged", 178, []), ("create", 178, []), ("rebind", 1, [b"FOREIGN\n"])):
+    for mode, code, left in (("link", 178, []), ("staged", 178, []), ("create", 178, []), ("rebind", 1, [b"FOREIGN\n"]),
+                             ("fsync", 1, [])):
         case = Path(tmp) / mode
         case.mkdir()
         path = case / "a.log"
@@ -2880,6 +2883,53 @@ def test_connector_log_hardlinked_backup_replacement_preserves_external_inode(tm
 
     assert external.read_bytes() == b"EXTERNAL-KEEP\n"
     assert path.with_name("backup-chronology.log.2").read_bytes() == b"BACKUP-ONE\n"
+
+
+def test_connector_log_rotation_renames_backups_and_writes_the_active_copy_once(tmp):
+    """Each retained backup moves down by rename, and the active's bytes are written once, into the new .1."""
+    m = _mod()
+    path = Path(tmp) / "rename.log"
+    slots = [path, *(path.with_name(f"rename.log.{index}") for index in (1, 2, 3))]
+    for index, slot in enumerate(slots):
+        slot.write_bytes(str(index).encode() * 4000 + b"\n")
+    real_open, real_write, written = os.open, os.write, {}
+
+    def inode(fd):
+        info = os.fstat(fd)
+        return info.st_dev, info.st_ino
+
+    def fresh_open(name, flags, *args, **kwargs):  # a freed inode number comes back: a new file counts afresh
+        fd = real_open(name, flags, *args, **kwargs)
+        if flags & os.O_CREAT or os.fstat(fd).st_nlink == 0:
+            written.pop(inode(fd), None)
+        return fd
+
+    def counting_write(fd, data):
+        key, count = inode(fd), real_write(fd, data)
+        written[key] = written.get(key, 0) + count
+        return count
+    with contextlib.closing(m._ConnectorLogWriter(path, max_bytes=4096, backup_count=3)) as writer:
+        before = [(slot.stat().st_dev, slot.stat().st_ino) for slot in slots]
+        with _patched(m.os, open=fresh_open, write=counting_write):
+            writer.write("x" * 200)
+    after = [(slot.stat().st_dev, slot.stat().st_ino) for slot in slots]
+    assert after[0] == before[0] and after[2:] == before[1:3], (before, after)  # .2 and .3 are the old .1 and .2
+    assert written.get(after[1]) == 4001 and slots[1].read_bytes() == b"0" * 4000 + b"\n", written
+    assert written.get(before[0], 0) == 0, written  # the active inode is truncated, never rewritten
+
+
+def test_connector_log_rotation_refuses_a_backup_sharing_the_active_inode(tmp):
+    """A backup hard-linked to the active inode is refused before any journal: a rename would move the live inode."""
+    m = _mod()
+    path = Path(tmp) / "shared.log"
+    path.write_bytes(b"A" * 31)
+    os.link(path, path.with_name("shared.log.1"))
+    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=2)
+    before = {slot.name: slot.read_bytes() for slot in Path(tmp).glob("shared.log*")}
+    with contextlib.closing(writer), _refuses("a backup sharing the active inode was rotated"):
+        writer.write("x")
+    assert not list(writer._owner.lock_root.glob("*.rotate.json"))
+    assert {slot.name: slot.read_bytes() for slot in Path(tmp).glob("shared.log*")} == before
 
 
 def test_connector_log_preserves_user_notes_and_temps_with_embedded_tokens(tmp):
@@ -4477,16 +4527,17 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=int(sys.argv[6])
 '''
     history = b"".join(f"{i:02d}\n".encode() for i in range(12))
     rotate, T, D, gone = ("rotate", 2, {"": b"A" * 31, ".1": b"B" * 10}, rotate_child, 178), "temporary", "destination", "has no staged replacement"
-    # Damage is (journal slot, its temp or destination, change; None deletes); rotation slots are .2, .1, active.
+    # Damage is (journal slot, its temp or destination, change; None deletes); rotation slots are .2 (renamed
+    # from .1), .1 (staged), active.
     rows = (("migrate", 2, {"": history}, _crash_after_first_replace_script("migrate"), 174, "", "", ((1, T, None),), gone),
-            (*rotate, ".2", "after", ((1, T, None), (2, T, None), (1, D, None)), gone),  # .1 unmarked, then deleted
-            (*rotate, ".1", "before", ((1, T, None),), gone),  # .1 marked and never published
-            (*rotate, ".1", "after", ((2, T, None),), gone),  # the active's empty temp
-            # .2 still awaits its publish when a later slot refuses
+            (*rotate, ".2", "after", ((1, T, None),), gone),  # .1 unmarked, its temp deleted
+            (*rotate, ".2", "before", ((0, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination was rebound"),  # a foreign .2
+            (*rotate, ".2", "before", ((0, D, lambda p: p.write_bytes(b"FOREIGN\n")), (1, D, None)), "destination was rebound"),  # and no .1
+            # .2 still awaits its rename when a later slot refuses
             (*rotate, ".2", "before", ((1, T, lambda p: p.write_bytes(p.read_bytes()[:-4] + b"XXXX")),), "temp digest mismatch"),
             (*rotate, ".2", "before", ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"),
             (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"),
-            # .2 is an unlink after .3's stage: its refusal must come before .3 is published
+            # .3 renames .2 and .2 is an unlink: a rebound .2 refuses before .3 is renamed
             ("rotate", 3, {"": b"A" * 31, ".2": b"C" * 10}, rotate_child, 178, ".3", "before",
              ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"))
     for i, (kind, backups, seed, child, code, slot, when, damage, refusal) in enumerate(rows):

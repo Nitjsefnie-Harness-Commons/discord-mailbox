@@ -3,6 +3,7 @@
 # pylint: disable=no-member,attribute-defined-outside-init
 import errno
 import os
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -124,51 +125,140 @@ class _RotationJournal:
         self._published_since_snapshot = False
         owner.revalidate()
 
+    def _mark_generation_publishing(self: Any, manifest: dict) -> None:
+        """Persist ``prepared`` and the contract of every slot but the stage in one append."""
+        manifest['state'] = 'prepared'
+        for item in manifest['destinations']:
+            if item['method'] != 'stage':
+                item.update(publish_state='publishing',
+                            publish_identity=item['before_identity'],
+                            publish_entry_identity=item['before_entry_identity'])
+        self._write_migration_manifest(manifest, kind='rotate')
+        self._published_since_snapshot = True
+
+    def _claim_staged_for_replace(self: Any, temporary: Path, *, expected_destination: Path,
+                                  identity: Any, entry_identity: Any) -> None:
+        """Register a staged name for ``os.replace`` while it holds the journaled inode."""
+        current = self._slot_identity(temporary)
+        if None in current or current != (self._manifest_identity(identity),
+                                          self._manifest_identity(entry_identity)):
+            raise RuntimeError(f'connector log staging temp for {expected_destination} '
+                               f'was rebound before replace: {temporary}')
+        self._VERIFIED_STAGED_REPLACEMENTS[self._staged_path_key(temporary)] = current
+
+    def _stage_rotation_copy(self: Any, manifest: dict, data: bytes, mode: Any,
+                             planned: Path) -> Path:
+        """Stage the active's bytes for ``.1``, journaling the inode before it is named."""
+        index = len(manifest['destinations']) - 2
+        item = manifest['destinations'][index]
+        self._staging_kind, self._staging_slot = 'rotate', index
+        self._staging_destination = Path(item['destination'])
+
+        def claim(staged, identity):
+            recorded = list(identity) if identity is not None else None
+            item['temporary_identity'] = item['temporary_entry_identity'] = recorded
+            if identity is None:
+                manifest['created_temporaries'].remove(str(staged))
+            else:
+                manifest['created_temporaries'].append(str(staged))
+            self._write_migration_manifest(manifest, kind='rotate')
+        self._staging_claim_callback = claim
+        try:
+            return self._write_migration_temp(data, mode, name=planned)
+        finally:
+            self._staging_claim_callback = None
+
+    def _publish_rotation_slot(self: Any, manifest: dict, position: int, staged: Any) -> None:
+        """Shift one backup by rename or unlink, or publish the stage, rechecking it first."""
+        item = manifest['destinations'][position]
+        destination, method = Path(item['destination']), item['method']
+        # Every slot after the oldest was vacated by the shift into the slot before it.
+        expected = self._journal_pair(item, 'before') if position == 0 else (None, None)
+        if method == 'stage':
+            self._mark_destination_publishing(manifest, position, 'rotate')
+            try:
+                self._claim_staged_for_replace(
+                    staged, expected_destination=destination,
+                    identity=item['temporary_identity'],
+                    entry_identity=item['temporary_entry_identity'])
+                self._revalidate_destination(destination, *expected)
+                self._revalidate_staged_for_replace(staged)
+                os.replace(staged, destination)
+            finally:
+                self._forget_staged_for_replace(staged)
+        elif method == 'rename':
+            self._revalidate_destination(Path(item['source']), *self._journal_pair(item, 'source'))
+            self._revalidate_destination(destination, *expected)
+            os.replace(item['source'], destination)
+        else:
+            self._revalidate_destination(destination, *expected)
+            if (not self._unlink_if_identity(destination, *expected) and
+                    os.path.lexists(str(destination))):
+                raise RuntimeError(
+                    f'connector log sparse destination was rebound: {destination}')
+        self._fsync_directory(self._path.parent)
+
     def _rotate(self: Any) -> None:
         self._use_anonymous_staging = True
-        self._owner.revalidate()
+        owner = self._owner
+        owner.revalidate()
         try:
             mode = os.stat(self._path).st_mode & 0o7777
         except OSError:
             mode = None
-        destinations = []
-        for index in range(self._backup_count, 0, -1):
-            source = (self._backup_path(index - 1)
-                      if index > 1 else self._path)
-            present = source.is_file()
-            data = source.read_bytes() if present else b''
-            destination = self._backup_path(index)
-            # A retained backup is not protected by the active inode lock.
-            # Replace its pathname atomically even when it has external hard
-            # links; publishing in place would mutate another owner's file.
-            in_place = False
-            destinations.append((destination, data, present, in_place))
-        # The active inode is the final publish and is always updated in place.
-        destinations.append((self._path, b'', True, True))
-
-        self._transaction_nonce = uuid.uuid4().hex
-        self._staging_cleanup_failed = False
-        temporary = []
-        staged_paths = [
-            self._owned_temp_path('rotate', index)
-            for index, (_destination, _data, present, _in_place)
-            in enumerate(destinations) if present
-        ]
-        staged_iter = iter(staged_paths)
-        planned_paths = [next(staged_iter) if present else None
-                         for _destination, _data, present, _in_place
-                         in destinations]
-        path_state_map = {
-            destination: self._journal_file_state(destination)
-            for destination, _data, _present, _in_place in destinations
-        }
+        fd = os.open(str(self._path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                     getattr(os, 'O_BINARY', 0))
+        with os.fdopen(fd, 'rb') as active:
+            opened = os.fstat(fd)
+            if owner.identity not in (None, (str(opened.st_dev), str(opened.st_ino))):
+                raise RuntimeError(
+                    f'connector log identity was replaced while owned: {self._path}')
+            data = active.read()
+        digest, empty = self._sha256_bytes(data), self._sha256_bytes(b'')
+        backups = [self._backup_path(index) for index in range(self._backup_count, 0, -1)]
+        states = {slot: self._journal_file_state(slot, hash_content=False)
+                  for slot in (*backups, self._path)}
+        for slot in backups:
+            try:
+                info = os.lstat(slot)
+            except FileNotFoundError:
+                continue
+            # A rename carries the inode down the window, so only a separate regular file moves.
+            if (not stat.S_ISREG(info.st_mode) or not info.st_ino or
+                    (str(info.st_dev), str(info.st_ino)) == owner.identity):
+                raise RuntimeError(
+                    f'connector log backup is not a separate regular file: {slot}')
         # Revalidate while the handle is held: a refusal must not look like a failed rotation.
-        stable_paths = self._owner.manifest_stable_paths()
+        stable_paths = owner.manifest_stable_paths()
         fh, self._fh = self._fh, None
         if fh is not None:
             fh.close()
+        self._transaction_nonce = uuid.uuid4().hex
+        self._staging_cleanup_failed = False
+
+        def entry(slot, method, **fields):
+            state = states[slot]
+            return {'destination': str(slot), 'method': method, 'present': method != 'unlink',
+                    'before_identity': state['identity'],
+                    'before_entry_identity': state['entry_identity'],
+                    'before_present': state['present'], **fields}
+        destinations = [
+            entry(slot, 'rename', source=str(source),
+                  source_identity=states[source]['identity'],
+                  source_entry_identity=states[source]['entry_identity'])
+            if states[source]['present'] else entry(slot, 'unlink')
+            for slot, source in zip(backups, backups[1:])]
+        planned = self._owned_temp_path('rotate', len(destinations)) if backups else None
+        if planned is not None:
+            destinations.append(entry(
+                backups[-1], 'stage', temporary=str(planned), temporary_identity=None,
+                temporary_entry_identity=None, size=len(data), sha256=digest))
+        destinations.append(entry(
+            self._path, 'rewrite', in_place=True, cut=len(data), prefix_sha256=digest,
+            tail='', tail_sha256=empty, size=0, sha256=empty))
+        temporaries = [str(planned)] if planned is not None else []
         manifest = {
-            'version': 3,
+            'version': 4,
             'identity_contract': 'entry-v1',
             'kind': 'rotate',
             'token': self._identity_digest,
@@ -179,137 +269,31 @@ class _RotationJournal:
             'generation': uuid.uuid4().hex,
             'transaction_nonce': self._transaction_nonce,
             'staging': self._PAYLOAD_STAGING,
-            'temporaries': [str(path) for path in staged_paths],
-            'planned_temporaries': [str(path) for path in staged_paths],
+            'temporaries': temporaries,
+            'planned_temporaries': list(temporaries),
             'created_temporaries': [],
-            'path_states': list(path_state_map.values()),
             'stable_paths': stable_paths,
-            'destinations': [
-                {
-                    'destination': str(destination),
-                    'temporary': (str(planned_paths[index])
-                                  if planned_paths[index] is not None else None),
-                    'present': present,
-                    'size': len(data),
-                    'sha256': self._sha256_bytes(data),
-                    'in_place': in_place,
-                    'before_identity': path_state_map[destination]['identity'],
-                    'before_entry_identity': path_state_map[destination][
-                        'entry_identity'],
-                    'before_present': path_state_map[destination]['present'],
-                    'before_size': path_state_map[destination]['size'],
-                    'before_sha256': path_state_map[destination]['sha256'],
-                    'temporary_identity': None,
-                    'temporary_entry_identity': None,
-                }
-                for index, (destination, data, present, in_place)
-                in enumerate(destinations)
-            ],
+            'destinations': destinations,
         }
         journal = self._rotation_manifest_path()
         self._write_migration_manifest(manifest, kind='rotate', create=True)
-        published_count = 0
+        staged, published = None, False
         try:
-            # Durable ownership exists before the first stage.  A hard exit
-            # therefore leaves only this transaction's fixed, recoverable set.
-            for index, (_destination, data, present, _in_place) in enumerate(
-                    destinations):
-                if not present:
-                    temporary.append(None)
-                    continue
-                self._staging_kind = 'rotate'
-                self._staging_slot = index
-                self._staging_destination = destinations[index][0]
-
-                def claim(staged, identity, index=index):
-                    entry = manifest['destinations'][index]
-                    recorded = list(identity) if identity is not None else None
-                    entry['temporary_identity'] = entry['temporary_entry_identity'] = recorded
-                    if identity is None:
-                        manifest['created_temporaries'].remove(str(staged))
-                    else:
-                        manifest['created_temporaries'].append(str(staged))
-                    self._write_migration_manifest(manifest, kind='rotate')
-                self._staging_claim_callback = claim
-                try:
-                    staged = self._write_migration_temp(
-                        data, mode, name=planned_paths[index])
-                finally:
-                    self._staging_claim_callback = None
-                temporary.append(staged)
-            self._fsync_directory(self._path.parent)
-            manifest['state'] = 'prepared'
-            self._write_migration_manifest(manifest, kind='rotate')
-            for index, ((destination, _data, present, in_place), staged) in enumerate(
-                    zip(destinations, temporary)):
-                self._mark_destination_publishing(manifest, index, 'rotate')
-                published_count += 1
-                entry = manifest['destinations'][index]
-                if present:
-                    if in_place:
-                        self._validate_and_remember_staged(
-                            staged, expected_size=len(_data),
-                            expected_digest=self._sha256_bytes(_data),
-                            expected_kind='rotate', expected_slot=index,
-                            expected_destination=destination,
-                            expected_nonce=self._transaction_nonce,
-                            expected_staging=self._PAYLOAD_STAGING)
-                        try:
-                            self._publish_in_place(
-                                destination, staged,
-                                self._manifest_identity(
-                                    entry.get('before_identity')),
-                                self._manifest_identity(
-                                    entry.get('before_entry_identity')))
-                        finally:
-                            self._forget_verified_staged(staged)
-                    else:
-                        self._prepare_staged_for_replace(
-                            staged, len(_data), self._sha256_bytes(_data),
-                            expected_kind='rotate', expected_slot=index,
-                            expected_destination=destination,
-                            expected_nonce=self._transaction_nonce,
-                            expected_staging=self._PAYLOAD_STAGING)
-                        self._revalidate_destination(
-                            destination,
-                            self._manifest_identity(entry.get('before_identity')),
-                            self._manifest_identity(
-                                entry.get('before_entry_identity')))
-                        self._revalidate_staged_for_replace(staged)
-                        try:
-                            os.replace(staged, destination)
-                        finally:
-                            self._forget_staged_for_replace(staged)
-                else:
-                    removed = self._unlink_if_identity(
-                        destination,
-                        self._manifest_identity(
-                            entry.get('before_identity')),
-                        self._manifest_identity(
-                            entry.get('before_entry_identity')))
-                    if (not removed and
-                            os.path.lexists(str(destination))):
-                        raise RuntimeError(
-                            f'connector log sparse destination was rebound: '
-                            f'{destination}')
-                self._fsync_directory(self._path.parent)
-            temporary.clear()
+            if planned is not None:
+                staged = self._stage_rotation_copy(manifest, data, mode, planned)
+            self._mark_generation_publishing(manifest)
+            published = True
+            for position in range(len(destinations) - 1):
+                self._publish_rotation_slot(manifest, position, staged)
+            self._publish_in_place(self._path, None,
+                                   *self._journal_pair(destinations[-1], 'before'))
         except BaseException:
-            cleanup_ok = not getattr(self, '_staging_cleanup_failed', False)
-            if published_count == 0:
-                for index, staged in enumerate(temporary):
-                    if staged is not None:
-                        entry = manifest['destinations'][index]
-                        removed = self._unlink_if_identity(
-                            staged,
-                            self._manifest_identity(
-                                entry.get('temporary_identity')),
-                            self._manifest_identity(
-                                entry.get('temporary_entry_identity')))
-                        if (not removed and
-                                os.path.lexists(str(staged))):
-                            cleanup_ok = False
-                if cleanup_ok:
+            if not published:
+                kept = (staged is not None and
+                        not self._unlink_if_identity(
+                            staged, *self._journal_pair(destinations[-2], 'temporary')) and
+                        os.path.lexists(str(staged)))
+                if not (kept or self._staging_cleanup_failed):
                     try:
                         journal.unlink()
                     except FileNotFoundError:
@@ -317,22 +301,10 @@ class _RotationJournal:
                     self._fsync_directory(self._path.parent)
                     self._fsync_directory(journal.parent)
             raise
-        for index, leftover in enumerate(staged_paths):
-            entry = next(
-                (item for item in manifest['destinations']
-                 if isinstance(item, dict) and
-                 item.get('temporary') == str(leftover)),
-                {})
-            self._unlink_if_identity(
-                leftover,
-                self._manifest_identity(entry.get('temporary_identity')),
-                self._manifest_identity(entry.get('temporary_entry_identity')))
-        journal = self._rotation_manifest_path()
         self._adopt_rotated_identities({
-            Path(entry['destination']): (
-                self._owner.identity if entry['in_place'] else
-                self._manifest_identity(entry['temporary_identity']))
-            for entry in manifest['destinations']})
+            Path(item['destination']): owner.identity if item['method'] == 'rewrite' else
+            self._manifest_identity(item.get('source_identity', item.get('temporary_identity')))
+            for item in destinations})
         try:
             journal.unlink()
         except FileNotFoundError:
