@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _restart  # noqa: E402
+from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _patched, _restart  # noqa: E402
 
 LIMIT = 32
 
@@ -342,6 +342,36 @@ def test_a_slot_swapped_while_a_rotation_journal_recovers_is_refused(tmp):
         cls._publish_in_place = real
         writer.close()
     assert backup.read_bytes() == b"FOREIGN\n"
+
+
+def test_a_slot_swapped_after_the_rotation_journal_is_prepared_is_never_moved(tmp):
+    """A rename rechecks its source and destination, the stage its temp; with the swap undone, recovery finishes."""
+    m, held = _mod(), []
+    cls = m._ConnectorLogWriter
+    for seam, index, key in (("_mark_generation_publishing", 0, "source"), ("_mark_generation_publishing", 0, "destination"),
+                             ("_mark_destination_publishing", 1, "temporary")):
+        path = Path(tmp) / key / "connector.log"
+        path.parent.mkdir()
+        writer = _filled(m, path)
+        before = [p.read_bytes() for p in _window(path)]
+        held.clear()
+
+        def swap(self, manifest, *args, real=getattr(cls, seam), index=index, key=key):
+            real(self, manifest, *args)
+            if not held:  # one swap, once the journal names every slot
+                held.append(Path(manifest["destinations"][index][key]))
+                os.replace(held[0], held[0].with_name("aside"))
+                held[0].write_bytes(b"FOREIGN\n")
+        with contextlib.closing(writer), _patched(cls, **{seam: swap}):
+            try:
+                writer.write("y" * 25)
+            except RuntimeError as exc:
+                assert held and held[0].read_bytes() == b"FOREIGN\n", (key, exc)  # refused before it moved
+            else:
+                raise AssertionError(f"{key}: a rotation moved a slot swapped after its journal was prepared")
+            os.replace(held[0].with_name("aside"), held[0])
+            writer.write("z" * 25)
+        assert [p.read_bytes() for p in _window(path)] == [b"z" * 25 + b"\n", before[0], before[1]], key
 
 
 def test_the_watchdog_closes_first_and_a_failed_log_write_falls_back_to_stderr(tmp):
