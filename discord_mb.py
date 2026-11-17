@@ -1230,4 +1230,4 @@ _release_reload_lock()
 if __name__ == '__main__':
     # Published into these globals by the re-export loop above, not by a
     # module-level def, so it has to be looked up rather than named.
-    globals()['_cli']()
+    sys.exit(globals()['_cli']())

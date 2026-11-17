@@ -436,7 +436,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         state['roles']['broadcast'] = discord.utils.get(guild.roles, name=BROADCAST_ROLE_NAME)
         missing = [k for k, v in state['channels'].items() if v is None]
         if missing:
-            log(f'WARN: missing channels (by name): {missing} — run `discord_mb.py setup` or create manually')
+            log(f'WARN: missing channels (by name): {missing} — run `{_prog.program_name()} setup` or create manually')
         if state['roles']['broadcast'] is None:
             log(f'WARN: broadcast role {BROADCAST_ROLE_NAME!r} not found in guild')
 
@@ -719,7 +719,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         if channel_ref is None or channel_ref == '':
             channel = ch('attachments')
             if channel is None:
-                raise RuntimeError(f'attachments channel #{ATTACHMENTS_CHANNEL_NAME} not resolved — run `discord_mb.py setup` first')
+                raise RuntimeError(f'attachments channel #{ATTACHMENTS_CHANNEL_NAME} not resolved — run `{_prog.program_name()} setup` first')
         else:
             cref = str(channel_ref).strip()
             if cref.isdigit():

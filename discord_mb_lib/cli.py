@@ -5,6 +5,7 @@ from .core import *
 from .core import __version__
 from .storage import *
 from .connector import *
+from . import _prog
 from . import _retention
 from . import _secrets
 
@@ -19,9 +20,10 @@ def _cli():
                 _reconf(encoding="utf-8", errors="replace")
             except (ValueError, OSError):
                 pass  # not a reconfigurable stream (redirected/piped)
-    p = argparse.ArgumentParser(prog='discord_mb.py', description=__doc__)
+    prog = _prog.program_name()
+    p = argparse.ArgumentParser(prog=prog, description=__doc__)
     p.add_argument('--version', action='version',
-                   version=f'discord_mb.py {__version__}')
+                   version=f'{prog} {__version__}')
     sub = p.add_subparsers(dest='command')
 
     s = sub.add_parser('send', help='Queue a message for delivery via connector',
@@ -30,7 +32,7 @@ def _cli():
                                    'at delivery, not when the send is queued: a plain send still exits 0 and the '
                                    'refusal arrives as a send_failed event (with --wait, as an error on stderr and '
                                    'exit 1). The error names `attachments upload`: use '
-                                   '`discord_mb.py attachments <identity> upload <path>` (lands in #attachments by '
+                                   f'`{prog} attachments <identity> upload <path>` (lands in #attachments by '
                                    'default) for it, or to post a file as a message of its own, then reference its '
                                    'message-id or url in the body if needed.')
     s.add_argument('identity', help='Sending identity (used to pick outbox dir)')

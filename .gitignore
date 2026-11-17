@@ -92,6 +92,7 @@
 !/discord_mb_lib/_linked.py
 !/discord_mb_lib/_log_chunks.py
 !/discord_mb_lib/_meta_claim.py
+!/discord_mb_lib/_prog.py
 !/discord_mb_lib/_retention.py
 !/discord_mb_lib/_secrets.py
 !/discord_mb_lib/_send_errors.py

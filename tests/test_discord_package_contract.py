@@ -6,17 +6,21 @@
 
 import os
 import asyncio
+import contextlib
 import gc
 import importlib
 import inspect
+import io
 import shutil
 import subprocess
 import sys
 import traceback
 import types
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gateway  # noqa: E402
 import _util  # noqa: E402
 
 MB = os.path.join(_util.SCRIPTS, "discord_mb.py")
@@ -42,6 +46,12 @@ def _assert_child_ok(result):
         f"stdout: {result.stdout!r}")
 
 
+def _child_ok(script):
+    """Run `script` in a fresh interpreter and fail unless it exits 0."""
+    _assert_child_ok(subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30))
+
+
 def _help(*args):
     result = subprocess.run(
         [sys.executable, MB, *args], capture_output=True, text=True, timeout=30)
@@ -63,6 +73,75 @@ def test_nested_help_remains_executable(tmp):
     assert "call" in _help("extension", "identity", "--help")
 
 
+# What `sys.argv[0]` holds -> the command name every help line and hint carries.
+INVOKED_AS = (("/venv/bin/discord-mb", "discord-mb"), ("discord_mb.py", "discord_mb.py"),
+              ("-c", "discord_mb.py"))
+
+
+def _entry(tmp, argv0, *args):
+    """Run the console-script entry point (`sys.exit(_cli())`) under `argv0`."""
+    script = (f"import sys; sys.path.insert(0, {str(_util.SCRIPTS)!r}); sys.argv[0] = {argv0!r}\n"
+              "from discord_mb_lib.cli import _cli; sys.exit(_cli())")
+    return subprocess.run([sys.executable, "-c", script, *args], capture_output=True, text=True,
+                          timeout=30, env={**os.environ, "TMPDIR": tmp})
+
+
+def test_both_entry_points_exit_with_the_dispatcher_return(tmp):
+    """`extension list` with no connector returns 1; neither entry point turns it into 0."""
+    args = ("extension", "gate-test", "--timeout", "0.3", "list")
+    facade = subprocess.run([sys.executable, MB, *args], capture_output=True, text=True,
+                            timeout=30, env={**os.environ, "TMPDIR": tmp})
+    assert (facade.returncode, _entry(tmp, "discord-mb", *args).returncode) == (1, 1), facade.stderr
+
+
+def test_help_and_version_name_the_invoked_command(tmp):
+    for argv0, name in INVOKED_AS:
+        version, usage, send = (_entry(tmp, argv0, *args).stdout for args in (
+            ("--version",), ("--help",), ("send", "--help")))
+        assert version.startswith(f"{name} "), version
+        assert usage.startswith(f"usage: {name} "), usage
+        assert f"`{name} attachments <identity> upload <path>`" in " ".join(send.split()), send
+
+
+def test_setup_hints_name_the_invoked_command(tmp):
+    if not _gateway.have_discord():
+        return _util.skip("discord.py is not installed")
+    import discord
+    from discord_mb_lib import connector, core
+    get = discord.utils.get
+
+    async def script(client):    # the guild lacks #attachments: the warning is logged, the upload refused
+        await client.ask({"up": {"op": "attachment-upload", "path": str(Path(tmp, "f.txt"))}})
+
+    class Bare:    # a bot that is in no guild
+        guilds = []
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def event(self, function):
+            self.ready = function
+            return function
+
+        def run(self, *args, **kwargs):
+            asyncio.run(self.ready())
+
+        async def close(self):
+            pass
+
+    Path(tmp, "f.txt").write_text("x", encoding="utf-8")
+    for argv0, name in INVOKED_AS:
+        without = lambda items, **kw: None if kw["name"] == connector.ATTACHMENTS_CHANNEL_NAME else get(items, **kw)
+        with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord.utils, "get", without):
+            client = _gateway.run(tmp, script)
+        with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord, "Client", Bare), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            core.setup_main(token="unused")
+        assert f"run `{name} setup` or create" in client.log, client.log
+        assert f"run `{name} setup` first" in client.responses["up"]["error"], client.responses
+        assert f"({name} does not handle OAuth" in err.getvalue(), err.getvalue()
+
+
 def test_package_modules_are_importable_from_the_script_directory(tmp):
     """The package seam is real, not an installer-only path assumption."""
     script = (
@@ -71,9 +150,7 @@ def test_package_modules_are_importable_from_the_script_directory(tmp):
         "import discord_mb_lib.core, discord_mb_lib.storage, "
         "discord_mb_lib.connector, discord_mb_lib.cli"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_importing_the_package_keeps_output_written_before_it(tmp):
@@ -107,10 +184,7 @@ def test_canonical_facade_remains_an_exact_module_type(tmp):
         "import discord_mb\n"
         "assert type(discord_mb) is types.ModuleType\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facades_loaded_from_distinct_deployments_are_isolated(tmp):
@@ -163,10 +237,7 @@ def test_facade_functions_are_pickleable_when_imported_normally(tmp):
         "(discord_mb.send, discord_mb.status_plugin_gateway_call, "
         "discord_mb.connector_main)]"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facade_and_package_share_public_type_identity(tmp):
@@ -182,10 +253,7 @@ def test_facade_and_package_share_public_type_identity(tmp):
         "assert discord_mb._ConnectorOwnership is storage._ConnectorOwnership; "
         "assert discord_mb.ConnectorApp is connector.ConnectorApp"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_preimported_local_package_keeps_identity_and_pickleability(tmp):
@@ -202,10 +270,7 @@ def test_preimported_local_package_keeps_identity_and_pickleability(tmp):
         "assert old_class is discord_mb.ConnectorApp; "
         "pickle.dumps(old_class)"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reimported_facade_keeps_new_package_api_deployments_isolated(tmp):
@@ -225,10 +290,7 @@ def test_reimported_facade_keeps_new_package_api_deployments_isolated(tmp):
         "assert first.ConnectorApp is connector.ConnectorApp; "
         "assert second.ConnectorApp is not first.ConnectorApp"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facade_reload_does_not_recurse_through_old_wrappers(tmp):
@@ -241,10 +303,7 @@ def test_facade_reload_does_not_recurse_through_old_wrappers(tmp):
         "importlib.reload(discord_mb); "
         "discord_mb._ConnectorOwnership._identity_for(pathlib.Path('/tmp/x'))"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_preserves_canonical_package_type_identity(tmp):
@@ -262,10 +321,7 @@ def test_reload_preserves_canonical_package_type_identity(tmp):
         "except discord_mb.SendError:\n"
         "    pass\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_private_facade_methods_remain_pickleable_after_reload(tmp):
@@ -279,10 +335,7 @@ def test_private_facade_methods_remain_pickleable_after_reload(tmp):
         "discord_mb = importlib.import_module('discord_mb'); "
         "pickle.dumps(discord_mb._ConnectorOwnership._identity_for)"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_exported_method_pickle_uses_legacy_facade_module(tmp):
@@ -299,10 +352,7 @@ def test_exported_method_pickle_uses_legacy_facade_module(tmp):
         "assert method.__module__ == 'discord_mb'\n"
         "assert pickle.loads(pickle.dumps(method)) is method\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_registered_alias_cannot_claim_the_canonical_package(tmp):
@@ -322,10 +372,7 @@ def test_registered_alias_cannot_claim_the_canonical_package(tmp):
         "assert normal.ConnectorApp is connector.ConnectorApp; "
         "assert normal._ConnectorOwnership is storage._ConnectorOwnership"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_class_methods_do_not_add_compatibility_traceback_frames(tmp):
@@ -345,10 +392,7 @@ def test_class_methods_do_not_add_compatibility_traceback_frames(tmp):
         "    assert names == ['<module>', 'read'], names\n"
         "else: raise AssertionError('deleted global stayed defined')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_descriptor_rollback_handles_set_then_raise(tmp):
@@ -377,10 +421,7 @@ def test_descriptor_rollback_handles_set_then_raise(tmp):
         "assert target.__dict__['__init__'] is original\n"
         "assert not hasattr(original, '__wrapped__')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_binding_marker_failure_precedes_descriptor_mutation(tmp):
@@ -406,10 +447,7 @@ def test_binding_marker_failure_precedes_descriptor_mutation(tmp):
         "assert target.__dict__['__init__'] is original\n"
         "assert not hasattr(original, '__wrapped__')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_deleted_facade_monkeypatch_restores_implementation_global(tmp):
@@ -435,10 +473,7 @@ def test_deleted_facade_monkeypatch_restores_implementation_global(tmp):
         "assert discord_mb.pid_cmdline(999999999) is None\n"
         "assert 'open' not in discord_mb._core_module.__dict__\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_suspended_coroutine_observes_late_facade_monkeypatch(tmp):
@@ -466,10 +501,7 @@ def test_suspended_coroutine_observes_late_facade_monkeypatch(tmp):
         "    raise AssertionError('late override was not observed')\n"
         "asyncio.run(scenario())\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_private_wrapper_build_removes_package_tree(tmp):
@@ -498,10 +530,7 @@ def test_failed_private_wrapper_build_removes_package_tree(tmp):
         "after = {n for n in sys.modules if n.startswith('_discord_mb_lib_')}\n"
         "assert after == before, sorted(after - before)\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_reload_preserves_override_assigned_while_staged(tmp):
@@ -543,10 +572,7 @@ def test_failed_reload_preserves_override_assigned_while_staged(tmp):
         "assert all(module.pid_alive is fake for module in "
         "(core, storage, connector, cli))\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_reload_preserves_concurrent_override_deletion(tmp):
@@ -589,10 +615,7 @@ def test_failed_reload_preserves_concurrent_override_deletion(tmp):
         "except NameError: pass\n"
         "else: raise AssertionError('deleted override was resurrected')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
@@ -635,10 +658,7 @@ def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
         "    except RuntimeError: pass\n"
         "    else: raise AssertionError('raw implementation was published')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_old_call_cannot_repropagate_patch_into_staged_reload(tmp):
@@ -681,10 +701,7 @@ def test_old_call_cannot_repropagate_patch_into_staged_reload(tmp):
         "discord_mb.pid_alive.__code__.co_code\n"
         "pickle.dumps(discord_mb.pid_alive)\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_async_generator_wrapper_delegates_full_protocol(tmp):
@@ -732,10 +749,7 @@ def test_async_generator_wrapper_delegates_full_protocol(tmp):
         "    await stream.aclose()\n"
         "asyncio.run(scenario())\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_absent_builtin_facade_override_reaches_implementation(tmp):
@@ -755,10 +769,7 @@ def test_absent_builtin_facade_override_reaches_implementation(tmp):
         "    raise AssertionError('oversized body was accepted')\n"
         "assert len(seen) == 1, seen\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_builtin_setattr_override_is_not_used_by_facade_machinery(tmp):
@@ -779,10 +790,7 @@ def test_builtin_setattr_override_is_not_used_by_facade_machinery(tmp):
         "assert discord_mb.is_connector_process(999999999, 'nobody') is None\n"
         "assert state['calls'] == setup_calls\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_builtin_set_override_is_not_used_by_facade_machinery(tmp):
@@ -800,10 +808,7 @@ def test_builtin_set_override_is_not_used_by_facade_machinery(tmp):
         "assert discord_mb.is_connector_process(999999999, 'nobody') is None\n"
         "assert calls == []\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_refreshes_environment_backed_configuration(tmp):
@@ -826,10 +831,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
         "for module in modules)\n"
         "assert discord_mb.ConnectorApp is not connector_type\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_refreshes_home_derived_paths(tmp):
@@ -866,10 +868,7 @@ def test_reload_refreshes_home_derived_paths(tmp):
         "    assert all(getattr(module, name) == value "
         "for module in modules), name\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_rebuilds_mutated_import_time_lookup_tables(tmp):
@@ -888,10 +887,7 @@ def test_reload_rebuilds_mutated_import_time_lookup_tables(tmp):
         "    assert all('adversary' not in getattr(module, name) "
         "for module in (core, storage, connector, cli)), name\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_rebinds_from_import_dependencies(tmp):
@@ -935,10 +931,7 @@ def test_reload_rebinds_from_import_dependencies(tmp):
         "assert discord_mb.BRIDGE_CHANNEL_NAME == "
         "'PATCHED-DISCORD_MB_BRIDGE_CHANNEL'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_preserves_user_attributes_named_like_facade_internals(tmp):
@@ -955,10 +948,7 @@ def test_reload_preserves_user_attributes_named_like_facade_internals(tmp):
         "assert all(getattr(discord_mb, name) is marker "
         "for name, marker in markers.items())\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_declaration_overwrites_an_earlier_concurrent_assignment(tmp):
@@ -986,10 +976,7 @@ def test_reload_declaration_overwrites_an_earlier_concurrent_assignment(tmp):
         "assert not errors, errors\n"
         "assert discord_mb.MAX_BODY == 1900\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_preserves_an_assignment_after_declaration_staging(tmp):
@@ -1025,10 +1012,7 @@ def test_reload_preserves_an_assignment_after_declaration_staging(tmp):
         "assert discord_mb.coarse_duration is sentinel\n"
         "assert discord_mb.coarse_duration(60) == 'late-assignment'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_transient_attribute_versions_remain_bounded(tmp):
@@ -1046,10 +1030,7 @@ def test_transient_attribute_versions_remain_bounded(tmp):
         "    importlib.reload(discord_mb)\n"
         "    assert len(discord_mb._facade_mutation_versions) == 0\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_recreates_classes_without_mutating_retained_generation(tmp):
@@ -1075,10 +1056,7 @@ def test_reload_recreates_classes_without_mutating_retained_generation(tmp):
         "assert current._backup_path.__name__ == original_backup_path.__name__\n"
         "assert not hasattr(current, 'adversary_added')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_concurrent_class_assignment_stays_on_retained_generation(tmp):
@@ -1116,10 +1094,7 @@ def test_concurrent_class_assignment_stays_on_retained_generation(tmp):
         "assert target.write is concurrent\n"
         "assert discord_mb._ConnectorLogWriter is not current\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_reload_preserves_concurrent_class_assignment(tmp):
@@ -1156,10 +1131,7 @@ def test_failed_reload_preserves_concurrent_class_assignment(tmp):
         "assert len(errors) == 1 and isinstance(errors[0], RuntimeError), errors\n"
         "assert target.write is baseline\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_reload_preserves_exception_class_delete_aba(tmp):
@@ -1192,10 +1164,7 @@ def test_failed_reload_preserves_exception_class_delete_aba(tmp):
         "assert len(errors) == 1 and isinstance(errors[0], RuntimeError), errors\n"
         "assert not hasattr(target, 'adversary_probe')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_public_exceptions_accept_independent_subclass_metaclass(tmp):
@@ -1208,10 +1177,7 @@ def test_public_exceptions_accept_independent_subclass_metaclass(tmp):
         "class Derived(discord_mb.SendError, metaclass=IndependentMeta): pass\n"
         "assert type(Derived) is IndependentMeta\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_exception_reload_uses_immutable_declaration_metadata(tmp):
@@ -1234,10 +1200,7 @@ def test_exception_reload_uses_immutable_declaration_metadata(tmp):
         "assert not issubclass(current, RuntimeError)\n"
         "assert pickle.loads(pickle.dumps(current)) is current\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_recreates_internal_classes_and_preserves_old_generation(tmp):
@@ -1260,10 +1223,7 @@ def test_reload_recreates_internal_classes_and_preserves_old_generation(tmp):
         "assert pickle.loads(pickle.dumps(discord_mb.ConnectorApp)) "
         "is discord_mb.ConnectorApp\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_reexecutes_dynamic_class_declarations(tmp):
@@ -1278,10 +1238,7 @@ def test_reload_reexecutes_dynamic_class_declarations(tmp):
         "importlib.reload(discord_mb)\n"
         "assert discord_mb._ConnectorOwnership._IDENTITY_LOCK_ROOT == new_root\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_reload_recreates_method_descriptors_from_frozen_declaration(tmp):
@@ -1299,10 +1256,7 @@ def test_reload_recreates_method_descriptors_from_frozen_declaration(tmp):
         "assert hasattr(old_method, 'adversary_probe')\n"
         "assert not hasattr(new_method, 'adversary_probe')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_direct_facade_dictionary_version_reaches_cli(tmp):
@@ -1320,10 +1274,7 @@ def test_direct_facade_dictionary_version_reaches_cli(tmp):
         "assert output.getvalue().strip() == "
         "'discord_mb.py adversary-direct-dict'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_direct_facade_dictionary_version_deletion_reaches_cli(tmp):
@@ -1338,10 +1289,7 @@ def test_direct_facade_dictionary_version_deletion_reaches_cli(tmp):
         "except NameError: pass\n"
         "else: raise AssertionError('deleted version stayed defined')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_direct_facade_dictionary_deletion_reaches_function_globals(tmp):
@@ -1355,10 +1303,7 @@ def test_direct_facade_dictionary_deletion_reaches_function_globals(tmp):
         "except NameError: pass\n"
         "else: raise AssertionError('deleted global remained in implementation')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_successive_reloads_prune_obsolete_function_helpers(tmp):
@@ -1373,10 +1318,7 @@ def test_successive_reloads_prune_obsolete_function_helpers(tmp):
         "    assert len(vars(discord_mb)) <= baseline + 10, "
         "(baseline, len(vars(discord_mb)))\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_retained_top_level_wrapper_survives_reload(tmp):
@@ -1390,10 +1332,7 @@ def test_retained_top_level_wrapper_survives_reload(tmp):
         "importlib.reload(discord_mb)\n"
         "assert old(999999999) is False\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_missing_nonbuiltin_global_can_be_restored_from_facade(tmp):
@@ -1410,10 +1349,7 @@ def test_missing_nonbuiltin_global_can_be_restored_from_facade(tmp):
         "ownership = discord_mb._ConnectorOwnership(probe)\n"
         "ownership.close()\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_running_sync_call_observes_concurrent_facade_assignment(tmp):
@@ -1459,10 +1395,7 @@ def test_running_sync_call_observes_concurrent_facade_assignment(tmp):
         "assert seen == ['A', 'B'], seen\n"
         "assert str(failure[0]) == 'B-used'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_failed_sync_target_rotation_cannot_poison_old_wrappers(tmp):
@@ -1487,10 +1420,7 @@ def test_failed_sync_target_rotation_cannot_poison_old_wrappers(tmp):
         "discord_mb.is_connector_process(999999999, 'nobody')\n"
         "assert core.pid_alive is raw\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_inflight_call_observes_late_raw_dictionary_mutation(tmp):
@@ -1524,10 +1454,7 @@ def test_inflight_call_observes_late_raw_dictionary_mutation(tmp):
         "discord_mb.time = real_time\n"
         "assert used == ['NEW'], used\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
@@ -1545,10 +1472,7 @@ def test_top_level_functions_do_not_add_compatibility_traceback_frames(tmp):
         "    assert names == ['<module>', 'send'], names\n"
         "else: raise AssertionError('deleted global stayed defined')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facade_code_objects_name_the_installed_module(tmp):
@@ -1576,10 +1500,7 @@ def test_facade_code_objects_name_the_installed_module(tmp):
         "    assert frame.line, 'traceback showed no source text'\n"
         "else: raise AssertionError('invalid extra_urls was accepted')\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
@@ -1595,10 +1516,7 @@ def test_facade_baseline_deletion_reaches_implementation_until_reload(tmp):
         "importlib.reload(discord_mb)\n"
         "assert discord_mb.recovery_label({'recover_in': '1h'}) == '1h'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_facade_version_assignment_reaches_cli_module_reference(tmp):
@@ -1616,10 +1534,7 @@ def test_facade_version_assignment_reaches_cli_module_reference(tmp):
         "    assert exc.code == 0\n"
         "assert '9.8.7-test' in output.getvalue(), output.getvalue()\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_private_cleanup_failure_rolls_back_removed_modules(tmp):
@@ -2013,10 +1928,7 @@ def test_star_import_does_not_leak_facade_build_temporaries(tmp):
         "assert SCRIPT_ROOT == 'caller-sentinel'\n"
         "assert ConnectorApp.__name__ == 'ConnectorApp'\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_projected_classes_keep_working_source_locations(tmp):
@@ -2040,10 +1952,7 @@ def test_projected_classes_keep_working_source_locations(tmp):
         "    origin = pathlib.Path(inspect.getsourcefile(cls))\n"
         "    assert origin.is_file(), origin\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_cli_reads_the_live_facade_docstring(tmp):
@@ -2059,10 +1968,7 @@ def test_cli_reads_the_live_facade_docstring(tmp):
         "    discord_mb._cli()\n"
         "assert 'ADVERSARY-DOC-SENTINEL' in output.getvalue()\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        timeout=30)
-    _assert_child_ok(result)
+    _child_ok(script)
 
 
 def test_core_exports_match_the_module_namespace(tmp):
