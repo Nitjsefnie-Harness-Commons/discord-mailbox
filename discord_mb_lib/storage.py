@@ -11,6 +11,7 @@ from .core import (_DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV,
 from . import _log_chunks
 from ._log_rotation import _RotationJournal
 from ._log_rotation_recovery import _RotationRecovery
+from ._log_rotation_worker import _RotationWorker
 
 
 def _posix_mode_exposed(mode):
@@ -705,7 +706,7 @@ class _ConnectorOwnership:
         self.close()
 
 
-class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
+class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
     """Line-buffered UTF-8 writer with a strict byte-sized rotation window.
 
     A logical line is encoded first, then written with one trailing newline.
@@ -760,6 +761,8 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
         self._staging_destination = None
         self._staging_claim_callback = None
         self._staging_cleanup_failed = False
+        self._rotation_worker = self._rotation_context = self._rotation_staged = None
+        self._rotation_stop = False
         self._fh = None
         self._active_bytes = 0
         self._closed = False
@@ -2926,6 +2929,7 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
         ownership proof, while the fixed names keep the hidden set bounded
         independently of crash count.
         """
+        self._check_rotation_owner()
         directory = Path(directory or self._path.parent)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if name is None:
@@ -3012,14 +3016,14 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
     @staticmethod
     def _publish_in_place(destination, temporary,
                           expected_destination_identity=None,
-                          expected_destination_entry_identity=None):
+                          expected_destination_entry_identity=None, tail=b''):
         """Copy a staged slot into an existing hard-linked inode safely.
 
         The active slot always uses this path: the writer's ownership lock is
         on that inode, so replacing the pathname would strand the lock.
-        A ``temporary`` of None truncates the inode to empty.
+        A ``temporary`` of None truncates the inode to ``tail``.
         """
-        verified = (b'', None, None) if temporary is None else (
+        verified = (tail, None, None) if temporary is None else (
             _ConnectorLogWriter._VERIFIED_STAGED_PAYLOADS.pop(
                 _ConnectorLogWriter._staged_path_key(temporary), None))
         if verified is None:
@@ -3281,7 +3285,7 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
                 if manifest is None:
                     raise ValueError(
                         'connector log journal has no complete state') from exc
-            if manifest.get('version') not in (2, 3, 4) or manifest.get('kind') != kind:
+            if manifest.get('version') not in (2, 3, 4, 5) or manifest.get('kind') != kind:
                 raise ValueError('unsupported connector log journal version')
             if manifest.get('token') != self._identity_digest:
                 raise ValueError('connector log journal identity mismatch')
@@ -3960,7 +3964,7 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
         data = record.encode('utf-8')
         if len(data) > self._max_bytes:
             raise AssertionError('connector log record exceeded byte ceiling')
-        if self._active_bytes and self._active_bytes + len(data) > self._max_bytes:
+        if self._rotation_before_append(len(data)):
             self._rotate()
         handle = self._fh
         if handle is None:
@@ -4023,6 +4027,10 @@ class _ConnectorLogWriter(_RotationJournal, _RotationRecovery):
                 self._append_record(record)
 
     def close(self):
+        with self._thread_lock:
+            worker, self._rotation_stop = self._rotation_worker, True
+        if worker is not None:
+            worker.join()
         with self._thread_lock:
             fh, self._fh, self._closed = self._fh, None, True
             error = None
@@ -4520,6 +4528,7 @@ __all__ = [
     '_OwnershipContendedError',
     '_RotationJournal',
     '_RotationRecovery',
+    '_RotationWorker',
     '_EVENT_SEGMENT_RE',
     '_EventStreamReader',
     '_EventStreamWriter',
