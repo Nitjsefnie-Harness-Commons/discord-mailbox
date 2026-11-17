@@ -5,5 +5,6 @@ rules:
       - audit.yml
       - codeql.yml
       - lint.yml
+      - perf.yml
       - tests.yml
       - types.yml

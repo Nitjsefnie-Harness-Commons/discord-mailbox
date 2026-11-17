@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "counter": "callgrind Ir",
+  "tolerance": 0.01,
+  "python": "3.13.14",
+  "environment": {
+    "valgrind": "3.22.0",
+    "runner": "ubuntu-24.04"
+  },
+  "workloads": {}
+}

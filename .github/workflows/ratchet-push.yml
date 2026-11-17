@@ -8,7 +8,7 @@ on:
     # staged records at their repo-relative paths; base.txt names the commit
     # they were measured on. A records-only push stages nothing, so it never
     # loops.
-    workflows: [tests]
+    workflows: [tests, perf]
     types: [completed]
 
 permissions: {}
