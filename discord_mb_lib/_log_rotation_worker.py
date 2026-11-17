@@ -22,7 +22,7 @@ class _RotationWorker:
                 return False
             self._await_rotation_worker()
             over = self._active_bytes + size > self._max_bytes
-        if (not over and self._active_bytes and
+        if (not over and self._active_bytes and not self._rotation_stop and
                 self._max_bytes >= self._BACKGROUND_ROTATION_MIN_BYTES and
                 self._active_bytes + size > self._max_bytes - self._BACKGROUND_ROTATION_HEADROOM):
             self._start_rotation_worker(self._active_bytes)
