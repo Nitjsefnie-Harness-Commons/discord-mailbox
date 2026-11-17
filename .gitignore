@@ -67,6 +67,7 @@
 !/.github/workflows/release.yml
 !/.github/workflows/requirements-runtime.in
 !/.github/workflows/requirements-runtime.txt
+!/.github/workflows/scorecard.yml
 !/.github/workflows/secrets.yml
 !/.github/workflows/size-baseline.yml
 !/.github/workflows/tag.yml
