@@ -187,7 +187,7 @@ def test_the_download_cli_prints_every_skipped_attachment(tmp):
     code, _, err, _ = _util.run_cli(functools.partial(core.attachments_cli, args), {"ok": True, "saved": [], "skipped": [
         {"filename": "x/..", "reason": "file name reduces to '..'"}]})
     assert (code, err) == (2, "skipped: 'x/..'  (file name reduces to '..')\n"
-                          "(nothing saved from 7: every attachment was skipped)\n"), err
+                              "(nothing saved from 7: every attachment was skipped)\n"), err
 
 
 def main():
