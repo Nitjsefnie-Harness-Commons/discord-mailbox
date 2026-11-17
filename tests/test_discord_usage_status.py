@@ -360,6 +360,8 @@ def test_a_board_with_no_reading_stops_asserting_a_figure(_tmp):
     mb = _mb()
     if mb is None:
         return
+    # the defaults are no misses yet and nothing announced
+    assert mb.usage_board_plan("claude", None, LIVE) == (None, 1, False)
     misses, marked, live = 0, False, LIVE
     for n in range(1, mb.USAGE_STALE_PERIODS):
         name, misses, marked = mb.usage_board_plan("claude", None, live,

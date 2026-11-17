@@ -9,6 +9,7 @@ These pin the rendering and the chunking that carries it.
 """
 import os
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _util  # noqa: E402
@@ -80,6 +81,8 @@ CLUSTERS = {
     'Thai sara am': (0xE01, 0xE33),
     'emoji tag sequence': (0x1F3F4, 0xE0067, 0xE0062, 0xE0065, 0xE006E, 0xE0067, 0xE007F),
 }
+if unicodedata.category(chr(0x11F02)) != 'Cn':   # assigned from Unicode 15 (Python 3.12); a Cn code point is no Prepend
+    CLUSTERS['prepended Kawi sign'] = (0x11F02, 0x61)
 
 
 def test_a_hard_split_lands_on_the_last_cluster_boundary_in_the_window(tmp):
