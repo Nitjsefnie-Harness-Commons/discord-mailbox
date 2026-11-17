@@ -113,7 +113,7 @@ def test_a_resent_chunk_carries_the_nonce_of_its_first_attempt(tmp):
     assert [label for label, _ in calls] == ["a", "b", "a", "a (2/2)", "m1", "m2"], calls
     nonces = [nonce for _, nonce in calls]
     assert nonces[0] == nonces[2], "the retry of a lost first chunk must reuse its nonce"
-    assert len(set(nonces)) == 5 and all(len(n) <= 25 for n in nonces), nonces
+    assert len(set(nonces)) == 5 and all(17 <= len(n) <= 25 for n in nonces), nonces
 
 
 def main():
