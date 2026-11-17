@@ -36,8 +36,7 @@ import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from . import _control_files
-from . import _retention
+from . import _control_files, _prog, _retention
 
 # Declared for readers and static analysis only; never executed, because
 # TYPE_CHECKING is False at runtime. Every name here is bound at import by
@@ -1320,7 +1319,7 @@ def setup_main(token=None):
     async def on_ready():
         try:
             if not client.guilds:
-                print('bot is not in any guild — invite it first (discord_mb.py does not handle OAuth flow)', file=sys.stderr)
+                print(f'bot is not in any guild — invite it first ({_prog.program_name()} does not handle OAuth flow)', file=sys.stderr)
                 await client.close()
                 return
             guild = client.guilds[0]
@@ -2730,6 +2729,7 @@ __all__ = [
     '_flat_component',
     '_linklike',
     '_meta_request',
+    '_prog',
     '_retention',
     '_take_response',
     '_withdraw',
