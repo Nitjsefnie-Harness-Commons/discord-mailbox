@@ -109,7 +109,8 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
 
     for replace in (foreign_file, hardlink_at("hardlink_mid_rotation", "_journal_file_state", fault=False),
                     hardlink_at("hardlink_then_journal_fault", "_write_migration_manifest"),
-                    hardlink_at("hardlink_then_journal_create_fsync_fault", "_fsync_directory"), staging_fault, rotation_then_hardlink_staging_fault,
+                    hardlink_at("hardlink_then_journal_create_fsync_fault", "_fsync_directory"),
+                    staging_fault, rotation_then_hardlink_staging_fault,
                     hardlink_at("hardlink_then_publish_mark_fault", "_write_migration_manifest",
                                 when=lambda manifest, *_: any("publish_state" in d for d in manifest["destinations"])),
                     hardlink_at("hardlink_then_fault_after_journal_unlink", "_cleanup_journal_temp"), dangling_link):
