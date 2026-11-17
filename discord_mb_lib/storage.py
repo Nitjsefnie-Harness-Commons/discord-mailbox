@@ -8,6 +8,7 @@ from .core import *
 # each one comes from.
 from .core import (_DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV,
                    _linklike)
+from . import _log_chunks
 
 
 def _posix_mode_exposed(mode):
@@ -685,7 +686,10 @@ class _ConnectorOwnership:
                     f'connector log identity was replaced while owned: {self.target}')
         for path, expected in self._stable_identities.items():
             current = self._identity_for(path)
-            if current != expected:
+            # A retained backup deleted outright is absent; any other change is a replacement.
+            vanished = (current is None and path not in (self.requested, self.target) and
+                        not os.path.lexists(path))
+            if current != expected and not vanished:
                 raise _ConnectorOwnershipError(
                     f'connector log namespace path was replaced while owned: {path}')
 
@@ -755,15 +759,13 @@ class _ConnectorLogWriter:
         self._staging_claim_callback = None
         self._staging_cleanup_failed = False
         self._fh = None
+        self._closed = False
         self._use_anonymous_staging = True
         import threading
         self._thread_lock = threading.RLock()
         try:
             self._staging_key_bytes = self._load_staging_key()
-            self._migrate_existing()
-            self._owner.refresh_stable_identities()
-            self._open_active()
-            self._use_anonymous_staging = False
+            self._recover_and_open()
         except BaseException:
             try:
                 self._owner.close()
@@ -3778,69 +3780,8 @@ class _ConnectorLogWriter:
         self._fsync_directory(root)
         self._fsync_directory(journal.parent)
 
-    @staticmethod
-    def _bounded_byte_chunks(raw, limit):
-        """Yield valid UTF-8 chunks, replacing malformed history if possible."""
-        limit = int(limit)
-        if limit < 1:
-            raise ValueError('chunk limit must be positive')
-        # Replacement is deliberate for historical bytes that predate this
-        # writer.  New records never reach this helper.  If the configured cap
-        # cannot hold U+FFFD (or any other one code point), fail cleanly rather
-        # than emitting an invalid UTF-8 fragment.
-        text = bytes(raw).decode('utf-8', errors='replace')
-        current = bytearray()
-        for char in text:
-            encoded = char.encode('utf-8')
-            if len(encoded) > limit:
-                if current:
-                    yield bytes(current)
-                raise ValueError(
-                    f'max_bytes={limit} cannot hold UTF-8 code point U+{ord(char):04X}')
-            if current and len(current) + len(encoded) > limit:
-                yield bytes(current)
-                current = bytearray()
-            current.extend(encoded)
-        if current:
-            yield bytes(current)
-
-    @staticmethod
-    def _iter_historical_chunks(path, limit):
-        """Yield bounded, valid-UTF-8 historical records from ``path``."""
-        limit = int(limit)
-        if limit < 1:
-            raise ValueError('chunk limit must be positive')
-        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
-        current = bytearray()
-
-        def consume(text):
-            nonlocal current
-            for char in text:
-                encoded = char.encode('utf-8')
-                if len(encoded) > limit:
-                    if current:
-                        yield bytes(current)
-                        current = bytearray()
-                    raise ValueError(
-                        f'max_bytes={limit} cannot hold UTF-8 code point '
-                        f'U+{ord(char):04X}')
-                if current and len(current) + len(encoded) > limit:
-                    yield bytes(current)
-                    current = bytearray()
-                current.extend(encoded)
-                if char == '\n':
-                    yield bytes(current)
-                    current = bytearray()
-
-        with open(path, 'rb') as source:
-            while True:
-                raw = source.read(64 * 1024)
-                if not raw:
-                    break
-                yield from consume(decoder.decode(raw, final=False))
-            yield from consume(decoder.decode(b'', final=True))
-        if current:
-            yield bytes(current)
+    _bounded_byte_chunks = staticmethod(_log_chunks.bounded_byte_chunks)
+    _iter_historical_chunks = staticmethod(_log_chunks.iter_historical_chunks)
 
     def _migrate_existing(self):
         self._owner.revalidate()
@@ -4398,15 +4339,28 @@ class _ConnectorLogWriter:
                 size += len(encoded)
             yield ''.join(chars) + '\n'
 
+    def _recover_and_open(self):
+        self._migrate_existing()
+        self._owner.refresh_stable_identities()
+        self._open_active()
+        self._use_anonymous_staging = False
+
     def write(self, line):
         with self._thread_lock:
+            if self._closed:
+                raise OSError('connector log is not open')
+            if self._fh is None:
+                # A failed rotation left no handle and moved names this writer published:
+                # accept the names as a fresh open would, and let the journal validate them.
+                self._owner.refresh_stable_identities()
+                self._recover_and_open()
             self._owner.revalidate()
             for record in self._records_for_line(line):
                 self._append_record(record)
 
     def close(self):
         with self._thread_lock:
-            fh, self._fh = self._fh, None
+            fh, self._fh, self._closed = self._fh, None, True
             error = None
             if fh is not None:
                 try:
@@ -4911,5 +4865,6 @@ __all__ = [
     '_anonymous_publication_available',
     '_event_segment_name',
     '_event_segments',
+    '_log_chunks',
     '_posix_mode_exposed',
 ]
