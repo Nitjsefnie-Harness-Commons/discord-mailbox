@@ -66,10 +66,10 @@ def inbox(tmp, msg_id=None):
 
 
 def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False, keep=()):
-    """Let `script(client)` drive the connector; `entries` is the directory history,
-    newest first; `outbox` also runs its outbox watcher (ticks once a second, files in
-    `tmp/state/outbox`), `keep` names more watchers to run. -> the client (`events`,
-    `reactions`, `log`); skipped without discord.py. The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
+    """Let `script(client)` drive the connector; `entries` is the directory history, newest first;
+    `outbox` also runs its outbox watcher (ticks once a second, files in `tmp/state/outbox`), `keep`
+    names more watchers to run. -> the client (`events`, `reactions`, `log`); skipped without discord.py.
+    The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
         _util.skip("discord.py is not installed")
     import discord
