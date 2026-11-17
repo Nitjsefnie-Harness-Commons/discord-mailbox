@@ -763,6 +763,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
         self._staging_claim_callback = None
         self._staging_cleanup_failed = False
         self._rotation_worker = self._rotation_context = self._rotation_staged = None
+        self._rotation_finishing = self._rotation_finish_error = None
         self._rotation_stop = self._rotation_failed = False
         self._rotation_error = self._rotation_refusal = None
         self._fh = None
@@ -3021,7 +3022,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
     @staticmethod
     def _publish_in_place(destination, temporary,
                           expected_destination_identity=None,
-                          expected_destination_entry_identity=None, tail=b''):
+                          expected_destination_entry_identity=None, tail=b'', sync=True):
         """Copy a staged slot into an existing hard-linked inode safely.
 
         The active slot always uses this path: the writer's ownership lock is
@@ -3071,7 +3072,8 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                 if written <= 0:
                     raise OSError('short write while publishing connector log inode')
                 view = view[written:]
-            os.fsync(active.fileno())
+            if sync:
+                os.fsync(active.fileno())
         _ConnectorLogWriter._unlink_if_identity(
             temporary, expected_identity, expected_entry_identity)
 
@@ -3295,7 +3297,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             if manifest.get('token') != self._identity_digest:
                 raise ValueError('connector log journal identity mismatch')
             state = manifest.get('state', 'prepared')
-            if state not in ('preparing', 'prepared'):
+            if state not in ('preparing', 'prepared') and (state, manifest.get('version')) != ('swapped', 5):
                 raise ValueError('connector log journal has invalid state')
             manifest['state'] = state
             root = Path(manifest['root'])
@@ -4020,6 +4022,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
         with self._thread_lock:
             if self._closed:
                 raise OSError('connector log is not open')
+            self._reap_rotation_finish()
             error, self._rotation_error = self._rotation_error, None
             if error is not None:  # a rotation worker's failure, raised once with nothing appended
                 raise error
@@ -4041,7 +4044,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
 
     def close(self):
         with self._thread_lock:
-            worker, self._rotation_stop = self._rotation_worker, True
+            worker, self._rotation_stop = self._rotation_worker or self._rotation_finishing, True
         if worker is not None:
             worker.join()
         with self._thread_lock:

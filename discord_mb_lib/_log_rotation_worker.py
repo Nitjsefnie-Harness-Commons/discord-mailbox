@@ -25,11 +25,26 @@ class _RotationWorker:
                 return False
             self._await_rotation_worker()
             over = self._active_bytes + size > self._max_bytes
-        if (not over and self._active_bytes and not self._rotation_stop and not self._rotation_failed and
-                self._max_bytes >= self._BACKGROUND_ROTATION_MIN_BYTES and
-                self._active_bytes + size > self._max_bytes - self._BACKGROUND_ROTATION_HEADROOM):
+        start = (not over and self._active_bytes and not self._rotation_stop and not self._rotation_failed and
+                 self._max_bytes >= self._BACKGROUND_ROTATION_MIN_BYTES and
+                 self._active_bytes + size > self._max_bytes - self._BACKGROUND_ROTATION_HEADROOM)
+        if over or start:
+            self._await_rotation_finish()  # one journal at a time
+        if start:
             self._start_rotation_worker(self._active_bytes)
         return over
+
+    def _await_rotation_finish(self: Any) -> None:
+        finishing, self._rotation_finishing = self._rotation_finishing, None
+        if finishing is not None:
+            finishing.join()  # it takes no lock
+        self._reap_rotation_finish()
+
+    def _reap_rotation_finish(self: Any) -> None:
+        error = self._rotation_finish_error
+        if error is not None:  # set unlocked: clear only once seen
+            self._rotation_finish_error = None
+            self._apply_staged_rotation(error)
 
     def _start_rotation_worker(self: Any, cut: int) -> None:
         self._rotation_staged, self._rotation_context = threading.Event(), None
@@ -47,6 +62,7 @@ class _RotationWorker:
         """A forked child: a free lock, and no rotation on a worker."""
         self._thread_lock = threading.RLock()
         self._rotation_worker = self._rotation_context = self._rotation_error = None
+        self._rotation_finishing = self._rotation_finish_error = None
         self._rotation_stop = True
 
     def _run_rotation_worker(self: Any, cut: int) -> None:
@@ -78,6 +94,7 @@ class _RotationWorker:
             context = exc
         self._rotation_context = context
         self._rotation_staged.set()
+        swapped = False
         with self._thread_lock:
             if self._rotation_worker is not threading.current_thread():
                 return  # the caller swapped it
@@ -85,24 +102,32 @@ class _RotationWorker:
             try:
                 if not self._rotation_stop:
                     self._apply_staged_rotation(context)
+                    self._rotation_finishing, swapped = threading.current_thread(), True
                 elif not isinstance(context, BaseException):
                     self._rollback_rotation(context)
             except BaseException as exc:
                 self._rotation_error = exc  # the next write raises it
+        if swapped:
+            try:
+                self._finish_rotation(context)
+            except BaseException as exc:
+                self._rotation_finish_error = exc
 
     def _await_rotation_worker(self: Any) -> None:
         """Backpressure: wait for the stage, then swap under the lock already held."""
         self._rotation_staged.wait()
         context = self._rotation_context
         self._rotation_worker = self._rotation_context = None
-        self._apply_staged_rotation(context)
+        self._apply_staged_rotation(context, finish=True)
 
-    def _apply_staged_rotation(self: Any, context: Any) -> None:
+    def _apply_staged_rotation(self: Any, context: Any, finish: bool = False) -> None:
         """Lock held: swap; a failure drops the handle and makes rotation synchronous."""
         try:
             if isinstance(context, BaseException):
                 raise context
             self._swap_rotation(context)
+            if finish:
+                self._finish_rotation(context)
         except BaseException as exc:
             fh, self._fh, self._rotation_failed = self._fh, None, True
             if isinstance(exc, self._PERMANENT_ROTATION_ERRORS):  # on either thread
@@ -222,16 +247,25 @@ class _RotationWorker:
             if fh is not None:
                 fh.close()
             for position in range(len(destinations) - 1):
-                self._publish_rotation_slot(manifest, position, context['staged'])
+                self._publish_rotation_slot(manifest, position, context['staged'], sync=False)
             self._publish_in_place(self._path, None,
-                                   *self._journal_pair(destinations[-1], 'before'), tail)
+                                   *self._journal_pair(destinations[-1], 'before'), tail, sync=os.name == 'nt')
             self._adopt_rotated_identities(self._rotation_identities(destinations))
-            self._finish_rotation(context)
             self._open_active(context['mode'])
             self._use_anonymous_staging = False
-        finally:
+        except BaseException:
             os.close(src)
+            raise
 
     def _finish_rotation(self: Any, context: dict) -> None:
-        self._drop_rotation_journal(context['journal'])
-        self._rotation_sidecar(context['journal']).unlink(missing_ok=True)
+        """Sync the swap, journal ``swapped``, then drop the journal and sidecar."""
+        try:
+            self._fsync_directory(self._path.parent)
+            if os.name != 'nt':  # Windows syncs only writable handles: the swap did
+                getattr(os, 'fdatasync', os.fsync)(context['src'])
+            context['manifest']['state'] = 'swapped'
+            self._write_migration_manifest(context['manifest'], kind='rotate')
+            self._drop_rotation_journal(context['journal'])
+            self._rotation_sidecar(context['journal']).unlink(missing_ok=True)
+        finally:
+            os.close(context['src'])

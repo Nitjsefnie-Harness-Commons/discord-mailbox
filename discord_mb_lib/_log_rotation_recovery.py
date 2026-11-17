@@ -17,7 +17,11 @@ class _RotationRecovery:
     """Rotation recovery: every entry is decided before any is applied."""
 
     def _recover_rotation(self: Any) -> None:
-        """Finish or discard an interrupted rotation from its durable journal."""
+        """Finish or discard an interrupted rotation from its durable journal.
+
+        Renames synced after the lock persist sooner only where metadata commits in order
+        (ext4); else at most one backup is lost, never refused; the prefix is staged first.
+        """
         journal = self._rotation_manifest_path()
         sidecar = self._rotation_sidecar(journal)
         if not journal.exists():
@@ -51,8 +55,8 @@ class _RotationRecovery:
 
     @staticmethod
     def _rotation_record(manifest: dict, sidecar: Path) -> dict:
-        """The named sidecar's whole record of this generation, else the journal's."""
-        if manifest.get('sidecar') != sidecar.name or not sidecar.exists():
+        """The sidecar's whole record of this generation unless the journal's is ``swapped``."""
+        if manifest['state'] == 'swapped' or manifest.get('sidecar') != sidecar.name or not sidecar.exists():
             return manifest
         raw = sidecar.read_bytes()
         payload = raw[40:40 + int.from_bytes(raw[:8], 'big')]
@@ -126,6 +130,7 @@ class _RotationRecovery:
                 'rewrite' if item.get('in_place') else 'stage' if item['present'] else 'unlink')
             entry: dict[str, Any] = {
                 'destination': destination, 'method': method, 'v4': v4, 'v5': v5,
+                'swapped': manifest['state'] == 'swapped',
                 'before': self._journal_pair(item, 'before'),
                 'marked': bool(item.get('publish_state')),
                 'temporary': None, 'staged': _ABSENT, 'post': _ABSENT,
@@ -215,7 +220,7 @@ class _RotationRecovery:
                     raise RuntimeError(
                         f'connector log journal destination was rebound: {destination}')
             else:
-                expected = self._owner.identity
+                expected, swapped = self._owner.identity, entry['swapped']
                 data, cut, tail = destination.read_bytes(), entry['cut'], entry['tail']
                 holder = decided.get(destination.name + '.1')
                 holds_prefix = holder is None or (
@@ -226,7 +231,7 @@ class _RotationRecovery:
                          holds_prefix)
                 if data == tail:
                     outcome = 'complete'
-                elif whole or (entry['v5'] and holds_prefix and tail.startswith(data)):
+                elif not swapped and (whole or (entry['v5'] and holds_prefix and tail.startswith(data))):
                     # Or a crash inside the tail's in-place write.
                     if temporary is not None and not staged_temp:
                         raise RuntimeError(
@@ -238,6 +243,9 @@ class _RotationRecovery:
                     outcome = 'complete'
                 elif holder is not None and holder[1] == 'absent':
                     # The only copy of the active's bytes is the active itself.
+                    outcome = 'keep'
+                elif swapped and holder is not None and holds_prefix:
+                    # Synced, so torn only by power loss; the journal names this inode.
                     outcome = 'keep'
                 else:
                     raise RuntimeError(
