@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _patched, _restart  # noqa: E402
+from test_discord_log_rotation import _fixture_lock_root, _hidden, _mod, _patched, _refuses, _restart  # noqa: E402
 
 LIMIT = 32
 
@@ -41,12 +41,9 @@ def test_a_deleted_backup_is_absent_and_later_writes_succeed(tmp):
             writer.write(f"after {i:02d}")
     finally:
         writer.close()
-    try:
+    with _refuses("a closed writer reopened its log without ownership", OSError) as caught:
         writer.write("after close")
-    except OSError as exc:
-        assert "not open" in str(exc), exc
-    else:
-        raise AssertionError("a closed writer reopened its log without ownership")
+    assert "not open" in str(caught[0]), caught
     assert [p.name for p in _window(path)] == ["connector.log", "connector.log.1", "connector.log.2"]
     assert all(p.stat().st_size <= LIMIT for p in _window(path))
     assert "after 11" in path.read_text(encoding="utf-8")
@@ -60,12 +57,9 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
     owner = m._ConnectorOwnership(owned)
     try:
         owned.unlink()
-        try:
+        with _refuses("the owned file vanishing was read as an absent backup", m._ConnectorOwnershipError) as caught:
             owner.revalidate()
-        except m._ConnectorOwnershipError as exc:
-            assert "namespace path was replaced" in str(exc), exc
-        else:
-            raise AssertionError("the owned file vanishing was read as an absent backup")
+        assert "namespace path was replaced" in str(caught[0]), caught
     finally:
         owner.close()
 
@@ -121,12 +115,9 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
         try:
             replace(path.with_name("connector.log.1"))
             for attempt in range(2):  # the refusal holds on every later write
-                try:
+                with _refuses(f"{replace.__name__}: a changed backup was accepted", (m._ConnectorOwnershipError, OSError)) as caught:
                     writer.write("refused")
-                except (m._ConnectorOwnershipError, OSError) as exc:
-                    assert "namespace path was replaced" in str(exc) or (attempt == 0 and str(exc) == "injected fault"), exc
-                else:
-                    raise AssertionError(f"{replace.__name__}: a changed backup was accepted")
+                assert "namespace path was replaced" in str(caught[0]) or (attempt == 0 and str(caught[0]) == "injected fault"), caught
         finally:
             for name, attribute in real.items():
                 setattr(m._ConnectorLogWriter, name, attribute)
@@ -154,12 +145,9 @@ def test_a_slot_swapped_during_a_rotation_is_refused_and_never_written(tmp):
         setattr(cls, seam, staticmethod(swap))
         try:
             for attempt in range(2):  # the refusal holds on the write after it
-                try:
+                with _refuses(f"{seam}: write {attempt} accepted a swapped {victim}", m._ConnectorOwnershipError) as caught:
                     writer.write("refused")
-                except m._ConnectorOwnershipError as exc:
-                    assert str(exc) == f"connector log {refusal} was replaced while owned: {path.with_name(victim)}", exc
-                else:
-                    raise AssertionError(f"{seam}: write {attempt} accepted a swapped {victim}")
+                assert str(caught[0]) == f"connector log {refusal} was replaced while owned: {path.with_name(victim)}", caught
         finally:
             setattr(cls, seam, real)
             writer.close()
@@ -202,12 +190,9 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
     os.replace, m._ConnectorLogWriter._fsync_directory = replace, staticmethod(fsync)
     try:
         for attempt in (1, 2):  # the rotation itself, then a recovery while the fault holds
-            try:
+            with _refuses(f"write {attempt} succeeded under the injected fault", OSError) as caught:
                 writer.write("y" * 25)
-            except OSError as exc:
-                assert "injected I/O fault" in str(exc), exc
-            else:
-                raise AssertionError(f"write {attempt} succeeded under the injected fault")
+            assert "injected I/O fault" in str(caught[0]), caught
             assert fault["fired"] == attempt and journal.exists(), (attempt, fault)
 
         def cleanup_fault(self, *args):  # a fault once the journal is gone, with nothing foreign moved
@@ -261,13 +246,11 @@ def test_a_backup_deleted_while_a_rotation_journal_is_pending_is_absent(tmp):
         fault.update(published=0, left=1, after=after)
         os.replace, m._ConnectorLogWriter._fsync_directory = replace, staticmethod(fsync)
         try:
-            writer.write("y" * 25)
-        except OSError as exc:
-            assert "injected fault" in str(exc), exc
-        else:
-            raise AssertionError(f"{victim}: the rotation succeeded under the injected fault")
+            with _refuses(f"{victim}: the rotation succeeded under the injected fault", OSError) as caught:
+                writer.write("y" * 25)
         finally:
             os.replace, m._ConnectorLogWriter._fsync_directory = real_replace, real_fsync
+        assert "injected fault" in str(caught[0]), caught
         assert fault["left"] == 0 and journal.exists(), (victim, fault)
         path.with_name(victim).unlink()
         try:
@@ -299,12 +282,9 @@ def test_a_finished_rotation_whose_journal_unlink_failed_is_discarded(tmp):
         return real_unlink(self, *args, **kwargs)
     Path.unlink = unlink
     try:
-        try:
+        with _refuses("the rotation succeeded under the injected unlink fault", OSError) as caught:
             writer.write("y" * 25)
-        except OSError as exc:
-            assert "journal unlink failure" in str(exc), exc
-        else:
-            raise AssertionError("the rotation succeeded under the injected unlink fault")
+        assert "journal unlink failure" in str(caught[0]), caught
         assert fired and journal.exists()
         writer.write("z" * 25)
     finally:
@@ -332,13 +312,10 @@ def test_a_slot_swapped_while_a_rotation_journal_recovers_is_refused(tmp):
     cls._publish_in_place = staticmethod(fault)
     try:
         for attempt in range(3):
-            try:
+            with _refuses(f"write {attempt} accepted a slot swapped during recovery", (OSError, m._ConnectorOwnershipError)) as caught:
                 writer.write("y" * 25)
-            except (OSError, m._ConnectorOwnershipError) as exc:
-                assert str(exc) == ("injected fault before the active publish" if attempt == 0 else
-                                    f"connector log namespace path was replaced while owned: {backup}"), exc
-            else:
-                raise AssertionError(f"write {attempt} accepted a slot swapped during recovery")
+            assert str(caught[0]) == ("injected fault before the active publish" if attempt == 0 else
+                                      f"connector log namespace path was replaced while owned: {backup}"), caught
     finally:
         cls._publish_in_place = real
         writer.close()
@@ -364,12 +341,9 @@ def test_a_slot_swapped_after_the_rotation_journal_is_prepared_is_never_moved(tm
                 os.replace(held[0], held[0].with_name("aside"))
                 held[0].write_bytes(b"FOREIGN\n")
         with contextlib.closing(writer), _patched(cls, **{seam: swap}):
-            try:
+            with _refuses(f"{key}: a rotation moved a slot swapped after its journal was prepared") as caught:
                 writer.write("y" * 25)
-            except RuntimeError as exc:
-                assert held and held[0].read_bytes() == b"FOREIGN\n", (key, exc)  # refused before it moved
-            else:
-                raise AssertionError(f"{key}: a rotation moved a slot swapped after its journal was prepared")
+            assert held and held[0].read_bytes() == b"FOREIGN\n", (key, caught)  # refused before it moved
             os.replace(held[0].with_name("aside"), held[0])
             writer.write("z" * 25)
         assert [p.read_bytes() for p in _window(path)] == [b"z" * 25 + b"\n", before[0], before[1]], key

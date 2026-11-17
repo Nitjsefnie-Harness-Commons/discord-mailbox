@@ -3334,13 +3334,8 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
     key_path = lock_root / "connector-staging.key"
     foreign = b"foreign-partial-key"
     key_path.write_bytes(foreign)
-    try:
-        _mod()._ConnectorLogWriter(
-            path, max_bytes=32, backup_count=1, lock_root=lock_root)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("foreign key residue was adopted")
+    with _refuses("foreign key residue was adopted"):
+        _mod()._ConnectorLogWriter(path, max_bytes=32, backup_count=1, lock_root=lock_root)
     assert key_path.read_bytes() == foreign
 
 
@@ -4312,13 +4307,8 @@ def test_connector_log_migration_rejects_rebound_journal_destination(tmp):
     rebound = path.with_name("migration-rebound.log.1")
     rebound.write_bytes(b"LIVE-MIGRATION-WRITER\n")
     before = rebound.read_bytes()
-    try:
-        m._ConnectorLogWriter(path, max_bytes=16, backup_count=2,
-                              lock_root=lock_root)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("migration recovery overwrote a rebound destination")
+    with _refuses("migration recovery overwrote a rebound destination"):
+        m._ConnectorLogWriter(path, max_bytes=16, backup_count=2, lock_root=lock_root)
     assert rebound.read_bytes() == before
 
 
@@ -4335,13 +4325,8 @@ def test_connector_log_rotation_rejects_rebound_journal_destination(tmp):
     rebound = path.with_name("rotation-rebound.log.1")
     rebound.write_bytes(b"LIVE-ROTATION-WRITER\n")
     before = rebound.read_bytes()
-    try:
-        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                              lock_root=lock_root)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("rotation recovery overwrote a rebound destination")
+    with _refuses("rotation recovery overwrote a rebound destination"):
+        m._ConnectorLogWriter(path, max_bytes=32, backup_count=1, lock_root=lock_root)
     assert rebound.read_bytes() == before
 
 
