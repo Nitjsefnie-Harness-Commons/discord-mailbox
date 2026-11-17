@@ -43,9 +43,7 @@ def _patched_keys(owner, attrs):
 
 
 def _patched(owner, **attrs):
-    """Set `attrs` on `owner` (a module, class, instance or `sys.modules`) until the block exits.
-
-    A dict owner gets only its named keys back, so a module first imported inside the block stays."""
+    """Set `attrs` on `owner` (a module, class, instance or dict) until the block exits; a dict keeps other keys."""
     if isinstance(owner, dict):
         return _patched_keys(owner, attrs)
     return mock.patch.multiple(owner, create=True, **attrs)
@@ -546,7 +544,7 @@ if mode == "count":
         recovered = b"".join(slot.read_bytes() for slot in slots if slot.exists())
         assert recovered == original, (crash_number, recovered)
         assert all(len(record) == 3 for record in recovered.splitlines(True))
-        assert _hidden(case) == [], crash_number
+        assert not (left := _hidden(case)), (crash_number, left)
 
 
 def test_connector_log_migration_recovers_partial_in_place_publish(tmp):
@@ -1159,7 +1157,8 @@ def test_connector_startup_cleanup_preserves_original_and_releases_process_owner
         def __init__(self, *args, **kwargs):
             raise ValueError("primary startup failure")
 
-    fake_discord = types.SimpleNamespace(Intents=types.SimpleNamespace(default=types.SimpleNamespace), Client=ExplodingClient)
+    fake_discord = types.SimpleNamespace(
+        Intents=types.SimpleNamespace(default=types.SimpleNamespace), Client=ExplodingClient)
     with _patched(m, _real_writer_for_test=m._ConnectorLogWriter, state_dir=lambda identity: state,
                   sweep_status_plugin=lambda identity: None, _ConnectorLogWriter=FailingWriter), \
             _patched(sys.modules, discord=fake_discord):
@@ -1782,13 +1781,9 @@ def test_connector_named_fallback_collision_is_never_adopted_or_deleted(tmp):
     temporary, claim, private = m._ConnectorLogWriter._named_publish_paths(path)
     collision = b"KEEP-NAMED-FALLBACK-COLLISION"
     temporary.write_bytes(collision)
-    try:
+    with _refuses("named fallback collision was silently adopted", FileExistsError):
         m._ConnectorLogWriter._publish_named_bytes(
             path, payload, auth_key=b"A" * 32)
-    except FileExistsError:
-        pass
-    else:
-        raise AssertionError("named fallback collision was silently adopted")
     assert temporary.read_bytes() == collision
     assert not claim.exists()
     assert not private.exists()
@@ -1875,13 +1870,9 @@ def test_connector_named_fallback_preserves_foreign_canonical_claim(tmp):
     }, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n")
     claim.write_bytes(record)
     original = claim.read_bytes()
-    try:
+    with _refuses("foreign canonical claim was adopted", FileExistsError):
         m._ConnectorLogWriter._publish_named_bytes(
             path, b"LOCAL-PAYLOAD", auth_key=b"A" * 32)
-    except FileExistsError:
-        pass
-    else:
-        raise AssertionError("foreign canonical claim was adopted")
     assert claim.read_bytes() == original
     assert not path.exists()
 
@@ -2332,13 +2323,9 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_key(tmp):
     _old_entry, foreign = _claim_swap_restore(
         m, m._ConnectorLogWriter._named_publish_paths(path)[1])
     try:
-        try:
+        with _refuses("claim fd/path identity swap was accepted", FileExistsError):
             m._ConnectorLogWriter._publish_named_bytes(
                 path, b"K" * 32, auth_key=b"K" * 32)
-        except FileExistsError:
-            pass
-        else:
-            raise AssertionError("claim fd/path identity swap was accepted")
     finally:
         m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
         _restore_portable(m, old_tmpfile)
@@ -2359,13 +2346,9 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_migration(t
     journal = lock_root / f"{seed._identity_digest}.migrate.json"
     _old_entry, foreign = _claim_swap_restore(m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
     try:
-        try:
+        with _refuses("migration claim fd/path swap was accepted", FileExistsError):
             m._ConnectorLogWriter(path, max_bytes=16, backup_count=1,
                                   lock_root=lock_root)
-        except FileExistsError:
-            pass
-        else:
-            raise AssertionError("migration claim fd/path swap was accepted")
     finally:
         m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
         _restore_portable(m, old_tmpfile)
@@ -2388,12 +2371,8 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_rotation(tm
     _old_entry, foreign = _claim_swap_restore(
         m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
     try:
-        try:
+        with _refuses("rotation claim fd/path swap was accepted", FileExistsError):
             writer.write("x")
-        except FileExistsError:
-            pass
-        else:
-            raise AssertionError("rotation claim fd/path swap was accepted")
     finally:
         m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
         _restore_portable(m, old_tmpfile)
@@ -3298,12 +3277,8 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
     real_root.mkdir(mode=0o700)
     link_root = Path(tmp) / "link-root"
     link_root.symlink_to(real_root, target_is_directory=True)
-    try:
+    with _refuses("symlink lock root was adopted"):
         m._ConnectorOwnership(path, lock_inode=True, lock_root=link_root)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("symlink lock root was adopted")
 
     if _util.POSIX_MODES:
         # Windows reports 0o666 for anything this package creates, so there is
@@ -3312,21 +3287,13 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
         permissive = Path(tmp) / "permissive-root"
         permissive.mkdir(mode=0o777)
         os.chmod(permissive, 0o777)
-        try:
+        with _refuses("world-writable lock root was adopted"):
             m._ConnectorOwnership(path, lock_inode=True, lock_root=permissive)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("world-writable lock root was adopted")
 
     regular_file = Path(tmp) / "regular-file-root"
     regular_file.write_text("not a directory", encoding="utf-8")
-    try:
+    with _refuses("regular-file lock root was adopted"):
         m._ConnectorOwnership(path, lock_inode=True, lock_root=regular_file)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("regular-file lock root was adopted")
 
     foreign = Path(tmp) / "foreign-root"
     foreign.mkdir(mode=0o700)
@@ -3337,12 +3304,8 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
         except OSError:
             pass
         else:
-            try:
+            with _refuses("foreign-owned lock root was adopted"):
                 m._ConnectorOwnership(path, lock_inode=True, lock_root=foreign)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("foreign-owned lock root was adopted")
 
 
 def test_connector_staging_key_lifecycle_rejects_tampering(tmp):
