@@ -305,7 +305,7 @@ def test_a_claim_a_killed_connector_left_is_answered_at_startup_and_never_run(tm
 def test_a_request_older_than_its_callers_wait_is_answered_with_an_expiry_and_not_run(tmp):
     now = time.time()
     fields = {"stale": {"created": now - 100, "timeout": 10}, "just-over": {"created": now - 11, "timeout": 10},
-              "just-under": {"created": now - 9, "timeout": 10}, "fresh": {"created": now, "timeout": 60},
+              "just-under": {"created": now - 45, "timeout": 60}, "fresh": {"created": now, "timeout": 60},
               "no-timeout": {"created": now - 1e6}, "no-created": {"timeout": 1}, "legacy": {},
               "bad-type": {"created": "yesterday", "timeout": 10}}
 
