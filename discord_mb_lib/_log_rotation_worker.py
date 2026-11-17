@@ -4,7 +4,6 @@
 import base64
 import os
 import threading
-from pathlib import Path
 from typing import Any
 
 
@@ -80,6 +79,7 @@ class _RotationWorker:
                 raise RuntimeError(
                     f'connector log identity was replaced while owned: {self._path}')
             manifest, planned = self._rotation_plan(cut, None, 5)
+            context['journal'] = self._rotation_manifest_path()
             self._write_migration_manifest(manifest, kind='rotate', create=True)
             context['manifest'] = manifest
             data = self._read_rotation_prefix(src, cut)
@@ -115,21 +115,8 @@ class _RotationWorker:
     def _rollback_rotation(self: Any, context: dict) -> None:
         """Undo an unpublished stage and its journal, as a failed ``_rotate`` does."""
         try:
-            manifest, staged = context['manifest'], context['staged']
-            if manifest is None:
-                return
-            kept = (staged is not None and
-                    not self._unlink_if_identity(
-                        staged, *self._journal_pair(manifest['destinations'][-2], 'temporary')) and
-                    os.path.lexists(str(staged)))
-            if not (kept or self._staging_cleanup_failed):
-                journal = self._rotation_manifest_path()
-                try:
-                    journal.unlink()
-                except FileNotFoundError:
-                    pass
-                self._fsync_directory(self._path.parent)
-                self._fsync_directory(journal.parent)
+            if context['manifest'] is not None:
+                self._unstage_rotation(context['manifest'], context['staged'], context['journal'])
         finally:
             os.close(context['src'])
 
@@ -154,11 +141,7 @@ class _RotationWorker:
                 self._publish_rotation_slot(manifest, position, context['staged'])
             self._publish_in_place(self._path, None,
                                    *self._journal_pair(destinations[-1], 'before'), tail)
-            self._adopt_rotated_identities({
-                Path(item['destination']): self._owner.identity if item['method'] == 'rewrite'
-                else self._manifest_identity(
-                    item.get('source_identity', item.get('temporary_identity')))
-                for item in destinations})
+            self._adopt_rotated_identities(self._rotation_identities(destinations))
             self._finish_rotation(context)
             self._open_active(context['mode'])
             self._use_anonymous_staging = False
@@ -166,11 +149,4 @@ class _RotationWorker:
             os.close(src)
 
     def _finish_rotation(self: Any, context: dict) -> None:
-        journal = self._rotation_manifest_path()
-        try:
-            journal.unlink()
-        except FileNotFoundError:
-            pass
-        self._cleanup_journal_temp(journal, 'rotate')
-        self._fsync_directory(self._path.parent)
-        self._fsync_directory(journal.parent)
+        self._drop_rotation_journal(context['journal'])
