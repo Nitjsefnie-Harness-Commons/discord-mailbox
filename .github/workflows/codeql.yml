@@ -64,13 +64,14 @@ jobs:
       contents: read
 
     strategy:
-      # Only one language here — this repo has no JS at all. The matrix
-      # stays a matrix so adding one later is a one-line change rather
-      # than a restructure.
+      # One entry per language: python for the package, actions for the
+      # workflow files.
       fail-fast: false
       matrix:
         include:
           - language: python
+            build-mode: none
+          - language: actions
             build-mode: none
 
     steps:
