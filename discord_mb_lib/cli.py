@@ -60,7 +60,7 @@ def _cli():
     s.add_argument('--timeout', type=float, default=60.0,
                    help='Max wait for the --wait response (default 60s)')
     s.add_argument('--pin', action='store_true',
-                   help='Pin the message in its channel after sending (needs Manage Messages).')
+                   help='Pin the message in its channel after sending (needs Pin Messages).')
 
     at = sub.add_parser('attachments', help='#attachments channel — upload/download/list files (agents AND user uploads)')
     at.add_argument('identity', help='Identity whose connector serves the request')
