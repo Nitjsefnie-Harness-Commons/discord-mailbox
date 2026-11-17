@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """`conversation --grep`: the CLI filters, the connector never runs the pattern."""
-import contextlib
-import io
+import functools
 import json
 import os
 import sys
@@ -22,23 +21,7 @@ MESSAGES = [
 def _cli(**kwargs):
     """-> (exit code or None, stdout, stderr, requests sent) of `conversation_cli`."""
     from discord_mb_lib import core
-    sent, out, err = [], io.StringIO(), io.StringIO()
-
-    def stand_in(identity, payload, timeout):
-        sent.append(payload)
-        return {"ok": True, "messages": MESSAGES}
-
-    original, code = core._meta_request, None
-    core._meta_request = stand_in
-    try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                core.conversation_cli("me", 5, **kwargs)
-            except SystemExit as exc:
-                code = exc.code
-    finally:
-        core._meta_request = original
-    return code, out.getvalue(), err.getvalue(), sent
+    return _util.run_cli(functools.partial(core.conversation_cli, "me", 5, **kwargs), {"ok": True, "messages": MESSAGES})
 
 
 def test_the_connector_refuses_a_request_that_still_carries_grep(tmp):
@@ -62,7 +45,7 @@ def test_the_cli_filters_content_and_content_rendered_and_sends_no_grep(tmp):
                            ("NEEDLE", [])):     # no flags: the match is case-sensitive
         code, out, _, sent = _cli(grep=grep, as_json=True)
         assert code is None and [m["msg_id"] for m in json.loads(out)] == expected, (grep, out)
-        assert sent == [{"op": "conversation", "limit": 5}], sent
+        assert sent == [("me", {"op": "conversation", "limit": 5})], sent
     _, text, _, _ = _cli(grep="absent")
     assert text == "(no messages matched)\n", text
     _, text, _, _ = _cli(grep="needle")
