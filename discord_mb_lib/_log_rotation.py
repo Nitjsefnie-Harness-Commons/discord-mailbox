@@ -126,15 +126,17 @@ class _RotationJournal:
         self._published_since_snapshot = False
         owner.revalidate()
 
-    def _mark_generation_publishing(self: Any, manifest: dict, *, include_stage: bool = False) -> None:
-        """Persist ``prepared`` and each slot's contract, the stage's if ``include_stage``, in one append."""
+    def _mark_generation_publishing(self: Any, manifest: dict, *, include_stage: bool = False,
+                                    append: bool = True) -> None:
+        """Mark ``prepared`` and each slot's contract, the stage's if ``include_stage``; append them if ``append``."""
         manifest['state'] = 'prepared'
         for item in manifest['destinations']:
             if include_stage or item['method'] != 'stage':
                 item.update(publish_state='publishing',
                             publish_identity=item['before_identity'],
                             publish_entry_identity=item['before_entry_identity'])
-        self._write_migration_manifest(manifest, kind='rotate')
+        if append:
+            self._write_migration_manifest(manifest, kind='rotate')
         self._published_since_snapshot = True
 
     def _claim_staged_for_replace(self: Any, temporary: Path, *, expected_destination: Path,

@@ -716,13 +716,19 @@ def test_connector_log_background_rotation_recovers_at_every_step(tmp):
     """A background rotation killed at each step restarts to one ordered window holding every completed write."""
     child = r'''
 import threading
-step, on_worker, W, real_replace, real_write, active = sys.argv[3], sys.argv[4] in ("worker", "repeat"), mod._ConnectorLogWriter, os.replace, os.write, None
+step, on_worker, W, real_replace, real_write, real_fsync, active, synced = sys.argv[3], sys.argv[4] in ("worker", "repeat"), mod._ConnectorLogWriter, os.replace, os.write, os.fsync, None, []
 W._BACKGROUND_ROTATION_MIN_BYTES, W._BACKGROUND_ROTATION_HEADROOM = 0, 1024
 real_manifest, real_stage, real_adopt = W._write_migration_manifest, W._stage_rotation_copy, W._adopt_rotated_identities
+real_sidecar, real_record, real_drop = W._prepare_rotation_sidecar, W._write_rotation_record, W._drop_rotation_journal
 def at(name, result=None):  # 191: a step meant for the worker thread ran on the caller
     return os._exit(191 if on_worker and threading.current_thread() is threading.main_thread() else 190) if step == name else result
-W._write_migration_manifest = lambda self, m, kind="migrate", create=False: at(kind == "rotate" and (
-    "after-create" if create else "after-prepared" if m["state"] == "prepared" else ""), real_manifest(self, m, kind, create=create))
+def durable(self, fd):  # 192 otherwise: the record overwrote a sidecar whose bytes or (off Windows) name were not synced
+    return os.fstat(fd).st_ino in synced and (os.name == "nt" or os.stat(self._owner.lock_root).st_ino in synced) or os._exit(192)
+W._write_migration_manifest = lambda self, m, kind="migrate", create=False: at("after-create" if kind == "rotate" and create else "", real_manifest(self, m, kind, create=create))
+W._prepare_rotation_sidecar = lambda self, cut: synced.clear() or at("after-prealloc", real_sidecar(self, cut))
+W._write_rotation_record = lambda self, context: durable(self, context["sidecar"]) and at("after-prepared", real_record(self, context))
+W._drop_rotation_journal = lambda self, journal: at("after-journal-unlink", real_drop(self, journal))
+os.fsync = lambda fd: synced.append(os.fstat(fd).st_ino) or real_fsync(fd)
 W._stage_rotation_copy = lambda self, *args: at("after-stage", real_stage(self, *args))
 W._adopt_rotated_identities = lambda self, *args: at("after-rewrite") or real_adopt(self, *args)
 os.replace = lambda source, destination, **kwargs: at({"c.log.3": "after-rename-1", "c.log.2": "after-rename-2", "c.log.1": "after-stage-publish"}.get(
@@ -739,27 +745,28 @@ for n in range(240, 440):
 '''
     lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
     lines = [f"{n:05d}".ljust(49, ".").encode() + b"\n" for n in range(450)]
-    # A forged tail refuses before recovery goes on; appended lines model a finish outside the lock; "worker" rows
-    # swap on the worker thread; "repeat" seeds an active whose prefix begins with the tail, as repeated lines do.
+    # A forged tail refuses before recovery goes on; a torn or stale sidecar is absent, so the journal rolls back; appended
+    # lines model a finish outside the lock; "worker" rows swap on the worker thread; "repeat" seeds an active beginning with its tail.
     in_lock = ("after-prepared", "after-rename-1", "after-rename-2", "after-stage-publish", "after-truncate", "after-rewrite")
-    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-rename-2", "unmarked"), *((step, "") for step in in_lock), ("after-prepared", "digest"),
-                        ("after-prepared", "length"), ("after-prepared", "version"), ("after-rewrite", "appended"),
-                        *((step, "worker") for step in in_lock), ("after-prepared", "repeat")):
-        case = Path(tmp) / f"{step}-{extra}"
+    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prealloc", ""), ("after-prepared", "torn"), ("after-rename-2", "unmarked"),
+                        *(("after-prepared", f"stale-{key}") for key in ("generation", "transaction_nonce", "token")), *((step, "") for step in in_lock),
+                        ("after-journal-unlink", ""), ("after-prepared", "digest"), ("after-prepared", "length"), ("after-prepared", "version"),
+                        ("after-rewrite", "appended"), *((step, "worker") for step in in_lock), ("after-prepared", "repeat")):
+        case, rolled_back = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" or extra.startswith("stale")
         case.mkdir()
         slots = [case / name for name in ("c.log.3", "c.log.2", "c.log.1", "c.log")]
         for index, slot in enumerate(slots):
             slot.write_bytes(b"".join(lines[60 * index:60 * index + 60] if index < 3 or extra != "repeat" else lines[241:261] + lines[200:240]))
         done = int(_run_child(child, slots[-1], step, extra, code=190, text=True).stdout.split()[-1])
-        # Publishing the stage appends no record of its own: the swap journals one in-lock record.
-        assert step not in in_lock[3:] or [json.loads(r)["state"] for r in next(lock_root.glob("*.rotate.json")).read_bytes().splitlines()].count("prepared") == 1, step
+        # Publishing the stage appends no record of its own: the swap's one in-lock record goes to the sidecar.
+        assert step not in in_lock[3:] or "prepared" not in [json.loads(r)["state"] for r in next(lock_root.glob("*.rotate.json")).read_bytes().splitlines()], step
         if extra == "appended":
             done = int(slots[-1].read_bytes().splitlines()[-1][:5]) + 3
             slots[-1].write_bytes(slots[-1].read_bytes() + b"".join(lines[done - 2:done + 1]))
-        elif extra in ("digest", "length", "version", "unmarked"):
-            journal = next(lock_root.glob("*.rotate.json"))
-            saved, tail = journal.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
-            record = json.loads(saved.splitlines()[-1])
+        elif extra in ("digest", "length", "version", "unmarked", "torn") or extra.startswith("stale"):
+            sidecar = next(lock_root.glob("*.rotate.swap"))
+            saved, tail = sidecar.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
+            record = json.loads(saved[40:40 + int.from_bytes(saved[:8], "big")])
             # Each forgery fails one check alone: the real tail in a version 4 record or under a wrong digest,
             # or a tail the active begins with that is longer than max_bytes.
             if extra == "version":
@@ -769,18 +776,23 @@ for n in range(240, 440):
             elif extra == "unmarked":  # its temp deleted, a stage still unmarked refuses, as one marked separately at publish was
                 record["destinations"][-2] = {k: v for k, v in record["destinations"][-2].items() if not k.startswith("publish_")}
                 Path(record["destinations"][-2]["temporary"]).unlink()
-            else:
+            elif extra.startswith("stale"):  # another generation's whole record
+                record[extra[6:]] = "0" * 32
+            elif extra != "torn":  # a torn record keeps its length and fails its digest
                 record["destinations"][-1].update(tail=base64.b64encode(tail).decode(), tail_sha256=hashlib.sha256(tail).hexdigest())
-            journal.write_bytes(saved + json.dumps(record).encode() + b"\n")
-            with _refuses(f"recovery accepted a rotation journal failing its {extra} check") as caught:
-                _restart(slots[-1], 4096, 3)
-            assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
-            journal.write_bytes(saved)
+            payload = json.dumps(record).encode()
+            sidecar.write_bytes(len(payload).to_bytes(8, "big") + (bytes(32) if extra == "torn" else hashlib.sha256(payload).digest()) + payload)
+            if not rolled_back:
+                with _refuses(f"recovery accepted a rotation journal failing its {extra} check") as caught:
+                    _restart(slots[-1], 4096, 3)
+                assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
+                sidecar.write_bytes(saved)
         _restart(slots[-1], 4096, 3)
+        assert not rolled_back or slots[2].read_bytes() == b"".join(lines[120:180]), step  # no slot moved
         if extra == "repeat":  # the prefix moved to .1 and the active holds only the tail, a run of lines 241 on
             tail = slots[-1].read_bytes()
             assert slots[2].read_bytes() == b"".join(lines[241:261] + lines[200:241]) and tail and b"".join(lines[241:]).startswith(tail), step
-            assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.json")), step
+            assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.*")), step
             continue
         window = [int(line[:5]) for slot in slots if slot.exists() for line in slot.read_bytes().splitlines()]
         assert window == list(range(window[0], window[0] + len(window))) and window[-1] >= done, (step, window, done)
@@ -788,7 +800,7 @@ for n in range(240, 440):
             writer.write(lines[window[-1] + 1].decode()[:-1])
         assert slots[-1].read_bytes().endswith(lines[window[-1] + 1]) and all(
             slot.stat().st_size <= 4096 for slot in slots if slot.exists()), step
-        assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.json")), (step, _hidden(case))
+        assert _hidden(case) == [] and not list(lock_root.glob("*.rotate.*")), (step, _hidden(case))
 
 
 def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
@@ -831,7 +843,7 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
             writer.close()
             assert errors == [] and not worker.is_alive(), errors
             assert slots[1].read_bytes() == b"".join(lines[24:48]) and path.read_bytes() == b"".join(lines[48:])
-            assert _hidden(path.parent) == [] and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.json"))
+            assert _hidden(path.parent) == [] and not list(m._ConnectorOwnership._IDENTITY_LOCK_ROOT.glob("*.rotate.*"))
             for name, evicts in (("nt", False), (os.name, hasattr(os, "posix_fadvise"))):  # Windows refuses os.replace over an open file
                 with _patched(os, name=name):
                     assert ((fd := writer._hold_oldest_backup()) is not None) == evicts and (fd is None or os.close(fd) is None), name
