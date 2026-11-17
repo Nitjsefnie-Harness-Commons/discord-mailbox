@@ -4446,46 +4446,52 @@ def test_connector_log_rotation_rejects_rebound_journal_destination(tmp):
 
 
 def test_connector_log_recovery_refuses_a_generation_missing_its_staged_replacement(tmp):
-    """A crashed generation whose unpublished slot lost its staged temp is refused, changing nothing."""
+    """A crashed generation that cannot finish as journaled is refused before any slot changes."""
     m = _mod()
-    # Keyed on the destination name, so a journal publish through os.replace cannot move the crash.
+    # Crashes just before or after replacing the named slot, so a journal publish cannot move it.
     rotate_child = r'''
 real_replace = os.replace
 def replace_then_crash(source, destination, **kwargs):
+    hit = os.path.basename(destination) == os.path.basename(sys.argv[2]) + sys.argv[4]
+    if hit and sys.argv[5] == "before":
+        os._exit(178)
     real_replace(source, destination, **kwargs)
-    if os.path.basename(destination) == os.path.basename(sys.argv[2]) + ".2":
+    if hit:
         os._exit(178)
 os.replace = replace_then_crash
 mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=2, lock_root=sys.argv[3]).write("x")
 '''
     history = b"".join(f"{i:02d}\n".encode() for i in range(12))
-    rows = (("migrate", 16, {"": history}, _crash_after_first_replace_script("migrate"), 174),
-            ("rotate", 32, {"": b"A" * 31, ".1": b"B" * 10}, rotate_child, 178))
-    for kind, max_bytes, seed, child, code in rows:
-        path = Path(tmp) / f"{kind}-unstaged.log"
+    rotate, T, D, gone = ("rotate", 32, {"": b"A" * 31, ".1": b"B" * 10}, rotate_child, 178), "temporary", "destination", "has no staged replacement"
+    # Damage is (journal slot, its temp or destination, change; None deletes); rotation slots are .2, .1, active.
+    rows = (("migrate", 16, {"": history}, _crash_after_first_replace_script("migrate"), 174, "", "", ((1, T, None),), gone),
+            (*rotate, ".2", "after", ((1, T, None), (2, T, None), (1, D, None)), gone),  # .1 unmarked, then deleted
+            (*rotate, ".1", "before", ((1, T, None),), gone),  # .1 marked and never published
+            (*rotate, ".1", "after", ((2, T, None),), gone),  # the active's empty temp
+            # .2 still awaits its publish when a later slot refuses
+            (*rotate, ".2", "before", ((1, T, lambda p: p.write_bytes(p.read_bytes()[:-4] + b"XXXX")),), "temp is not owned"),
+            (*rotate, ".2", "before", ((1, D, lambda p: _rebind(p, b"FOREIGN\n")),), "destination was rebound"),
+            (*rotate, ".1", "after", ((2, D, lambda p: p.write_bytes(b"FOREIGN\n")),), "destination content changed"))
+    for i, (kind, max_bytes, seed, child, code, slot, when, damage, refusal) in enumerate(rows):
+        path = Path(tmp) / f"{kind}-{i}.log"
         for suffix, data in seed.items():
             path.with_name(path.name + suffix).write_bytes(data)
         writer = m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=2)
         lock_root = writer._owner.lock_root
         writer.close()
         path.write_bytes(seed[""])
-        _run_child(child, path, lock_root, code=code)
+        _run_child(child, path, lock_root, slot, when, code=code)
         journal = lock_root / f"{writer._identity_digest}.{kind}.json"
-        manifest = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
-        # Migration loses the pending .1 backup's temp; rotation loses every temp left after .2 landed.
-        planned = ([manifest["destinations"][1]["temporary"]] if kind == "migrate"
-                   else manifest["planned_temporaries"])
-        staged = [Path(item) for item in planned if Path(item).exists()]
-        assert staged, kind
-        for temporary in staged:
-            temporary.unlink()
+        destinations = json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])["destinations"]
+        for index, key, change in damage:
+            (change or Path.unlink)(Path(destinations[index][key]))
         slots = {p.name: p.read_bytes() for p in Path(tmp).glob(path.name + "*")}
-        with _refuses(f"{kind} recovery accepted a generation with no staged temp") as caught:
+        with _refuses(f"row {i}: {kind} recovery accepted a generation it cannot finish") as caught:
             m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=2, lock_root=lock_root)
-        assert "has no staged replacement" in str(caught[0]), (kind, caught)
-        assert journal.exists(), kind
-        assert {p.name: p.read_bytes() for p in Path(tmp).glob(path.name + "*")} == slots, kind
-        assert kind == "migrate" or path.read_bytes() == b"A" * 31
+        assert refusal in str(caught[0]), (i, caught)
+        assert journal.exists(), i
+        assert {p.name: p.read_bytes() for p in Path(tmp).glob(path.name + "*")} == slots, i
+        assert kind == "migrate" or path.read_bytes() in (b"A" * 31, b"FOREIGN\n"), i
 
 
 def test_connector_cli_preserves_custom_log_path(tmp):
