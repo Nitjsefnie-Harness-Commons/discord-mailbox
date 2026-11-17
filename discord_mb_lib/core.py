@@ -1259,7 +1259,7 @@ def send(identity, to, subject, body, reply_to=None, pin=False, channel=None,
         if not resp.get('ok'):
             print(f'send failed: {resp.get("error", resp)}', file=sys.stderr, flush=True)
             sys.exit(1)
-        pin_note = {True: ', pinned', False: ', PIN FAILED'}.get(resp.get('pinned'), '')
+        pin_note = {True: ', pinned', False: ', PIN FAILED' + (f': {resp["pin_error"]}' if resp.get('pin_error') else '')}.get(resp.get('pinned'), '')
         chunk_note = f' in {resp["chunks"]} chunks' if resp.get('chunks', 1) > 1 else ''
         print(f'[{time.strftime("%H:%M:%S")}] Sent to {canonical_to}: {subject} '
               f'(msg_id={resp.get("msg_id")} channel_id={resp.get("channel_id")}'

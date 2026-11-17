@@ -18,7 +18,7 @@ from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._send_errors import _send_failure, _send_nonce
-from . import _linked, _prog
+from . import _linked, _pins, _prog
 from . import _meta_claim
 from . import _control_files
 from . import _ext_trust
@@ -1018,24 +1018,12 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def op_pin(channel_ref, msg_id):
         if not msg_id:
             raise ValueError('msg_id required')
-        channel = await resolve_channel_ref(channel_ref)
-        try:
-            msg = await channel.fetch_message(int(msg_id))
-        except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
-        await msg.pin(reason=f'pinned via discord_mb by {identity}')
-        return {'msg_id': str(msg.id), 'channel_id': str(channel.id), 'pinned': True}
+        return await _pins.pin_by_id(await resolve_channel_ref(channel_ref), msg_id, True, f'pinned via discord_mb by {identity}')
 
     async def op_unpin(channel_ref, msg_id):
         if not msg_id:
             raise ValueError('msg_id required')
-        channel = await resolve_channel_ref(channel_ref)
-        try:
-            msg = await channel.fetch_message(int(msg_id))
-        except Exception as e:
-            raise RuntimeError(f'fetch_message({msg_id}) failed: {e}') from e
-        await msg.unpin(reason=f'unpinned via discord_mb by {identity}')
-        return {'msg_id': str(msg.id), 'channel_id': str(channel.id), 'pinned': False}
+        return await _pins.pin_by_id(await resolve_channel_ref(channel_ref), msg_id, False, f'unpinned via discord_mb by {identity}')
 
     async def op_context(channel_ref):
         '''On-demand channel "memory": the same enrichment the inbound path builds,
@@ -1944,12 +1932,12 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             f'(results are cached and become reply-able), or pass --channel explicitly')
 
     async def perform_send(data, request):
-        '''Shared send core for the outbox watcher and the `send --wait` meta op;
+        '''Send core of the outbox watcher and the `send --wait` meta op;
         `request`'s name keys each chunk's nonce, so Discord dedups a chunk retried
         within its short window. Handles reply routing, DMs, mentions, chunking
         (>MAX_BODY bodies become a numbered train; mention + reply-ref + attachments
-        ride the first chunk) and pin-on-send. Returns {'msg_id', 'msg_ids',
-        'channel_id', 'chunks', 'pinned'}. Raises SendRetry or SendError (final).'''
+        ride chunk 1) and pin-on-send. Returns {'msg_id', 'msg_ids', 'channel_id',
+        'chunks', 'pinned', 'pin_error'}. Raises SendRetry or SendError (final).'''
         to = data.get('to', '')
         subject = data.get('subject', '')
         body = data.get('body', '')
@@ -2112,17 +2100,17 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             if i == 0:
                 first_sent = sent
 
-        pinned = None
+        pinned, pin_error = None, None
         if data.get('pin') and first_sent is not None:
             try:
-                await first_sent.pin(reason=f'pinned on send by {identity}')
+                await _pins.pin_message(first_sent, True, f'pinned on send by {identity}')
                 pinned = True
             except Exception as e:
                 log(f'pin-on-send failed for {first_sent.id}: {type(e).__name__}: {e}')
-                pinned = False
+                pinned, pin_error = False, str(e) if isinstance(e, _pins.PinRefused) else None
 
         return {'msg_id': sent_ids[0], 'msg_ids': sent_ids,
-                'channel_id': str(channel.id), 'chunks': n, 'pinned': pinned}
+                'channel_id': str(channel.id), 'chunks': n, 'pinned': pinned, 'pin_error': pin_error}
 
     async def dispatch_outbox_file(f):
         try:
@@ -2852,6 +2840,7 @@ __all__ = [
     '_linked',
     '_meta_claim',
     '_open_dm_channel',
+    '_pins',
     '_recorded_owner',
     '_resolve_dm_user_id',
     '_run_connector',

@@ -16,6 +16,7 @@ import _gateway  # noqa: E402
 import _util  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
+from discord_mb_lib import core  # noqa: E402
 from discord_mb_lib._send_errors import _send_nonce  # noqa: E402
 
 
@@ -133,6 +134,36 @@ def test_a_subject_that_leaves_no_room_for_the_body_is_refused_before_chunking(t
     client = _gateway.run(tmp, script, outbox=True)
     errors = [e["error"] for e in client.events if e["event"] == "send_failed"]
     assert len(errors) == 1 and "no room" in errors[0] and len(client.bridge.sent) == 1, (errors, client.bridge.sent)
+
+
+def test_a_refused_pin_names_the_pin_messages_permission_and_any_other_failure_does_not(tmp):
+    shown, args = {}, functools.partial(types.SimpleNamespace, identity="gate-test", timeout=1.0, msg_id="7", channel=None)
+    calls = {"send": functools.partial(core.send, "gate-test", "nobody", "s", "b", pin=True, wait=True, timeout=1),
+             "pin": functools.partial(core.pins_cli, args(pins_action="pin")), "unpin": functools.partial(core.pins_cli, args(pins_action="unpin"))}
+
+    async def script(client):
+        real_send = client.bridge.send
+
+        async def ask_with_pin_failing(name, error):
+            async def refuse(**kwargs):
+                raise error()
+
+            async def send(content, **kwargs):
+                sent = await real_send(content, **kwargs)
+                sent.pin = refuse
+                return sent
+
+            async def fetch_message(message_id):
+                return types.SimpleNamespace(id=7, pin=refuse, unpin=refuse)
+            client.bridge.send, client.bridge.fetch_message = send, fetch_message
+            await client.ask({f"{name}-{op}": {"op": op, "msg_id": "7", "to": "nobody", "subject": "s", "body": "b", "pin": True} for op in calls})
+            shown[name] = ["".join(_util.run_cli(call, client.responses[f"{name}-{op}"])[1:3]) for op, call in calls.items()]
+        await ask_with_pin_failing("refused", _http(403, "Missing Permissions"))
+        await ask_with_pin_failing("full", _http(400, "Maximum number of pins reached"))
+
+    _gateway.run(tmp, script)
+    assert all("Pin Messages" in out for out in shown["refused"]), shown["refused"]
+    assert "PIN FAILED" in shown["full"][0] and all("Pin Messages" not in out for out in shown["full"]) and all("Maximum number of pins reached" in out for out in shown["full"][1:]), shown["full"]
 
 
 def main():
