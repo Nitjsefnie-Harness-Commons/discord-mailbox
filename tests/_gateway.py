@@ -65,11 +65,11 @@ def inbox(tmp, msg_id=None):
     return json.loads((root / f"{msg_id}.json").read_text(encoding="utf-8"))
 
 
-def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False):
+def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False, keep=()):
     """Let `script(client)` drive the connector; `entries` is the directory history,
     newest first; `outbox` also runs its outbox watcher (ticks once a second, files in
-    `tmp/state/outbox`). -> the client (`events`, `reactions`, `log`); skipped without discord.py.
-    The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
+    `tmp/state/outbox`), `keep` names more watchers to run. -> the client (`events`,
+    `reactions`, `log`); skipped without discord.py. The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
         _util.skip("discord.py is not installed")
     import discord
@@ -159,7 +159,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
 
         async def drive(self):
             await self.handlers["on_ready"]()
-            kept, watchers = ("meta_watcher", "outbox_watcher") if outbox else ("meta_watcher",), []
+            kept, watchers = ("meta_watcher", *keep) + (("outbox_watcher",) if outbox else ()), []
             for coro in self.tasks:
                 if coro.cr_code.co_name in kept:
                     watchers.append(asyncio.ensure_future(coro))
