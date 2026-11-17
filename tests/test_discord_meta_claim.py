@@ -270,6 +270,20 @@ def test_a_request_cancelled_mid_operation_is_answered_as_interrupted_and_not_ru
     assert seen["left"] == [] and seen["cancelled"] and runs == [1], (seen, runs)
 
 
+def test_a_claim_left_by_any_abnormal_exit_is_answered_as_interrupted_and_the_exit_propagates(tmp):
+    in_dir, out_dir = Path(tmp) / "in", Path(tmp) / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    for n, exc in enumerate((asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        (in_dir / f"{n}.json").write_text("{}", encoding="utf-8")
+        with contextlib.suppress(exc):
+            with _claim(in_dir / f"{n}.json", out_dir):
+                raise exc()
+            raise AssertionError(f"{exc.__name__} was swallowed")
+        assert "outcome is unknown" in _read(out_dir / f"{n}.json")["error"], exc
+    assert not any(in_dir.iterdir()), list(in_dir.iterdir())
+
+
 def test_a_claim_a_killed_connector_left_is_answered_at_startup_and_never_run(tmp):
     state, seen = Path(tmp) / "state", {}
     (state / "in").mkdir(parents=True)
