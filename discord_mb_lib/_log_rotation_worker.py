@@ -175,7 +175,7 @@ class _RotationWorker:
             digest = self._sha256_bytes(tail)
             destinations[-1].update(tail=base64.b64encode(tail).decode('ascii'),
                                     tail_sha256=digest, size=len(tail), sha256=digest)
-            self._mark_generation_publishing(manifest)
+            self._mark_generation_publishing(manifest, include_stage=True)
         except BaseException:
             self._rollback_rotation(context)
             raise

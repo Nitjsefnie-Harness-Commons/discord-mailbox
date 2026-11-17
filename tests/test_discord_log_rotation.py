@@ -742,7 +742,7 @@ for n in range(240, 440):
     # A forged tail refuses before recovery goes on; appended lines model a finish outside the lock; "worker" rows
     # swap on the worker thread; "repeat" seeds an active whose prefix begins with the tail, as repeated lines do.
     in_lock = ("after-prepared", "after-rename-1", "after-rename-2", "after-stage-publish", "after-truncate", "after-rewrite")
-    for step, extra in (("after-create", ""), ("after-stage", ""), *((step, "") for step in in_lock), ("after-prepared", "digest"),
+    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-rename-2", "unmarked"), *((step, "") for step in in_lock), ("after-prepared", "digest"),
                         ("after-prepared", "length"), ("after-prepared", "version"), ("after-rewrite", "appended"),
                         *((step, "worker") for step in in_lock), ("after-prepared", "repeat")):
         case = Path(tmp) / f"{step}-{extra}"
@@ -751,10 +751,12 @@ for n in range(240, 440):
         for index, slot in enumerate(slots):
             slot.write_bytes(b"".join(lines[60 * index:60 * index + 60] if index < 3 or extra != "repeat" else lines[241:261] + lines[200:240]))
         done = int(_run_child(child, slots[-1], step, extra, code=190, text=True).stdout.split()[-1])
+        # Publishing the stage appends no record of its own: the swap journals one in-lock record.
+        assert step not in in_lock[3:] or [json.loads(r)["state"] for r in next(lock_root.glob("*.rotate.json")).read_bytes().splitlines()].count("prepared") == 1, step
         if extra == "appended":
             done = int(slots[-1].read_bytes().splitlines()[-1][:5]) + 3
             slots[-1].write_bytes(slots[-1].read_bytes() + b"".join(lines[done - 2:done + 1]))
-        elif extra in ("digest", "length", "version"):
+        elif extra in ("digest", "length", "version", "unmarked"):
             journal = next(lock_root.glob("*.rotate.json"))
             saved, tail = journal.read_bytes(), slots[-1].read_bytes().ljust(4097, b"x")
             record = json.loads(saved.splitlines()[-1])
@@ -764,11 +766,15 @@ for n in range(240, 440):
                 record["version"] = 4
             elif extra == "digest":
                 record["destinations"][-1]["tail_sha256"] = "0" * 64
+            elif extra == "unmarked":  # its temp deleted, a stage still unmarked refuses, as one marked separately at publish was
+                record["destinations"][-2] = {k: v for k, v in record["destinations"][-2].items() if not k.startswith("publish_")}
+                Path(record["destinations"][-2]["temporary"]).unlink()
             else:
                 record["destinations"][-1].update(tail=base64.b64encode(tail).decode(), tail_sha256=hashlib.sha256(tail).hexdigest())
             journal.write_bytes(saved + json.dumps(record).encode() + b"\n")
-            with _refuses(f"recovery accepted a rotation tail failing its {extra} check"):
+            with _refuses(f"recovery accepted a rotation journal failing its {extra} check") as caught:
                 _restart(slots[-1], 4096, 3)
+            assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
             journal.write_bytes(saved)
         _restart(slots[-1], 4096, 3)
         if extra == "repeat":  # the prefix moved to .1 and the active holds only the tail, a run of lines 241 on
