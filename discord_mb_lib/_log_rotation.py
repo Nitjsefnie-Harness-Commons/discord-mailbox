@@ -171,7 +171,7 @@ class _RotationJournal:
         finally:
             self._staging_claim_callback = None
 
-    def _publish_rotation_slot(self: Any, manifest: dict, position: int, staged: Any) -> None:
+    def _publish_rotation_slot(self: Any, manifest: dict, position: int, staged: Any, sync: bool = True) -> None:
         """Shift one backup by rename or unlink, or publish the stage, rechecking it first."""
         item = manifest['destinations'][position]
         destination, method = Path(item['destination']), item['method']
@@ -201,7 +201,8 @@ class _RotationJournal:
                     os.path.lexists(str(destination))):
                 raise RuntimeError(
                     f'connector log sparse destination was rebound: {destination}')
-        self._fsync_directory(self._path.parent)
+        if sync:
+            self._fsync_directory(self._path.parent)
 
     def _rotate(self: Any) -> None:
         self._use_anonymous_staging = True
