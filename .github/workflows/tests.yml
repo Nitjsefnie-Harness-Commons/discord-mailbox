@@ -253,9 +253,10 @@ jobs:
 
       - name: Coverage gate
         if: ${{ !cancelled() && steps.measure.conclusion == 'success' }}
-        # The floor is .github/ci-thresholds.json. Each green push to main
-        # raises it to measured coverage minus its gap; nothing lowers it,
-        # so a pull request gates on its base's floor too.
+        # The floor is .github/ci-thresholds.json. A green push to main stages
+        # measured coverage minus its gap when that is higher, and
+        # ratchet-push.yml commits it unless code landed on main meanwhile. A
+        # pull request fails when it lowers the floor or widens the gap.
         run: |
           base=()
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && git cat-file -e HEAD^1:.github/ci-thresholds.json 2>/dev/null; then

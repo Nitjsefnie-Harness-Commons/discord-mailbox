@@ -26,12 +26,11 @@ def test_a_raise_moves_the_floor_to_measured_minus_the_gap_only_upward(tmp):
         assert (code, written) == ((0, {"floor": new, "gap": gap, "measured": measured}) if new else (3, False)), (measured, code, written)
 
 
-def test_the_gate_floor_is_the_higher_of_head_and_base_and_refuses_a_lowered_or_malformed_one(tmp):
-    low, high = _thresholds(tmp, "low", floor=48.0, gap=1.5), _thresholds(tmp, "high", floor=50.0, gap=1.5)
-    with contextlib.redirect_stdout(io.StringIO()) as printed:
-        assert FLOOR.main(["floor", "--thresholds", high, "--base", low]) == 0
-    assert printed.getvalue() == "50.0\n", printed.getvalue()
-    assert FLOOR.main(["floor", "--thresholds", low, "--base", high]) == 1
+def test_the_gate_floor_is_the_higher_of_head_and_base_and_refuses_a_lower_floor_a_wider_gap_or_a_malformed_document(tmp):
+    low, high, wide = (_thresholds(tmp, n, floor=f, gap=g) for n, f, g in (("low", 48.0, 1.5), ("high", 50.0, 1.5), ("wide", 50.0, 2.0)))
+    with contextlib.redirect_stdout(io.StringIO()) as printed:  # raised, equal, lowered floor; widened gap
+        codes = [FLOOR.main(["floor", "--thresholds", head, "--base", base]) for head, base in ((high, low), (low, low), (low, high), (wide, high))]
+    assert (codes, printed.getvalue()) == ([0, 0, 1, 1], "50.0\n48.0\n"), (codes, printed.getvalue())
     for bad in (_thresholds(tmp, "nan", floor=float("nan"), gap=1.5), _thresholds(tmp, "gapless", floor=48.0), _thresholds(tmp, "text", floor="48.0", gap=1.5),
                 _thresholds(tmp, "over", floor=100.5, gap=1.5), _thresholds(tmp, "negative", floor=48.0, gap=-1.5)):
         assert FLOOR.main(["floor", "--thresholds", bad]) == 2, bad
