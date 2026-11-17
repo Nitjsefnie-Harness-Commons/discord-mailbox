@@ -3199,12 +3199,17 @@ class _ConnectorLogWriter:
 
     def _mark_destination_publishing(self, manifest, index, kind):
         """Persist the identity contract before mutating a destination inode."""
-        self._published_since_snapshot = True
         entry = manifest['destinations'][index]
         entry['publish_state'] = 'publishing'
         entry['publish_identity'] = entry.get('before_identity')
         entry['publish_entry_identity'] = entry.get('before_entry_identity')
         self._write_migration_manifest(manifest, kind=kind)
+        self._published_since_snapshot = True
+
+    def _snapshot_published_names(self):
+        """Accept the names this writer published while the journal vouching for them remains."""
+        self._owner.refresh_stable_identities()
+        self._published_since_snapshot = False
 
     @staticmethod
     def _revalidate_destination(destination, expected_identity,
@@ -3619,6 +3624,7 @@ class _ConnectorLogWriter:
                 self._unlink_if_identity(
                     temporary, _temporary_identity,
                     _temporary_entry_identity)
+        self._snapshot_published_names()
         journal.unlink()
         self._cleanup_journal_temp(journal, 'migrate')
         self._fsync_directory(root)
@@ -3778,6 +3784,7 @@ class _ConnectorLogWriter:
                 self._unlink_if_identity(
                     temporary, _temporary_identity,
                     _temporary_entry_identity)
+        self._snapshot_published_names()
         journal.unlink()
         self._cleanup_journal_temp(journal, 'rotate')
         self._fsync_directory(root)
@@ -4066,6 +4073,7 @@ class _ConnectorLogWriter:
                 self._manifest_identity(entry.get('temporary_identity')),
                 self._manifest_identity(entry.get('temporary_entry_identity')))
         journal = self._migration_manifest_path()
+        self._snapshot_published_names()
         try:
             journal.unlink()
         except FileNotFoundError:
@@ -4289,6 +4297,7 @@ class _ConnectorLogWriter:
                 self._manifest_identity(entry.get('temporary_identity')),
                 self._manifest_identity(entry.get('temporary_entry_identity')))
         journal = self._rotation_manifest_path()
+        self._snapshot_published_names()
         try:
             journal.unlink()
         except FileNotFoundError:
@@ -4296,8 +4305,6 @@ class _ConnectorLogWriter:
         self._cleanup_journal_temp(journal, 'rotate')
         self._fsync_directory(self._path.parent)
         self._fsync_directory(journal.parent)
-        self._owner.refresh_stable_identities()
-        self._published_since_snapshot = False
         self._open_active(mode)
         self._use_anonymous_staging = False
 
@@ -4347,8 +4354,7 @@ class _ConnectorLogWriter:
 
     def _recover_and_open(self):
         self._migrate_existing()
-        self._owner.refresh_stable_identities()
-        self._published_since_snapshot = False
+        self._snapshot_published_names()
         self._open_active()
         self._use_anonymous_staging = False
 
@@ -4357,9 +4363,11 @@ class _ConnectorLogWriter:
             if self._closed:
                 raise OSError('connector log is not open')
             if self._fh is None:
-                # A failed rotation left no handle. Accept only names it may have published
-                # (the journal validates them); with nothing published, a change still refuses.
-                if self._published_since_snapshot:
+                # A failed rotation left no handle. Accept the names it published only while
+                # their journal remains to validate them; otherwise any change still refuses.
+                if self._published_since_snapshot and (
+                        self._rotation_manifest_path().exists() or
+                        self._migration_manifest_path().exists()):
                     self._owner.refresh_stable_identities()
                 self._recover_and_open()
             self._owner.revalidate()
