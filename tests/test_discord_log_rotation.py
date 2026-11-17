@@ -877,32 +877,6 @@ def test_connector_log_rotation_refuses_live_in_place_destination_swap(tmp):
     assert list(lock_root.glob("*.rotate.json")), "rotation journal was discarded"
 
 
-def test_connector_log_rotation_first_stage_crash_loop_has_bounded_temps(tmp):
-    """Rotation also establishes ownership before its first staged temp."""
-    case = Path(tmp) / "rotation-first-stage-crash-loop"
-    case.mkdir()
-    path = case / "loop.log"
-    path.write_bytes(b"a" * 31)
-    child = r'''
-real_write = mod._ConnectorLogWriter._write_migration_temp
-def write_then_crash(self, data, mode, name=None, directory=None):
-    result = real_write(self, data, mode, name=name, directory=directory)
-    if name is not None and ".rotate-" in str(name) and not str(name).endswith(".json.tmp"):
-        os._exit(172)
-    return result
-mod._ConnectorLogWriter._write_migration_temp = write_then_crash
-writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
-writer.write("x")
-'''
-    for _ in range(8):
-        _run_child(child, path, code=172)
-    assert len(_hidden(case)) <= 3, _hidden(case)
-
-    _restart(path, 32, 1)
-    assert path.read_bytes() == b"a" * 31
-    assert _hidden(case) == []
-
-
 def test_connector_log_migration_propagates_unremovable_old_backup(tmp):
     """A numeric backup beyond the configured count cannot be hidden."""
     m = _mod()
@@ -1675,35 +1649,8 @@ def test_connector_log_windows_hardlink_aliases_share_identity_lock(tmp):
             m._ConnectorOwnership(alias, lock_inode=True)
 
 
-def test_connector_log_hardlink_alias_recovers_identity_journal(tmp):
-    """A restart through a hard-link alias resumes the original generation."""
-    case = Path(tmp)
-    target = case / "journal-target.log"
-    alias = case / "journal-alias.log"
-    original = b"".join(f"{i:02d}\n".encode() for i in range(12))
-    target.write_bytes(original)
-    os.link(target, alias)
-    child = r'''
-real_replace = os.replace
-calls = [0]
-def publish_then_crash(*args):
-    real_replace(*args)
-    calls[0] += 1
-    if calls[0] == 2:
-        os._exit(117)
-os.replace = publish_then_crash
-mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
-'''
-    _run_child(child, target, code=117)
-    _restart(alias, 16, 2)
-    slots = [target.with_name("journal-target.log.2"),
-             target.with_name("journal-target.log.1"), target]
-    assert b"".join(slot.read_bytes() for slot in slots if slot.exists()) == original
-    assert alias.read_bytes() == target.read_bytes()
-
-
 def test_connector_log_hardlink_recovery_is_filename_order_independent(tmp):
-    """Journal recovery locks aliases in either filename order."""
+    """Journal recovery through a hard-link alias resumes the original generation, locking aliases in either filename order."""
     original = b"".join(f"{i:02d}\n".encode() for i in range(12))
     child = r'''
 real_replace = os.replace
@@ -2329,51 +2276,30 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_key(tmp):
     assert not m._ConnectorLogWriter._named_publish_paths(path)[1].exists()
 
 
-def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_migration(tmp):
-    """Migration publication rejects a transient claim pathname rebound."""
+def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_journals(tmp):
+    """Migration and rotation publication reject a transient claim pathname rebound."""
     m = _mod()
-    path = Path(tmp) / "swap-migrate.log"
-    lock_root = Path(tmp) / "lock-root"
-    seed = m._ConnectorLogWriter(path, max_bytes=16, backup_count=1,
-                                 lock_root=lock_root)
-    seed.close()
-    path.write_bytes(b"history\n" * 8)
-    old_tmpfile = _force_portable(m)
-    journal = lock_root / f"{seed._identity_digest}.migrate.json"
-    _old_entry, foreign = _claim_swap_restore(m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
-    try:
-        with _refuses("migration claim fd/path swap was accepted", FileExistsError):
-            m._ConnectorLogWriter(path, max_bytes=16, backup_count=1,
-                                  lock_root=lock_root)
-    finally:
-        m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
-        _restore_portable(m, old_tmpfile)
-    assert foreign.read_bytes() == b"FOREIGN-CLAIM"
-
-
-def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_rotation(tmp):
-    """Rotation publication rejects a transient claim pathname rebound."""
-    m = _mod()
-    path = Path(tmp) / "swap-rotate.log"
-    lock_root = Path(tmp) / "lock-root"
-    seed = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                                 lock_root=lock_root)
-    seed.close()
-    path.write_bytes(b"A" * 31)
-    writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1,
-                                   lock_root=lock_root)
-    old_tmpfile = _force_portable(m)
-    journal = writer._rotation_manifest_path()
-    _old_entry, foreign = _claim_swap_restore(
-        m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
-    try:
-        with _refuses("rotation claim fd/path swap was accepted", FileExistsError):
-            writer.write("x")
-    finally:
-        m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
-        _restore_portable(m, old_tmpfile)
-        writer.close()
-    assert foreign.read_bytes() == b"FOREIGN-CLAIM"
+    for kind, max_bytes, history in (("migrate", 16, b"history\n" * 8), ("rotate", 32, b"A" * 31)):
+        path, lock_root = Path(tmp) / f"swap-{kind}.log", Path(tmp) / f"{kind}-lock-root"
+        seed = m._ConnectorLogWriter(path, max_bytes=max_bytes, backup_count=1, lock_root=lock_root)
+        seed.close()
+        path.write_bytes(history)
+        writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1, lock_root=lock_root) if kind == "rotate" else None
+        old_tmpfile = _force_portable(m)
+        journal = writer._rotation_manifest_path() if writer else lock_root / f"{seed._identity_digest}.migrate.json"
+        _old_entry, foreign = _claim_swap_restore(m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
+        try:
+            with _refuses(f"{kind} claim fd/path swap was accepted", FileExistsError):
+                if writer:
+                    writer.write("x")
+                else:
+                    m._ConnectorLogWriter(path, max_bytes=16, backup_count=1, lock_root=lock_root)
+        finally:
+            m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
+            _restore_portable(m, old_tmpfile)
+            if writer:
+                writer.close()
+        assert foreign.read_bytes() == b"FOREIGN-CLAIM", kind
 
 
 def test_connector_log_preserves_forged_journal_staging_file(tmp):
@@ -2452,31 +2378,31 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1)
 
 
 def test_connector_log_first_stage_crash_loop_has_bounded_temps(tmp):
-    """Hard exits after the first data temp do not accumulate nonce files."""
-    m = _mod()
-    del m
-    case = Path(tmp) / "first-stage-crash-loop"
-    case.mkdir()
-    path = case / "loop.log"
-    path.write_bytes(b"historic line\n" * 12)
-    child = r'''
+    """Hard exits after the first data temp of a migration or a rotation do not accumulate nonce files."""
+    for kind, seed, max_bytes, backup_count, bound in (("migrate", b"historic line\n" * 12, 16, 2, 4), ("rotate", b"a" * 31, 32, 1, 3)):
+        case = Path(tmp) / f"{kind}-first-stage-crash-loop"
+        case.mkdir()
+        path = case / "loop.log"
+        path.write_bytes(seed)
+        child = rf'''
 real_write = mod._ConnectorLogWriter._write_migration_temp
 def write_then_crash(self, data, mode, name=None, directory=None):
     result = real_write(self, data, mode, name=name, directory=directory)
-    if name is not None and ".migrate-" in str(name) and not str(name).endswith(".json.tmp"):
+    if name is not None and ".{kind}-" in str(name) and not str(name).endswith(".json.tmp"):
         os._exit(171)
     return result
 mod._ConnectorLogWriter._write_migration_temp = write_then_crash
-mod._ConnectorLogWriter(sys.argv[2], max_bytes=16, backup_count=2)
+writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes={max_bytes}, backup_count={backup_count})
+if "{kind}" == "rotate":
+    writer.write("x")
 '''
-    outcomes = []
-    for _ in range(8):
-        outcomes.append(_run_child(child, path, code=171).returncode)
-    hidden = [
-        item for item in case.iterdir()
-        if item.name.startswith(".") and not item.name.endswith(".lock")
-    ]
-    assert len(hidden) <= 4, [item.name for item in hidden]
+        for _ in range(8):
+            _run_child(child, path, code=171)
+        assert len(_hidden(case)) <= bound, (kind, _hidden(case))
+        if kind == "rotate":  # rotation establishes ownership before its first staged temp, so a restart clears them
+            _restart(path, 32, 1)
+            assert path.read_bytes() == b"a" * 31
+            assert _hidden(case) == []
 
 
 def test_connector_log_partial_first_stage_crash_loop_has_bounded_temps(tmp):
@@ -3277,66 +3203,54 @@ mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
 
 
 def test_connector_staging_key_concurrent_virgin_creation_keeps_one_trusted_key(tmp):
-    """Concurrent first users both succeed and share one complete key."""
+    """Concurrent first users, linked or portable (no O_TMPFILE), all succeed and share one complete key."""
     child = r'''
-import importlib.util
-import sys
 import time
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_concurrent_key", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+if sys.argv[5] == "portable":
+    mod.os.O_TMPFILE = None
 start = Path(sys.argv[4])
 while not start.exists():
     time.sleep(0.001)
 try:
-    writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
-                                     lock_root=sys.argv[3])
+    writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1, lock_root=sys.argv[3])
 except Exception as exc:
-    print("ERROR:" + type(exc).__name__, flush=True)
+    print("ERROR:" + type(exc).__name__ + ":" + str(exc), flush=True)
 else:
     print("READY:" + writer._current_staging_key().hex(), flush=True)
     input()
     writer.close()
 '''
-    for trial in range(8):
-        case = Path(tmp) / f"concurrent-staging-key-{trial}"
-        case.mkdir()
-        lock_root = case / "lock-root"
-        start = case / "start"
-        processes = [
-            subprocess.Popen(
-                [sys.executable, "-c", child, str(Path(MB)),
-                 str(case / f"connector-{index}.log"), str(lock_root), str(start)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True,
-            )
-            for index in (1, 2)
-        ]
-        try:
-            start.touch()
-            outputs = [process.stdout.readline().strip() for process in processes]
-            assert len(outputs) == 2, outputs
-            assert all(output.startswith("READY:") for output in outputs), outputs
-            assert all(len(output.split(":", 1)[1]) == 64 for output in outputs)
-            assert outputs[0] == outputs[1], outputs
-        finally:
-            for process in processes:
-                if process.poll() is None and process.stdin is not None:
-                    try:
-                        process.stdin.write("\n")
-                        process.stdin.flush()
-                    except BrokenPipeError:
-                        pass
-                    finally:
-                        process.stdin.close()
-                process.wait(timeout=5)
-        key_path = lock_root / "connector-staging.key"
-        key = key_path.read_bytes()
-        assert len(key) == 32
-        assert key.hex() == outputs[0].split(":", 1)[1]
-        assert key_path.stat().st_nlink == 1
-        assert not list(lock_root.glob(".connector-staging.key-*.tmp"))
+    for variant, count, trials in (("linked", 2, 8), ("portable", 3, 4)):
+        for trial in range(trials):
+            case = Path(tmp) / f"{variant}-staging-key-race-{trial}"
+            case.mkdir()
+            lock_root, start = case / "lock-root", case / "start"
+            processes = [subprocess.Popen(_child_argv(child, case / f"connector-{index}.log", lock_root, start, variant),
+                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                         for index in range(count)]
+            try:
+                start.touch()
+                outputs = [process.stdout.readline().strip() for process in processes]
+                assert len(outputs) == count and all(output.startswith("READY:") for output in outputs), outputs
+                assert all(len(output.split(":", 1)[1]) == 64 for output in outputs) and len(set(outputs)) == 1, outputs
+            finally:
+                for process in processes:
+                    if process.poll() is None and process.stdin is not None:
+                        try:
+                            process.stdin.write("\n")
+                            process.stdin.flush()
+                        except BrokenPipeError:
+                            pass
+                        finally:
+                            process.stdin.close()
+                    process.wait(timeout=10)
+            key_path = lock_root / "connector-staging.key"
+            key = key_path.read_bytes()
+            assert len(key) == 32 and key.hex() == outputs[0].split(":", 1)[1] and key_path.stat().st_nlink == 1, variant
+            assert not list(lock_root.glob(".connector-staging.key-*.tmp")), variant
+            assert not list(lock_root.glob("*.create.*")), sorted(item.name for item in lock_root.glob("*.create.*"))
+            assert not list(lock_root.glob("*.create-proof")), variant
 
 
 def test_connector_staging_key_authority_is_durable_and_matches_published_key(tmp):
@@ -3657,72 +3571,6 @@ def test_connector_staging_key_bootstrap_preserves_unauthenticated_residue(tmp):
                 assert not key_path.exists(), case_name
     finally:
         _restore_portable(m, old)
-
-
-def test_connector_staging_key_portable_concurrent_virgin_creation_converges(tmp):
-    """Portable virgin writers race for one key and all agree on the winner."""
-    child = r'''
-import importlib.util
-import sys
-import time
-from pathlib import Path
-spec = importlib.util.spec_from_file_location("discord_mb_portable_key_race", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.os.O_TMPFILE = None
-start = Path(sys.argv[4])
-while not start.exists():
-    time.sleep(0.001)
-try:
-    writer = mod._ConnectorLogWriter(sys.argv[2], max_bytes=32, backup_count=1,
-                                     lock_root=sys.argv[3])
-except Exception as exc:
-    print("ERROR:" + type(exc).__name__ + ":" + str(exc), flush=True)
-else:
-    print("READY:" + writer._current_staging_key().hex(), flush=True)
-    input()
-    writer.close()
-'''
-    for trial in range(4):
-        case = Path(tmp) / f"portable-key-race-{trial}"
-        case.mkdir()
-        lock_root = case / "lock-root"
-        start = case / "start"
-        processes = [
-            subprocess.Popen(
-                [sys.executable, "-c", child, str(Path(MB)),
-                 str(case / f"connector-{index}.log"), str(lock_root),
-                 str(start)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True,
-            )
-            for index in (1, 2, 3)
-        ]
-        try:
-            start.touch()
-            outputs = [process.stdout.readline().strip()
-                       for process in processes]
-            assert all(output.startswith("READY:") for output in outputs), outputs
-            assert len(set(outputs)) == 1, outputs
-        finally:
-            for process in processes:
-                if process.poll() is None and process.stdin is not None:
-                    try:
-                        process.stdin.write("\n")
-                        process.stdin.flush()
-                    except BrokenPipeError:
-                        pass
-                    finally:
-                        process.stdin.close()
-                process.wait(timeout=10)
-        key_path = lock_root / "connector-staging.key"
-        key = key_path.read_bytes()
-        assert len(key) == 32
-        assert key.hex() == outputs[0].split(":", 1)[1]
-        assert key_path.stat().st_nlink == 1
-        assert not list(lock_root.glob("*.create.*")), sorted(
-            item.name for item in lock_root.glob("*.create.*"))
-        assert not list(lock_root.glob("*.create-proof"))
 
 
 def test_connector_named_fallback_crash_loops_do_not_accumulate_uuid_temps(tmp):
