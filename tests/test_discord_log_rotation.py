@@ -3132,9 +3132,9 @@ def test_connector_lock_root_rejects_untrusted_shapes(tmp):
         # no permissive-mode signal to reject there; _posix_mode_exposed()
         # returns False on nt for exactly that reason.
         permissive = Path(tmp) / "permissive-root"
-        permissive.mkdir(mode=0o777)
-        os.chmod(permissive, 0o777)
-        with _refuses("world-writable lock root was adopted"):
+        permissive.mkdir(mode=0o750)
+        os.chmod(permissive, 0o750)
+        with _refuses("group-accessible lock root was adopted"):
             m._ConnectorOwnership(path, lock_inode=True, lock_root=permissive)
 
     regular_file = Path(tmp) / "regular-file-root"
