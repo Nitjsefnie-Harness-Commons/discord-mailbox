@@ -62,12 +62,24 @@ class _RotationRecovery:
         if pair[1] is None or self._owner._entry_identity(path) != pair[1]:
             return False
         quarantine = path.with_name(f'.{path.name}.drop-{uuid.uuid4().hex}.tmp')
-        os.rename(path, quarantine)
-        if self._owner._entry_identity(quarantine) == pair[1]:
-            os.unlink(quarantine)
-            return True
-        if not os.path.lexists(path):
-            os.rename(quarantine, path)
+        try:
+            os.rename(path, quarantine)
+        except OSError:
+            return False
+        try:
+            moved = os.lstat(quarantine)
+            # A new file can reuse a freed inode number: only a still-special entry is the recorded one.
+            if ((str(moved.st_dev), str(moved.st_ino)) == tuple(pair[1]) and
+                    not stat.S_ISREG(moved.st_mode)):
+                os.unlink(quarantine)
+                return True
+        except OSError:
+            pass
+        try:
+            if not os.path.lexists(path):  # never overwrite a name recreated meanwhile
+                os.rename(quarantine, path)
+        except OSError:
+            pass
         return False
 
     def _journal_pair(self: Any, item: dict, field: str) -> tuple:
