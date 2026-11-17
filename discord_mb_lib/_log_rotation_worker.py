@@ -213,6 +213,7 @@ class _RotationWorker:
                                     tail_sha256=digest, size=len(tail), sha256=digest)
             self._mark_generation_publishing(manifest, include_stage=True, append=False)
             self._write_rotation_record(context)
+            self._published_since_snapshot = True
         except BaseException:
             self._rollback_rotation(context)
             raise

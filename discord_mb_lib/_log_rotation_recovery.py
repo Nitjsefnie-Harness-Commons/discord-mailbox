@@ -59,8 +59,9 @@ class _RotationRecovery:
         if hashlib.sha256(payload).digest() != raw[8:40]:
             return manifest
         record = json.loads(payload)
-        return record if all(record.get(key) == manifest.get(key)
-                             for key in ('generation', 'transaction_nonce', 'token')) else manifest
+        return record if isinstance(record, dict) and all(
+            record.get(key) == manifest.get(key)
+            for key in ('version', 'kind', 'generation', 'transaction_nonce', 'token')) else manifest
 
     def _slot_identity(self: Any, path: Path) -> tuple:
         return (self._owner._identity_for(path), self._owner._entry_identity(path))
