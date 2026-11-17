@@ -30,6 +30,7 @@
 # ─── root ───
 !/.gitignore
 !/.pylintrc
+!/CONTRIBUTING.md
 !/LICENSE
 !/README.md
 !/SECURITY.md
