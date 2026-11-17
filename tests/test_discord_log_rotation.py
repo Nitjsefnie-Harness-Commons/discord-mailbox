@@ -905,11 +905,12 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                     worker.join(60)
                     assert not worker.is_alive() and path.read_bytes() == b"b" * 7 + b"\nchild\n", path.read_bytes()  # the parent's swap kept the child's line
                     continue
-                _ = len(refused) > 7 or log[1].join(60)  # the worker stores its failure, unless the caller reaps it at the ceiling
+                stored = len(refused) > 7 or log[1].join(60) or writer._rotation_error  # the worker stores its failure, unless the caller reaps it at the ceiling
                 assert len(refused) > 7 or not log[1].is_alive(), "the failed worker never finished"
                 with _refuses(f"{name}: the write after a failed rotation was accepted", BaseException) as caught:  # SystemExit too
                     writer.write(refused)
                 assert case["fired"] and (caught[0] is error if isinstance(error, BaseException) else isinstance(caught[0], own)), (name, caught)
+                assert len(refused) > 7 or caught[0] is stored, (name, caught, stored)  # the stored error itself, raised before any refusal
                 assert b"refused" not in b"".join(p.read_bytes() for p in _window(path)), name
                 if isinstance(error, str):  # from either thread, later writes refuse with no recovery: by revalidation, and still once the swap is undone
                     for undo, message in ((False, "was replaced while owned"), (True, "after an ownership error")):
