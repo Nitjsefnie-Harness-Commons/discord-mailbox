@@ -761,6 +761,7 @@ class _ConnectorLogWriter:
         self._fh = None
         self._active_bytes = 0
         self._closed = False
+        self._published_since_snapshot = False
         self._use_anonymous_staging = True
         import threading
         self._thread_lock = threading.RLock()
@@ -3198,6 +3199,7 @@ class _ConnectorLogWriter:
 
     def _mark_destination_publishing(self, manifest, index, kind):
         """Persist the identity contract before mutating a destination inode."""
+        self._published_since_snapshot = True
         entry = manifest['destinations'][index]
         entry['publish_state'] = 'publishing'
         entry['publish_identity'] = entry.get('before_identity')
@@ -4295,6 +4297,7 @@ class _ConnectorLogWriter:
         self._fsync_directory(self._path.parent)
         self._fsync_directory(journal.parent)
         self._owner.refresh_stable_identities()
+        self._published_since_snapshot = False
         self._open_active(mode)
         self._use_anonymous_staging = False
 
@@ -4345,6 +4348,7 @@ class _ConnectorLogWriter:
     def _recover_and_open(self):
         self._migrate_existing()
         self._owner.refresh_stable_identities()
+        self._published_since_snapshot = False
         self._open_active()
         self._use_anonymous_staging = False
 
@@ -4353,9 +4357,10 @@ class _ConnectorLogWriter:
             if self._closed:
                 raise OSError('connector log is not open')
             if self._fh is None:
-                # A failed rotation left no handle and moved names this writer published:
-                # accept the names as a fresh open would, and let the journal validate them.
-                self._owner.refresh_stable_identities()
+                # A failed rotation left no handle. Accept only names it may have published
+                # (the journal validates them); with nothing published, a change still refuses.
+                if self._published_since_snapshot:
+                    self._owner.refresh_stable_identities()
                 self._recover_and_open()
             self._owner.revalidate()
             for record in self._records_for_line(line):
