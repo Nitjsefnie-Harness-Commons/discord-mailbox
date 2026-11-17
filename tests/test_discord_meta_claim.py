@@ -8,11 +8,14 @@ import io
 import json
 import os
 import secrets
+import signal
 import sys
+import threading
 import time
 import types
 import uuid
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
@@ -27,8 +30,8 @@ from discord_mb_lib._meta_claim import MetaRequestPending, _claim, _withdraw  # 
 def _cli_side(tmp, step):
     """core with its meta dirs under tmp; each sleep jumps the clock and runs step(in, out)."""
     in_dir, out_dir = Path(tmp) / "in", Path(tmp) / "out"
-    in_dir.mkdir()
-    out_dir.mkdir()
+    for d in (in_dir, out_dir):
+        d.mkdir(parents=True)
     clock = types.SimpleNamespace(now=time.time())  # the connector judges a request's age by the real clock
     clock.time = lambda: clock.now
 
@@ -45,34 +48,50 @@ def _cli_side(tmp, step):
         core.time, core.meta_in_dir, core.meta_out_dir = saved
 
 
-def test_an_unclaimed_request_is_withdrawn_and_reported_as_before(tmp):
-    err = None
-    with _cli_side(tmp, lambda i, o: None) as (in_dir, _):
-        try:
-            core._meta_request("me", {"op": "thread-edit"}, 0.2)
-        except TimeoutError as e:
-            err = e
-    assert str(err) == "connector did not respond within 0.2s (is it running for 'me'?)", err
-    assert not any(in_dir.iterdir()), list(in_dir.iterdir())
+def _exit_of(call):
+    try:
+        return call()
+    except BaseException as e:
+        return e
 
 
-def test_a_response_landing_after_the_claim_is_returned(tmp):
-    with contextlib.ExitStack() as connector:
-        def claim_and_answer(in_dir, out_dir):
-            for p in in_dir.glob("*.json"):
-                connector.enter_context(_claim(p, out_dir))
-                (out_dir / p.name).write_text(json.dumps({"ok": True, "late": 1}), encoding="utf-8")
+def _raise(e):
+    raise e
 
-        with _cli_side(tmp, claim_and_answer) as (_, out_dir):
-            assert core._meta_request("me", {"op": "thread-edit"}, 0.2) == {"ok": True, "late": 1}
-        assert not any(out_dir.iterdir()), list(out_dir.iterdir())
+
+def test_an_unanswered_request_is_withdrawn_on_every_exit_that_keeps_its_cause(tmp):
+    """Each exit keeps its cause and leaves only a connector's claim; SIGTERM/SIGHUP exit 128 + signum."""
+    ki, err, real_write, out, connector = KeyboardInterrupt(), RuntimeError("poll"), _control_files.write_private, [], contextlib.ExitStack()
+    signals = [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+    saved = {s: signal.signal(s, signal.SIG_IGN) for s in signals}     # a handler left unset never kills the runner
+    cases = [("interrupt", lambda p, o: _raise(ki), ki, []), ("error", lambda p, o: _raise(err), err, []),
+             ("thread", lambda p, o: _raise(err), err, []), ("written", None, ki, []),       # right after the write
+             ("claimed", lambda p, o: (connector.enter_context(_claim(p, o)), _raise(ki)), ki, ["json.claimed"]),
+             ("unlink fails", lambda p, o: (p.unlink(), p.mkdir(), _raise(ki)), ki, ["json"]),  # an OSError everywhere
+             ("answered", lambda p, o: (connector.enter_context(_claim(p, o)), (o / p.name).write_text('{"ok": 1}', encoding="utf-8")),
+              {"ok": 1}, ["json.claimed"]), ("deadline", None, "connector did not respond within 1.5s (is it running for 'me'?)", []),
+             *((f"signal {s}", lambda p, o, s=s: signal.raise_signal(s), 128 + s, []) for s in signals)]
+    try:
+        for name, act, want, left in cases:
+            out.clear()
+            worker = threading.Thread(target=lambda: out.append(_exit_of(lambda: core._meta_request("me", {"op": "list-agents"}, 1.5))))
+            write = mock.patch.object(_control_files, "write_private", lambda p, text: (real_write(p, text), _raise(ki)))
+            with write if name == "written" else contextlib.nullcontext(), _cli_side(
+                    Path(tmp) / name, lambda i, o, act=act: [act(p, o) for p in i.glob("*.json") if act]) as (in_dir, out_dir):
+                _ = (worker.start(), worker.join(10)) if name == "thread" else worker.run()
+            got = out[0].code if isinstance(out[0], SystemExit) else str(out[0]) if isinstance(out[0], TimeoutError) else out[0]
+            assert got == want, (name, out)
+            assert sorted(p.name.split(".", 1)[1] for p in in_dir.iterdir()) == left, (name, list(in_dir.iterdir()))
+            assert not any(out_dir.iterdir()) and all(signal.getsignal(s) is signal.SIG_IGN for s in signals), name
+    finally:
+        _ = connector.close(), [signal.signal(s, handler) for s, handler in saved.items()]
 
 
 def test_a_claimed_rename_past_its_deadline_exits_75_as_pending(tmp):
     if _connector()[0] is None:
         return
     from discord_mb_lib import cli
-    held, stderr, argv, code = [], io.StringIO(), sys.argv, None
+    held, stderr, argv = [], io.StringIO(), sys.argv
     with contextlib.ExitStack() as connector:
         def claim(in_dir, out_dir):
             for p in in_dir.glob("*.json"):
@@ -81,12 +100,7 @@ def test_a_claimed_rename_past_its_deadline_exits_75_as_pending(tmp):
         with _cli_side(tmp, claim) as (in_dir, out_dir), contextlib.redirect_stderr(stderr):
             sys.argv = ["discord_mb.py", "thread", "me", "--timeout", "0.2",
                         "rename", "new-name", "--channel", "1"]
-            try:
-                cli._cli()
-            except SystemExit as e:
-                code = e.code
-            finally:
-                sys.argv = argv
+            code, sys.argv = getattr(_exit_of(cli._cli), "code", None), argv
         assert code == 75, (code, stderr.getvalue())
         assert held and list(in_dir.iterdir()) == held, "the claimed request was withdrawn"
         assert str(out_dir / held[0].name.removesuffix(".claimed")) in stderr.getvalue(), stderr.getvalue()
@@ -130,10 +144,12 @@ def test_a_creds_add_request_carrying_a_password_is_private(tmp):
             (out_dir / p.name).write_text(json.dumps({"ok": True, "action": "added"}), encoding="utf-8")
 
     args = types.SimpleNamespace(creds_action="add", identity="me", domain="a.example", login="login",
-                                 password=password, upsert=False, timeout=1)
+                                 password=password, upsert=False, timeout=3.5)
     with _cli_side(tmp, answer), contextlib.redirect_stdout(io.StringIO()):
         core.creds_cli(args)
     assert len(seen) == 1 and password in seen[0][0], seen
+    request = json.loads(seen[0][0])    # it carries its creation time and its wait
+    assert (request["op"], request["timeout"], abs(request["created"] - time.time()) < 60) == ("creds-add", 3.5, True), request
     if _util.POSIX_MODES:
         assert seen[0][1] == 0o600, oct(seen[0][1])
 
@@ -166,12 +182,7 @@ def test_write_private_publishes_a_fresh_private_inode_and_leaves_nothing_when_i
     assert sorted(os.listdir(tmp)) == ["r.json", "twin"], os.listdir(tmp)
     assert len(seen) == 2 and seen[0][0] != seen[1][0], seen
     assert (target.read_text(encoding="utf-8"), twin.read_text(encoding="utf-8")) == ("two", "old")
-    try:
-        os.fstat(refused[1])
-    except OSError:
-        pass
-    else:
-        raise AssertionError("the descriptor fdopen refused stayed open")
+    assert isinstance(_exit_of(lambda: os.fstat(refused[1])), OSError), "the descriptor fdopen refused stayed open"
     if _util.POSIX_MODES:
         assert [mode for _, mode in seen] == [0o600, 0o600], seen
 
@@ -317,19 +328,6 @@ def test_a_request_older_than_its_callers_wait_is_answered_with_an_expiry_and_no
     assert oks == {n: n not in ("stale", "just-over") for n in fields}, client.responses
     assert "expired" in client.responses["stale"]["error"], client.responses
     assert len(client.bridge.reads) == 6 and not any((Path(tmp) / "state" / "in").iterdir()), client.bridge.reads
-
-
-def test_a_cli_request_carries_its_creation_time_and_its_wait(tmp):
-    seen = []
-
-    def read(in_dir, out_dir):
-        for p in in_dir.glob("*.json"):
-            seen.append(_read(p))
-            (out_dir / p.name).write_text(json.dumps({"ok": True}), encoding="utf-8")
-
-    with _cli_side(tmp, read):
-        core._meta_request("me", {"op": "list-agents"}, 3.5)
-    assert [(r["op"], r["timeout"], abs(r["created"] - time.time()) < 60) for r in seen] == [("list-agents", 3.5, True)], seen
 
 
 def main():
