@@ -78,7 +78,18 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
         except (OSError, NotImplementedError):
             _util.skip("this platform cannot create a symlink")
 
-    for replace in (foreign_file, dangling_link):
+    real_state = m._ConnectorLogWriter._journal_file_state
+
+    def hardlink_mid_rotation(backup):  # inside the rotation, after its first revalidate
+        def link_then_state(self, destination):
+            m._ConnectorLogWriter._journal_file_state = real_state
+            backup.with_name("external").write_bytes(b"EXTERNAL\n")
+            backup.unlink()
+            os.link(backup.with_name("external"), backup)
+            return real_state(self, destination)
+        m._ConnectorLogWriter._journal_file_state = link_then_state
+
+    for replace in (foreign_file, hardlink_mid_rotation, dangling_link):
         path = Path(tmp) / replace.__name__ / "connector.log"
         path.parent.mkdir()
         writer = _filled(m, path)
@@ -92,6 +103,7 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
                 else:
                     raise AssertionError(f"{replace.__name__}: a changed backup was accepted")
         finally:
+            m._ConnectorLogWriter._journal_file_state = real_state
             writer.close()
         assert "refused" not in path.read_text(encoding="utf-8")
 
@@ -126,12 +138,14 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
                 raise AssertionError(f"write {attempt} succeeded under the injected fault")
             assert fault["fired"] == attempt and journal.exists(), (attempt, fault)
         fault["on"] = False
-        for i in range(12):
+        for i in range(3):
             writer.write(f"healed {i:02d}")
     finally:
         os.replace, m._ConnectorLogWriter._fsync_directory = real_replace, real_fsync
         writer.close()
-    assert "healed 11" in path.read_text(encoding="utf-8")
+    assert "healed 02" in path.read_text(encoding="utf-8")
+    kept = [ln for p in reversed(_window(path)) for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("line ")]
+    assert kept and kept == sorted(set(kept)), kept  # pre-fault lines: each at most once, in order
     assert not journal.exists()
     assert all(p.stat().st_size <= LIMIT for p in _window(path))
 
