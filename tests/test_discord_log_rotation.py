@@ -2007,9 +2007,7 @@ def test_connector_named_fixed_claim_stage_collision_is_preserved(tmp):
     occupied by unrelated bytes.
     """
     m = _mod()
-    old_tmpfile = getattr(m.os, "O_TMPFILE", None)
-    m.os.O_TMPFILE = None
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         scenarios = (("key", 32), ("migrate", 16), ("rotate", 32))
         for kind, max_bytes in scenarios:
             case = Path(tmp) / f"fixed-stage-foreign-{kind}"
@@ -2055,11 +2053,6 @@ def test_connector_named_fixed_claim_stage_collision_is_preserved(tmp):
                     except (FileExistsError, RuntimeError):
                         pass
             assert stage.read_bytes() == foreign, kind
-    finally:
-        if old_tmpfile is None:
-            m.os.O_TMPFILE = None
-        else:
-            m.os.O_TMPFILE = old_tmpfile
 
 
 def test_connector_named_fallback_preserves_foreign_canonical_claim(tmp):
@@ -2120,8 +2113,7 @@ def test_connector_named_fallback_reconciles_interrupted_fixed_claim_cleanup(tmp
     unrelated exact-name bytes remain a collision.
     """
     m = _mod()
-    old_tmpfile = _force_portable(m)
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         scenarios = (("key", 32), ("migrate", 16), ("rotate", 32))
         for kind, max_bytes in scenarios:
             case = Path(tmp) / f"interrupted-fixed-claim-{kind}"
@@ -2195,8 +2187,6 @@ def test_connector_named_fallback_reconciles_interrupted_fixed_claim_cleanup(tmp
             assert stage.read_bytes() == before_stage
             assert proof.read_bytes() == before_proof
             assert extra.exists()
-    finally:
-        _restore_portable(m, old_tmpfile)
 
 
 def _foreign_named_claim_residue(mod, case, kind, with_stage,
@@ -2293,8 +2283,7 @@ def test_connector_named_claim_direct_helper_rejects_forged_proof_shapes(tmp):
 def test_connector_named_claim_operations_preserve_forged_proof_shapes(tmp):
     """Key, migration, and rotation callers cannot consume forged claims."""
     m = _mod()
-    old_tmpfile = _force_portable(m)
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         for kind in ("key", "migrate", "rotate"):
             for with_stage in (False, True):
                 for canonical_present in (False, True):
@@ -2341,8 +2330,6 @@ def test_connector_named_claim_operations_preserve_forged_proof_shapes(tmp):
                         assert destination.read_bytes() == destination_before
                     else:
                         assert not destination.exists()
-    finally:
-        _restore_portable(m, old_tmpfile)
 
 
 def _partial_first_named_claim_child(kind, code):
@@ -2378,10 +2365,6 @@ def test_portable_publication_env_forces_the_named_path(tmp):
     """The CI seam that runs the macOS/Windows protocol on a Linux runner."""
     m = _mod()
     available = m._anonymous_publication_available
-    # Not hasattr: _restore_portable ASSIGNS os.O_TMPFILE = None where there
-    # was no attribute to restore, which is every macOS and Windows run, so
-    # after any earlier test in this suite hasattr is True and the value is
-    # None.  The predicate under test reads the value for that reason.
 
     def unforced():
         return getattr(os, "O_TMPFILE", None) is not None and os.name != "nt"
@@ -2399,19 +2382,6 @@ def test_portable_publication_env_forces_the_named_path(tmp):
             os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION", None)
         else:
             os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = old
-
-
-def _force_portable(mod):
-    old = getattr(mod.os, "O_TMPFILE", None)
-    mod.os.O_TMPFILE = None
-    return old
-
-
-def _restore_portable(mod, old):
-    if old is None:
-        mod.os.O_TMPFILE = None
-    else:
-        mod.os.O_TMPFILE = old
 
 
 def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(tmp):
@@ -2461,8 +2431,7 @@ def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(t
         assert len(list(lock_root.glob("*.create-proof"))) == 1
 
         m = _mod()
-        old = _force_portable(m)
-        try:
+        with _patched(m.os, O_TMPFILE=None):
             for attempt in range(2):
                 writer = m._ConnectorLogWriter(
                     path, max_bytes=32 if kind == "rotate" else 16,
@@ -2470,8 +2439,6 @@ def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(t
                 writer.close()
                 assert not proof.exists(), (
                     f"{kind} torn claim survived start {attempt}")
-        finally:
-            _restore_portable(m, old)
 
         assert not list(lock_root.glob("*.create-proof"))
         assert not list(lock_root.glob("*.create.*"))
@@ -2506,16 +2473,15 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_key(tmp):
     """Key publication binds the claim fd identity to its directory entry."""
     m = _mod()
     path = Path(tmp) / "swap-key"
-    old_tmpfile = _force_portable(m)
-    _old_entry, foreign = _claim_swap_restore(
-        m, m._ConnectorLogWriter._named_publish_paths(path)[1])
-    try:
-        with _refuses("claim fd/path identity swap was accepted", FileExistsError):
-            m._ConnectorLogWriter._publish_named_bytes(
-                path, b"K" * 32, auth_key=b"K" * 32)
-    finally:
-        m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
-        _restore_portable(m, old_tmpfile)
+    with _patched(m.os, O_TMPFILE=None):
+        _old_entry, foreign = _claim_swap_restore(
+            m, m._ConnectorLogWriter._named_publish_paths(path)[1])
+        try:
+            with _refuses("claim fd/path identity swap was accepted", FileExistsError):
+                m._ConnectorLogWriter._publish_named_bytes(
+                    path, b"K" * 32, auth_key=b"K" * 32)
+        finally:
+            m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
     assert foreign.read_bytes() == b"FOREIGN-CLAIM"
     assert not m._ConnectorLogWriter._named_publish_paths(path)[1].exists()
 
@@ -2529,20 +2495,19 @@ def test_connector_named_claim_fd_entry_swap_restore_is_rejected_for_journals(tm
         seed.close()
         path.write_bytes(history)
         writer = m._ConnectorLogWriter(path, max_bytes=32, backup_count=1, lock_root=lock_root) if kind == "rotate" else None
-        old_tmpfile = _force_portable(m)
-        journal = writer._rotation_manifest_path() if writer else lock_root / f"{seed._identity_digest}.migrate.json"
-        _old_entry, foreign = _claim_swap_restore(m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
-        try:
-            with _refuses(f"{kind} claim fd/path swap was accepted", FileExistsError):
+        with _patched(m.os, O_TMPFILE=None):
+            journal = writer._rotation_manifest_path() if writer else lock_root / f"{seed._identity_digest}.migrate.json"
+            _old_entry, foreign = _claim_swap_restore(m, m._ConnectorLogWriter._named_publish_paths(journal)[1])
+            try:
+                with _refuses(f"{kind} claim fd/path swap was accepted", FileExistsError):
+                    if writer:
+                        writer.write("x")
+                    else:
+                        m._ConnectorLogWriter(path, max_bytes=16, backup_count=1, lock_root=lock_root)
+            finally:
+                m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
                 if writer:
-                    writer.write("x")
-                else:
-                    m._ConnectorLogWriter(path, max_bytes=16, backup_count=1, lock_root=lock_root)
-        finally:
-            m._ConnectorOwnership._entry_identity = staticmethod(_old_entry)
-            _restore_portable(m, old_tmpfile)
-            if writer:
-                writer.close()
+                    writer.close()
         assert foreign.read_bytes() == b"FOREIGN-CLAIM", kind
 
 
@@ -3720,11 +3685,8 @@ def test_connector_staging_key_bootstrap_transaction_residue_recovers_twice(tmp)
     assert stage.exists(), "no writer-created stage residue to recover"
 
     m = _mod()
-    old = _force_portable(m)
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         _key, listings = _restart_bootstrap_twice(m, path, lock_root, key_path)
-    finally:
-        _restore_portable(m, old)
     assert not proof.exists() and not stage.exists()
     assert not list(lock_root.glob("*.create.*")), sorted(
         item.name for item in lock_root.glob("*.create.*"))
@@ -3748,11 +3710,8 @@ def test_connector_staging_key_bootstrap_partial_payload_recovers_twice(tmp):
     assert 0 < len(torn) < 32, torn
 
     m = _mod()
-    old = _force_portable(m)
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         key, listings = _restart_bootstrap_twice(m, path, lock_root, key_path)
-    finally:
-        _restore_portable(m, old)
     assert not payload_path.exists()
     assert not list(lock_root.glob("*.create.*")), sorted(
         item.name for item in lock_root.glob("*.create.*"))
@@ -3764,8 +3723,7 @@ def test_connector_staging_key_bootstrap_partial_payload_recovers_twice(tmp):
 def test_connector_staging_key_bootstrap_preserves_unauthenticated_residue(tmp):
     """A durable authority never turns a foreign fixed entry into ownership."""
     m = _mod()
-    old = _force_portable(m)
-    try:
+    with _patched(m.os, O_TMPFILE=None):
         for case_name in ("foreign-proof", "foreign-pair", "rebound-stage"):
             case = Path(tmp) / f"authority-{case_name}"
             case.mkdir()
@@ -3820,8 +3778,6 @@ def test_connector_staging_key_bootstrap_preserves_unauthenticated_residue(tmp):
                 else:
                     assert stage.read_bytes() == stage_before, case_name
                 assert not key_path.exists(), case_name
-    finally:
-        _restore_portable(m, old)
 
 
 def test_connector_named_fallback_crash_loops_do_not_accumulate_uuid_temps(tmp):
