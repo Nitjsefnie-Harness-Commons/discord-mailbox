@@ -8,6 +8,7 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _util  # noqa: E402
@@ -17,8 +18,7 @@ BUDGET = {"schema_version": 1, "counter": "callgrind Ir", "tolerance": 0.02, "py
 
 
 def _thresholds(tmp, name, **record):
-    Path(tmp, name).write_text(json.dumps({"schema_version": 1, "coverage": {"python": record}}), encoding="utf-8")
-    return os.path.join(tmp, name)
+    return Path(tmp, name).write_text(json.dumps({"schema_version": 1, "coverage": {"python": record}}), encoding="utf-8") and os.path.join(tmp, name)  # write_text returns a nonzero length
 
 
 def test_a_raise_moves_the_floor_to_measured_minus_the_gap_only_upward(tmp):
@@ -29,8 +29,7 @@ def test_a_raise_moves_the_floor_to_measured_minus_the_gap_only_upward(tmp):
 def test_the_gate_floor_is_the_higher_of_head_and_base_and_refuses_a_lower_floor_a_wider_gap_or_a_malformed_document(tmp):
     low, high, wide = (_thresholds(tmp, n, floor=f, gap=g) for n, f, g in (("low", 48.0, 1.5), ("high", 50.0, 1.5), ("wide", 50.0, 2.0)))
     with contextlib.redirect_stdout(io.StringIO()) as printed:  # raised, equal, lowered floor; widened gap
-        codes = [FLOOR.main(["floor", "--thresholds", head, "--base", base]) for head, base in ((high, low), (low, low), (low, high), (wide, high))]
-    assert (codes, printed.getvalue(), (bad := [FLOOR.main(["floor", "--thresholds", path]) for path in (_thresholds(tmp, "nan", floor=float("nan"), gap=1.5), _thresholds(tmp, "gapless", floor=48.0), _thresholds(tmp, "text", floor="48.0", gap=1.5), _thresholds(tmp, "over", floor=100.5, gap=1.5), _thresholds(tmp, "negative", floor=48.0, gap=-1.5))])) == ([0, 0, 1, 1], "50.0\n48.0\n", [2] * 5), (codes, printed.getvalue(), bad)  # then five malformed documents
+        assert ((codes := [FLOOR.main(["floor", "--thresholds", head, "--base", base]) for head, base in ((high, low), (low, low), (low, high), (wide, high))]), printed.getvalue(), (bad := [FLOOR.main(["floor", "--thresholds", path]) for path in (_thresholds(tmp, "nan", floor=float("nan"), gap=1.5), _thresholds(tmp, "gapless", floor=48.0), _thresholds(tmp, "text", floor="48.0", gap=1.5), _thresholds(tmp, "over", floor=100.5, gap=1.5), _thresholds(tmp, "negative", floor=48.0, gap=-1.5))])) == ([0, 0, 1, 1], "50.0\n48.0\n", [2] * 5), (codes, printed.getvalue(), bad)  # then five malformed documents
 
 
 def test_a_perf_workload_fails_over_tolerance_missing_failed_or_unbudgeted_and_main_lowers_a_budget_only_past_the_tolerance(_tmp):
@@ -39,16 +38,16 @@ def test_a_perf_workload_fails_over_tolerance_missing_failed_or_unbudgeted_and_m
         raise AssertionError(PERF.counts({"python": "3.13.14", "environment": None, "failed": [], "workloads": {"a": 0}}))
 
 
-def test_each_perf_budget_change_is_a_budget_only_commit_and_their_trailers_name_every_raise(tmp):
+def test_each_perf_budget_change_is_a_budget_only_commit_their_trailers_name_every_raise_and_a_head_behind_main_fails_freshness(tmp):
     alone, mixed, base = {"sha": "1", "files": [PERF.BUDGET_FILE], "declares": ["a", "c"]}, {"sha": "2", "files": [PERF.BUDGET_FILE, "x.py"], "declares": ["b"]}, ({"a": 1000, "c": 9}, Decimal("0.01"), "3.13.14")
     assert ([PERF.raises(head, base) for head in (({"a": 1001, "c": 9, "d": 1}, *base[1:]), ({"a": 1000}, Decimal("0.02"), base[2]), (*base[:2], "3.13.15"))], PERF.mixed_budget_commits([alone, mixed, {"sha": "3", "files": ["x.py"], "declares": []}]), PERF.undeclared_raises({"a", "b", "c"}, [alone, mixed])) == ([{"a", "d"}, {"tolerance", "c"}, {"python"}], ["2"], ["b"])  # a mixed commit's trailer names nothing
-    with contextlib.redirect_stdout(io.StringIO()):  # an unnamed raise, a mixed budget commit, a Python other than the budget's, then a named raise
-        assert [PERF.check({"python": "3.13.14", "environment": None, "failed": [], "workloads": {"a": 1000}}, {**BUDGET, "python": py, "workloads": {"a": 1500}}, {**BUDGET, "python": py}, commits) for py, commits in (("3.13.14", [{**alone, "declares": []}]), ("3.13.14", [alone, mixed]), ("3.13.15", [alone]), ("3.13.14", [alone]))] == [1, 1, 1, 0]
-    for name in ("code.py", "budget.json"):  # the git read: every file a commit changes, and its trailer's names
+    for name in ("code.py", "budget.json"):  # the git reads: every file a commit changes and its trailer's names; then main gains a commit to code.py the head lacks
         Path(tmp, name).write_text("{}", encoding="utf-8")
-    for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "mixed\n\nPerf-Budget-Raise: a, b\nCo-Authored-By: c <c@example.invalid>"]):
-        subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
-    assert [(c["files"], c["declares"]) for c in PERF.commits_in("HEAD", tmp)] == [(["budget.json", "code.py"], ["a", "b"])]
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "mixed\n\nPerf-Budget-Raise: a, b\nCo-Authored-By: c <c@example.invalid>"], ["rm", "-q", "code.py"], ["commit", "-qm", "later"], ["checkout", "-q", "--detach", "HEAD~1"], ["remote", "add", "origin", tmp]):
+        subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
+    with mock.patch.object(FRESH, "gate_paths", lambda _root: ["code.py"]), contextlib.redirect_stdout(io.StringIO()) as printed:  # an unnamed raise, a mixed budget commit, a Python other than the budget's, a named raise, then a named raise measured past its new budget
+        assert [PERF.check({"python": "3.13.14", "environment": None, "failed": [], "workloads": {"a": n}}, {**BUDGET, "python": py, "workloads": {"a": 1500}}, {**BUDGET, "python": py}, commits) for py, commits, n in (("3.13.14", [{**alone, "declares": []}], 1000), ("3.13.14", [alone, mixed], 1000), ("3.13.15", [alone], 1000), ("3.13.14", [alone], 1000), ("3.13.14", [alone], 1531))] == [1, 1, 1, 0, 1]
+        assert ([(c["files"], c["declares"]) for c in PERF.commits_in("HEAD", tmp)], FRESH.check(tmp, "pull_request"), "main holds 1 commit(s) this head does not, touching a file a required check reads:" in printed.getvalue().splitlines()) == ([(["budget.json", "code.py"], ["a", "b"])], 1, True), printed.getvalue()  # a stale head fails freshness
 
 
 def test_the_freshness_set_holds_the_files_the_required_checks_name_and_no_record_or_code_named_only_as_a_directory(_tmp):
@@ -58,7 +57,8 @@ def test_the_freshness_set_holds_the_files_the_required_checks_name_and_no_recor
 def test_the_ci_gate_is_final_once_every_covered_run_completed_and_green_only_when_each_job_succeeded_or_skipped_a_guard(_tmp):
     runs, lint, tests = {path: {"id": path, "status": "completed"} for path in GATE.COVERED}, ".github/workflows/lint.yml", ".github/workflows/tests.yml"  # each run's jobs are pylint succeeded unless a row says otherwise
     rows = (({}, {}, (True, [])), ({}, {lint: [("pylint", "success"), ("guard / lookup", "skipped")]}, (True, [])), ({}, {lint: [("pylint", "skipped"), ("guard", "skipped")]}, (True, [f"{lint}: pylint skipped", f"{lint}: guard skipped"])), ({}, {tests: [("suites (macos-latest, 3.13)", "cancelled"), ("guard / lookup", "cancelled")]}, (True, [f"{tests}: suites (macos-latest, 3.13) cancelled", f"{tests}: guard / lookup cancelled"])), ({".github/workflows/perf.yml": None}, {}, (False, [".github/workflows/perf.yml: no run"])), ({".github/workflows/types.yml": {"id": 0, "status": "in_progress"}}, {}, (False, [".github/workflows/types.yml: run in_progress"])), ({}, {".github/workflows/secrets.yml": []}, (True, [".github/workflows/secrets.yml: no jobs"])))
-    assert (GATE.COVERED, verdicts := [GATE.verdict({**runs, **runs_over}, {path: [{"name": n, "conclusion": c} for n, c in jobs_over.get(path, [("pylint", "success")])] for path in GATE.COVERED}) for runs_over, jobs_over, _ in rows]) == ((".github/workflows/tests.yml", ".github/workflows/lint.yml", ".github/workflows/types.yml", ".github/workflows/audit.yml", ".github/workflows/codeql.yml", ".github/workflows/actionlint.yml", ".github/workflows/secrets.yml", ".github/workflows/perf.yml"), [want for *_, want in rows]), (GATE.COVERED, verdicts)
+    with mock.patch.object(GATE, "api", lambda _endpoint: [{"workflow_runs": [{"path": p, "event": "pull_request", "id": n, "status": "completed", "run_attempt": 1} for n, p in enumerate(GATE.COVERED)], "jobs": [{"name": "pylint", "conclusion": "failure"}]}]), mock.patch.dict(os.environ, {"DISCORD_MAILBOX_REPO": "o/r", "DISCORD_MAILBOX_HEAD_SHA": "1", "GITHUB_STEP_SUMMARY": ""}), contextlib.redirect_stdout(io.StringIO()) as printed:  # main exits red on a finished run whose job failed
+        assert (GATE.COVERED, verdicts := [GATE.verdict({**runs, **runs_over}, {path: [{"name": n, "conclusion": c} for n, c in jobs_over.get(path, [("pylint", "success")])] for path in GATE.COVERED}) for runs_over, jobs_over, _ in rows], GATE.main(), printed.getvalue().count(": pylint failure\n")) == ((".github/workflows/tests.yml", ".github/workflows/lint.yml", ".github/workflows/types.yml", ".github/workflows/audit.yml", ".github/workflows/codeql.yml", ".github/workflows/actionlint.yml", ".github/workflows/secrets.yml", ".github/workflows/perf.yml"), [want for *_, want in rows], 1, 8), (GATE.COVERED, verdicts, printed.getvalue())
 
 
 def main():
