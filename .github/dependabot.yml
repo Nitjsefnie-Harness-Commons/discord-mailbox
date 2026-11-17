@@ -14,8 +14,8 @@
 
 version: 2
 updates:
-  # Each root requirements-*.in, recompiled into its hash-pinned .txt: the
-  # lint, type, coverage, build and audit tools.
+  # requirements-dev.in (CI tools) and requirements-build.in, recompiled
+  # into their hash-pinned .txt.
   - package-ecosystem: pip
     directory: "/"
     schedule:

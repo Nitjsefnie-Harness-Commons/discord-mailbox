@@ -503,7 +503,7 @@ The workflow lint needs the actionlint build the `actionlint` workflow
 installs, Nitjsefnie-OSC/actionlint v1.7.12-queue.1: stock 1.7.12 rejects
 the `queue: max` key in `claim.yml`.
 
-`pip install -r requirements-dev.txt -r requirements-test.txt` gets the
+`pip install --require-hashes -r requirements-dev.txt` gets the
 pinned toolchain. Use `-co --exclude-standard`, not a bare `git ls-files`:
 a brand-new module is untracked until you stage it, and pylint would
 otherwise report a clean run over every file except the one you just
