@@ -28,10 +28,11 @@ def _recorded(state_dir):
 
 def test_each_gateway_event_records_its_state_before_the_handler_it_chains(tmp):
     lines, seen, runs, discord_log = [], [], [], logging.getLogger("discord")
+    level = discord_log.level
     discord_log.setLevel(logging.ERROR)    # above INFO, so the run must lower it and put it back
 
     async def bound_on_ready():
-        seen.append("ran")
+        seen.append(_recorded(tmp)["state"])
 
     async def gateway():
         seen.append(_recorded(tmp)["state"])
@@ -42,20 +43,29 @@ def test_each_gateway_event_records_its_state_before_the_handler_it_chains(tmp):
 
     client = types.SimpleNamespace(on_ready=bound_on_ready, event=lambda f: setattr(client, f.__name__, f) or f,
                                    run=lambda token, *, log_handler: runs.append((token, log_handler)) or asyncio.run(gateway()))
-    _gateway_state.run(client, "token", Path(tmp), lines.append)
-    logging.getLogger("discord.gateway").info("after the run")
+    try:
+        _gateway_state.run(client, "token", Path(tmp), lines.append)
+        logging.getLogger("discord.gateway").info("after the run")
+        assert discord_log.level == logging.ERROR and not discord_log.handlers, (discord_log.level, discord_log.handlers)
+    finally:
+        discord_log.setLevel(level)
     assert runs == [("token", None)], runs
-    assert seen == ["starting", "starting", "ran", "connected", "disconnected", "reconnecting", "connected"], seen
+    assert seen == ["starting", "starting", "connected", "connected", "disconnected", "reconnecting", "connected"], seen
     assert _recorded(tmp)["pid"] == os.getpid()
+    if _util.POSIX_MODES:
+        assert (Path(tmp) / _gateway_state.STATE_FILE).stat().st_mode & 0o777 == 0o600
     assert "discord.gateway INFO: an info record" in lines and not any("after the run" in line for line in lines), lines
-    assert discord_log.level == logging.ERROR and not discord_log.handlers, (discord_log.level, discord_log.handlers)
 
 
 def test_a_state_that_cannot_be_written_is_logged_and_the_gateway_still_runs(tmp):
     lines, runs, discord_log = [], [], logging.getLogger("discord")
+    level = discord_log.level
     discord_log.setLevel(logging.DEBUG)    # already below INFO, so the run must not raise it
     client = types.SimpleNamespace(event=lambda f: f, run=lambda token, *, log_handler: runs.append((token, discord_log.level)))
-    _gateway_state.run(client, "token", Path(tmp) / "missing", lines.append)
+    try:
+        _gateway_state.run(client, "token", Path(tmp) / "missing", lines.append)
+    finally:
+        discord_log.setLevel(level)
     assert runs == [("token", logging.DEBUG)], runs
     assert any(line.startswith("gateway state 'starting' not recorded: FileNotFoundError") for line in lines), lines
 
@@ -95,6 +105,7 @@ def test_only_a_live_connector_is_reported_and_a_timeout_names_its_state(tmp):
 
     try:
         assert timeout_for(live.pid) == "connector did not respond within 0.2s (it is running for 'gw-test', gateway state 'reconnecting')"
+        assert _gateway_state.current(root, IDENTITY, core.pid_alive, lambda *_: None) == "reconnecting", "unknown counts as a connector"
         assert timeout_for(dead.pid) == not_running, "a connector killed without cleanup is not running"
         assert timeout_for(recycled.pid) == not_running, "a recycled PID is not this identity's connector"
         assert timeout_for(live.pid, "{") == not_running
