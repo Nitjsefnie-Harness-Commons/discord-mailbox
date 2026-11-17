@@ -30,10 +30,24 @@ def _mod():
     return _util.load(MB, "mb_connector_log_rotation")
 
 
+@contextlib.contextmanager
+def _patched_keys(owner, attrs):
+    saved = {key: owner[key] for key in attrs if key in owner}
+    owner.update(attrs)
+    try:
+        yield
+    finally:
+        for key in attrs:
+            owner.pop(key, None)
+        owner.update(saved)
+
+
 def _patched(owner, **attrs):
-    """Set `attrs` on `owner` (a module, class, instance or `sys.modules`) until the block exits."""
+    """Set `attrs` on `owner` (a module, class, instance or `sys.modules`) until the block exits.
+
+    A dict owner gets only its named keys back, so a module first imported inside the block stays."""
     if isinstance(owner, dict):
-        return mock.patch.dict(owner, attrs)
+        return _patched_keys(owner, attrs)
     return mock.patch.multiple(owner, create=True, **attrs)
 
 
@@ -168,6 +182,15 @@ def _fixture_lock_root(test):
     run.__name__ = test.__name__
     run.__doc__ = test.__doc__
     return run
+
+
+def test_patching_sys_modules_restores_only_the_named_keys(tmp):
+    del tmp
+    real = sys.modules["json"]
+    with _patched(sys.modules, json=None, _absent_probe=real):
+        sys.modules["_late_import"] = real      # a module imported inside the block
+    assert sys.modules["json"] is real and "_absent_probe" not in sys.modules
+    assert sys.modules.pop("_late_import", None) is real, "a module imported in the block was evicted"
 
 
 def test_connector_log_rotates_with_bounded_backups(tmp):
