@@ -1364,7 +1364,7 @@ def _meta_request(identity, payload, timeout):
         if out_path.exists():
             return _take_response(out_path)
         time.sleep(0.2)
-    return _withdraw(in_path, out_path, timeout, identity)
+    return _withdraw(in_path, out_path, timeout, identity, pid_alive, is_connector_process)
 
 
 def attachments_cli(args):

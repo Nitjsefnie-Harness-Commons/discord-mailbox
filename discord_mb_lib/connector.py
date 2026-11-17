@@ -22,6 +22,7 @@ from . import _linked
 from . import _meta_claim
 from . import _control_files
 from . import _ext_trust
+from . import _gateway_state
 from . import _retention
 from . import _secrets
 
@@ -2767,12 +2768,11 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # remain installed-but-dead indefinitely.
         await _recover_status_after_gateway()
 
-    primary = None
-    primary_tb = None
+    primary = primary_tb = None
     if not token:
         raise SystemExit('connector reached the gateway with no token')
     try:
-        client.run(token, log_handler=None)
+        _gateway_state.run(client, token, sd, log)
     except BaseException as exc:
         primary = exc
         primary_tb = sys.exc_info()[2]
@@ -2781,8 +2781,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     # presence clear here — the dying session + the next connector's fresh connect
     # clears it, and the startup sweep is the hard guarantee).  BaseException is
     # intentional: a plugin's SystemExit/KeyboardInterrupt cannot skip cleanup.
-    sweep_error = None
-    sweep_tb = None
+    sweep_error = sweep_tb = None
     try:
         sweep_status_plugin(identity)
     except BaseException as exc:
@@ -2849,6 +2848,7 @@ __all__ = [
     '_attachments',
     '_claim_ownership',
     '_ext_trust',
+    '_gateway_state',
     '_linked',
     '_meta_claim',
     '_open_dm_channel',
