@@ -16,6 +16,7 @@ import _gateway  # noqa: E402
 import _util  # noqa: E402
 
 sys.path.insert(0, _util.SCRIPTS)
+from discord_mb_lib._send_errors import _send_nonce  # noqa: E402
 
 
 def _http(status, message=""):
@@ -114,6 +115,8 @@ def test_a_resent_chunk_carries_the_nonce_of_its_first_attempt(tmp):
     nonces = [nonce for _, nonce in calls]
     assert nonces[0] == nonces[2], "the retry of a lost first chunk must reuse its nonce"
     assert len(set(nonces)) == 5 and all(17 <= len(n) <= 25 for n in nonces), nonces
+    named = {n: _send_nonce(Path(n), 0) for n in ("x.a.json", "x.b.json", "id.json", "id.json.claimed")}
+    assert named["x.a.json"] != named["x.b.json"] and named["id.json"] == named["id.json.claimed"], named
 
 
 def main():
