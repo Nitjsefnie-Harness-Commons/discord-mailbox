@@ -32,6 +32,7 @@ def _mod():
 
 @contextlib.contextmanager
 def _patched_keys(owner, attrs):
+    """Put back only the named keys, so a module first imported inside the block stays."""
     saved = {key: owner[key] for key in attrs if key in owner}
     owner.update(attrs)
     try:
@@ -43,7 +44,7 @@ def _patched_keys(owner, attrs):
 
 
 def _patched(owner, **attrs):
-    """Set `attrs` on `owner` (a module, class, instance or dict) until the block exits; a dict keeps other keys."""
+    """Set `attrs` on `owner` (a module, class, instance or `sys.modules`) until the block exits."""
     if isinstance(owner, dict):
         return _patched_keys(owner, attrs)
     return mock.patch.multiple(owner, create=True, **attrs)
