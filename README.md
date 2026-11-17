@@ -548,11 +548,20 @@ nothing in CI lowers it.
 | `tag` | Watches `discord_mb_lib/core.py`. When a push to `main` or a dispatch names a commit on `main` whose version is a plain `X.Y.Z` with no tag yet, a read-only job reads that version from the built package; a write-scoped job that runs no repository code then waits for the commit's other push and pull-request checks, creates the annotated tag `v<version>` through the API and dispatches `release`. When the tag already exists, a push that left `__version__` alone skips the write job and anything else fails. |
 | `release` | Fires on that tag. Read-only jobs run every suite and build the wheel with the tagged commit's timestamp, so a rebuild gives the same bytes, and refuse a tag that is not `v` plus the wheel's version. A write-scoped job that runs no repository code then waits for the commit's other push and pull-request checks, checks the wheel against the build's `SHA256SUMS` and publishes both. A published asset never changes: on an existing release it uploads only missing assets, and fails without uploading if one already there differs. |
 
-**There is deliberately no speed gate here**, unlike the dashboard repos.
-pytest cannot run these suites — the tests are plain functions taking
-helper arguments, which pytest reads as fixture requests — and the
-comparator needs `--junitxml`, which only pytest emits. Rather than
-reshape the tests to suit a gate, the gate is omitted.
+**`perf` counts work, not time.** It runs each named workload in
+`scripts/ci/perf_workloads.py` under callgrind and counts its
+instructions minus those of a run that only starts up and imports what
+the workload needs. Wall-clock speed is not gated: the dashboard repos'
+speed comparator needs pytest's `--junitxml`, and pytest cannot run
+these suites (the tests are plain functions taking helper arguments,
+which pytest reads as fixture requests). Budgets live in
+`.github/perf-budget.json`. A pull request fails when a workload
+measures above budget × (1 + tolerance), when a budgeted workload is
+missing or fails to measure, and when a measured workload has no budget.
+Each push to `main` lowers a budget whose workload got cheaper by more
+than the tolerance and commits it through `ratchet-push.yml`. A raise is
+its own commit touching only the budget file, with a `Perf-Budget-Raise:
+<workload>, ...` trailer (`*` for the tolerance or the Python version).
 
 **Releasing = bumping `__version__`.** `tag` creates the tag, `release`
 publishes from it. Nothing bumps the version automatically: deciding

@@ -5,12 +5,14 @@ import io
 import json
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _util  # noqa: E402
 
 FLOOR = _util.load(os.path.join(_util.SCRIPTS, "scripts", "ci", "coverage_floor.py"))
+PERF = _util.load(os.path.join(_util.SCRIPTS, "scripts", "ci", "perf_gate.py"))
 
 
 def _thresholds(tmp, name, **record):
@@ -34,6 +36,20 @@ def test_the_gate_floor_is_the_higher_of_head_and_base_and_refuses_a_lower_floor
     for bad in (_thresholds(tmp, "nan", floor=float("nan"), gap=1.5), _thresholds(tmp, "gapless", floor=48.0), _thresholds(tmp, "text", floor="48.0", gap=1.5),
                 _thresholds(tmp, "over", floor=100.5, gap=1.5), _thresholds(tmp, "negative", floor=48.0, gap=-1.5)):
         assert FLOOR.main(["floor", "--thresholds", bad]) == 2, bad
+
+
+def test_a_perf_workload_fails_over_tolerance_missing_failed_or_unbudgeted_and_main_lowers_a_budget_only_past_the_tolerance(_tmp):
+    rows = [PERF.compare(measured, failed, {"a": 1000}, Decimal("0.02")) for measured, failed in (({"a": 1020}, ()), ({"a": 1021}, ()), ({}, ()), ({}, {"a"}), ({"a": 1, "b": 5}, ()))]
+    assert [[v for *_, v in r] for r in rows] == [["ok"], ["over budget"], ["missing"], ["failed to measure"], ["ok", "unbudgeted"]], rows
+    doc = {"schema_version": 1, "counter": "callgrind Ir", "tolerance": 0.02, "python": "3.13.14", "workloads": {"a": 1000}}
+    assert [(PERF.tighten(doc, {"a": n}) or {}).get("workloads") for n in (970, 980, 990, 1100)] == [{"a": 970}, None, None, None] and doc["workloads"] == {"a": 1000}
+
+
+def test_a_perf_budget_raise_needs_a_budget_only_commit_whose_trailer_names_it(_tmp):
+    alone, touching, base = [".github/perf-budget.json"], [".github/perf-budget.json", "run_tests.py"], ({"a": 1000, "c": 9}, Decimal("0.01"), "3.13.14")
+    assert [PERF.raises(head, base) for head in (({"a": 1001, "c": 9, "d": 1}, *base[1:]), ({"a": 1000}, Decimal("0.02"), base[2]), (*base[:2], "3.13.15"))] == [{"a", "d"}, {"*"}, {"*"}]
+    for files, named, undeclared in ((alone, ["a"], []), (touching, ["a"], ["a"]), (alone, ["b"], ["a"]), (alone, ["*"], [])):
+        assert PERF.undeclared_raises({"a"}, [{"files": files, "raises": named}]) == undeclared, (files, named)
 
 
 def main():
