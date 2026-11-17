@@ -2,6 +2,7 @@
 """A meta request is claimed by the connector or withdrawn by the CLI, never both,
 and a claimed one is never reported as a dead connector. Its files are private, and
 a response left past the bound is swept. Stdlib and discord.py only, OS-agnostic."""
+import asyncio
 import contextlib
 import io
 import json
@@ -28,7 +29,7 @@ def _cli_side(tmp, step):
     in_dir, out_dir = Path(tmp) / "in", Path(tmp) / "out"
     in_dir.mkdir()
     out_dir.mkdir()
-    clock = types.SimpleNamespace(now=1e6)          # a real clock's origin, never zero
+    clock = types.SimpleNamespace(now=time.time())  # the connector judges a request's age by the real clock
     clock.time = lambda: clock.now
 
     def sleep(delay):
@@ -59,7 +60,7 @@ def test_a_response_landing_after_the_claim_is_returned(tmp):
     with contextlib.ExitStack() as connector:
         def claim_and_answer(in_dir, out_dir):
             for p in in_dir.glob("*.json"):
-                connector.enter_context(_claim(p))
+                connector.enter_context(_claim(p, out_dir))
                 (out_dir / p.name).write_text(json.dumps({"ok": True, "late": 1}), encoding="utf-8")
 
         with _cli_side(tmp, claim_and_answer) as (_, out_dir):
@@ -75,7 +76,7 @@ def test_a_claimed_rename_past_its_deadline_exits_75_as_pending(tmp):
     with contextlib.ExitStack() as connector:
         def claim(in_dir, out_dir):
             for p in in_dir.glob("*.json"):
-                held.append(connector.enter_context(_claim(p)))
+                held.append(connector.enter_context(_claim(p, out_dir)))
 
         with _cli_side(tmp, claim) as (in_dir, out_dir), contextlib.redirect_stderr(stderr):
             sys.argv = ["discord_mb.py", "thread", "me", "--timeout", "0.2",
@@ -230,6 +231,91 @@ def test_the_connector_sweeps_stale_responses_at_start_and_on_every_pass(tmp):
     assert later[1] == sorted([*kept, out / "first.json"]), later[1]
     assert later[2] is False, "a response gone stale after start was kept"
     assert fired == set(faults), fired
+
+
+def _read(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _request(**fields):
+    return {"op": "conversation", "limit": 1, **fields}
+
+
+def test_a_request_cancelled_mid_operation_is_answered_as_interrupted_and_not_run_again(tmp):
+    state, runs, seen = Path(tmp) / "state", [], {}
+
+    async def hang(*, limit=100):       # the operation: a bridge read that never finishes
+        runs.append(limit)
+        await asyncio.sleep(3600)
+        yield
+
+    async def script(client):
+        client.bridge.history = hang
+        (state / "in" / "r.json").write_text(json.dumps(_request()), encoding="utf-8")
+        for _ in range(100):            # bounded: a request that never reaches the operation fails, not hangs
+            if runs:
+                break
+            await asyncio.sleep(0.05)
+        watcher = next(t for t in asyncio.all_tasks() if t.get_coro().__name__ == "meta_watcher")
+        watcher.cancel()
+        await asyncio.sleep(0.2)
+        seen.update(response=_read(state / "out" / "r.json"), left=list((state / "in").iterdir()),
+                    cancelled=watcher.cancelled())
+
+    try:
+        _gateway.run(tmp, script)
+    except asyncio.CancelledError:      # the cancelled watcher fails the harness's gather
+        pass
+    assert seen["response"]["ok"] is False and "outcome is unknown" in seen["response"]["error"], seen
+    assert seen["left"] == [] and seen["cancelled"] and runs == [1], (seen, runs)
+
+
+def test_a_claim_a_killed_connector_left_is_answered_at_startup_and_never_run(tmp):
+    state, seen = Path(tmp) / "state", {}
+    (state / "in").mkdir(parents=True)
+    (state / "in" / "dead.json.claimed").write_text(json.dumps(_request()), encoding="utf-8")
+    (state / "in" / "done.json.claimed").write_text(json.dumps(_request()), encoding="utf-8")
+    (state / "out").mkdir()
+    (state / "out" / "done.json").write_text('{"ok": true}', encoding="utf-8")     # answered before the kill
+
+    async def script(client):
+        seen.update(response=_read(state / "out" / "dead.json"), left=list((state / "in").iterdir()),
+                    done=_read(state / "out" / "done.json"))
+        await client.ask({"live": {"op": "nope"}})      # the watcher has made a pass
+
+    client = _gateway.run(tmp, script)
+    assert seen["response"]["ok"] is False and "outcome is unknown" in seen["response"]["error"], seen
+    assert seen["done"] == {"ok": True} and seen["left"] == [] and client.bridge.reads == [], (seen, client.bridge.reads)
+
+
+def test_a_request_older_than_its_callers_wait_is_answered_with_an_expiry_and_not_run(tmp):
+    now = time.time()
+    fields = {"stale": {"created": now - 100, "timeout": 10}, "just-over": {"created": now - 11, "timeout": 10},
+              "just-under": {"created": now - 9, "timeout": 10}, "fresh": {"created": now, "timeout": 60},
+              "no-timeout": {"created": now - 1e6}, "no-created": {"timeout": 1}, "legacy": {},
+              "bad-type": {"created": "yesterday", "timeout": 10}}
+
+    async def script(client):
+        await client.ask({name: _request(**extra) for name, extra in fields.items()})
+
+    client = _gateway.run(tmp, script)
+    oks = {name: resp["ok"] for name, resp in client.responses.items()}
+    assert oks == {n: n not in ("stale", "just-over") for n in fields}, client.responses
+    assert "expired" in client.responses["stale"]["error"], client.responses
+    assert len(client.bridge.reads) == 6 and not any((Path(tmp) / "state" / "in").iterdir()), client.bridge.reads
+
+
+def test_a_cli_request_carries_its_creation_time_and_its_wait(tmp):
+    seen = []
+
+    def read(in_dir, out_dir):
+        for p in in_dir.glob("*.json"):
+            seen.append(_read(p))
+            (out_dir / p.name).write_text(json.dumps({"ok": True}), encoding="utf-8")
+
+    with _cli_side(tmp, read):
+        core._meta_request("me", {"op": "list-agents"}, 7)
+    assert [(r["op"], r["timeout"], abs(r["created"] - time.time()) < 60) for r in seen] == [("list-agents", 7, True)], seen
 
 
 def main():

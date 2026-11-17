@@ -1358,7 +1358,7 @@ def _meta_request(identity, payload, timeout):
     req_id = f'{uuid.uuid4()}.json'
     in_path = meta_in_dir(identity) / req_id
     out_path = meta_out_dir(identity) / req_id
-    _control_files.write_private(in_path, json.dumps(payload))
+    _control_files.write_private(in_path, json.dumps({**payload, 'created': time.time(), 'timeout': timeout}))
     deadline = time.time() + timeout
     while time.time() < deadline:
         if out_path.exists():
