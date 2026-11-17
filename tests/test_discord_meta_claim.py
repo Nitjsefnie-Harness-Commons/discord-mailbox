@@ -103,7 +103,7 @@ def test_the_connector_runs_only_what_it_claimed_and_clears_every_claim(tmp):
         async def history(**kwargs):
             for name in ("a", "b"):
                 try:
-                    _withdraw(in_dir / f"{name}.json", out_dir / f"{name}.json", 1, "dm-test")
+                    _withdraw(in_dir / f"{name}.json", out_dir / f"{name}.json", 1, "dm-test", core.pid_alive, core.is_connector_process)
                 except (MetaRequestPending, TimeoutError) as e:
                     outcomes[name] = type(e)
             async for m in real(**kwargs):

@@ -85,6 +85,7 @@
 !/discord_mb_lib/_directory.py
 !/discord_mb_lib/_dm.py
 !/discord_mb_lib/_ext_trust.py
+!/discord_mb_lib/_gateway_state.py
 !/discord_mb_lib/_grep.py
 !/discord_mb_lib/_linked.py
 !/discord_mb_lib/_log_chunks.py
@@ -115,6 +116,7 @@
 !/tests/test_discord_extension_trust.py
 !/tests/test_discord_extensions.py
 !/tests/test_discord_extras.py
+!/tests/test_discord_gateway_state.py
 !/tests/test_discord_linked_messages.py
 !/tests/test_discord_log_recovery.py
 !/tests/test_discord_log_rotation.py
