@@ -32,6 +32,7 @@
 !/.pylintrc
 !/LICENSE
 !/README.md
+!/SECURITY.md
 !/discord_mb.py
 !/pyproject.toml
 !/pyrightconfig.json
