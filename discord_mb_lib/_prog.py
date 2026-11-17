@@ -1,4 +1,4 @@
-"""Invoked command name."""
+"""Program name."""
 import os
 import sys
 
