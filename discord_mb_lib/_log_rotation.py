@@ -137,7 +137,7 @@ class _RotationJournal:
                             publish_entry_identity=item['before_entry_identity'])
         if append:
             self._write_migration_manifest(manifest, kind='rotate')
-        self._published_since_snapshot = True
+            self._published_since_snapshot = True
 
     def _claim_staged_for_replace(self: Any, temporary: Path, *, expected_destination: Path,
                                   identity: Any, entry_identity: Any) -> None:
