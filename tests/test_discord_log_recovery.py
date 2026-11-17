@@ -138,7 +138,8 @@ def test_a_slot_swapped_during_a_rotation_is_refused_and_never_written(tmp):
     m = _mod()
     cls = m._ConnectorLogWriter
     # The swap lands after the last publish, then after the journal unlink and before the reopen.
-    for seam, victim in (("_publish_in_place", "connector.log.1"), ("_cleanup_journal_temp", "connector.log")):
+    for seam, victim, refusal in (("_publish_in_place", "connector.log.1", "namespace path"),
+                                  ("_cleanup_journal_temp", "connector.log", "identity")):
         path = Path(tmp) / seam / "connector.log"
         path.parent.mkdir()
         writer, real = _filled(m, path), cls.__dict__[seam]
@@ -155,13 +156,26 @@ def test_a_slot_swapped_during_a_rotation_is_refused_and_never_written(tmp):
                 try:
                     writer.write("refused")
                 except m._ConnectorOwnershipError as exc:
-                    assert "replaced" in str(exc), (seam, attempt, exc)
+                    assert str(exc) == f"connector log {refusal} was replaced while owned: {path.with_name(victim)}", exc
                 else:
                     raise AssertionError(f"{seam}: write {attempt} accepted a swapped {victim}")
         finally:
             setattr(cls, seam, real)
             writer.close()
         assert path.with_name(victim).read_bytes() == b"FOREIGN\n", seam  # swapped, and never written
+    linked = Path(tmp) / "linked"  # a healthy writer reached through a symlinked directory rotates
+    (Path(tmp) / "real").mkdir()
+    try:
+        os.symlink(Path(tmp) / "real", linked, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        _util.skip("this platform cannot create a symlink")
+    writer = _filled(m, linked / "connector.log")
+    try:
+        for i in range(8):
+            writer.write(f"healthy {i}")
+    finally:
+        writer.close()
+    assert "healthy 7" in (Path(tmp) / "real" / "connector.log").read_text(encoding="utf-8")
 
 
 def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(tmp):
