@@ -117,7 +117,7 @@ def test_setup_hints_name_the_invoked_command(tmp):
         guilds = []
 
         def __init__(self, *args, **kwargs):
-            pass
+            self.ready = None
 
         def event(self, function):
             self.ready = function
@@ -130,8 +130,10 @@ def test_setup_hints_name_the_invoked_command(tmp):
             pass
 
     Path(tmp, "f.txt").write_text("x", encoding="utf-8")
+    def without(items, **kw):
+        return None if kw["name"] == connector.ATTACHMENTS_CHANNEL_NAME else get(items, **kw)
+
     for argv0, name in INVOKED_AS:
-        without = lambda items, **kw: None if kw["name"] == connector.ATTACHMENTS_CHANNEL_NAME else get(items, **kw)
         with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord.utils, "get", without):
             client = _gateway.run(tmp, script)
         with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord, "Client", Bare), \
