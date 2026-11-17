@@ -201,8 +201,9 @@ cached). A deletion made while no connector runs is not followed.
 
 `erase --user-id <id>` removes every inbox, `messages/` and
 `pins/` record whose `from_user_id` is that Discord user id, for every
-identity on the host, and prints `{"user_id": "<id>", "removed": <n>}` with the
-number of files removed. It needs no identity and no running connector. An id
+identity under this process's `<temp>/discord-mailbox`, and prints
+`{"user_id": "<id>", "removed": <n>}` with the number of files removed. It
+needs no identity and no running connector. An id
 that is not all ASCII digits exits 2. With no `discord-mailbox` directory it
 prints `"removed": 0`. A `discord-mailbox` directory this user's mailbox did
 not create (a symlink, another user's, open to other users, or without its
@@ -285,18 +286,20 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
      ([Credentials](#credentials)); find the others with
      `conversation <identity> 100 --channel <credentials channel id> --json`,
      which lists a channel's messages, 100 a page (`--before` pages back),
-     each with its `from_user_id`.
+     each with its `from_user_id`. `topic <identity> get --channel credentials`
+     prints that channel's id as `channel_id`.
    - Their DMs with the bot: `conversation <identity> 100 --dm <user id> --json`.
 
    Each carries its `msg_id`: delete it with
    `discord-mb message <identity> delete <msg_id> --channel <channel>`
-   (`directory`, `credentials` or a channel id). Deleting another account's
-   message in a server channel needs `manage_messages` ([Bot](#bot)); Discord
-   grants that permission in server channels only, so in a DM the bot deletes
-   its own messages and only the user can delete theirs. Every running
-   connector that receives a deletion removes that message's local records on
-   its host. The server's audit log keeps its entries for 45 days whatever you
-   delete.
+   (`directory`, `credentials` or a channel id; for a DM, the `channel_id` in
+   that message's `conversation --dm` record, since the user's id is not a
+   channel id). Deleting another account's message in a server channel needs
+   `manage_messages` ([Bot](#bot)); Discord grants that permission in server
+   channels only, so in a DM the bot deletes its own messages and only the
+   user can delete theirs. Every running connector that receives a deletion
+   removes that message's local records on its host. The server's audit log
+   keeps its entries for 45 days whatever you delete.
 2. Run `discord-mb erase --user-id <id>` on every host that runs a connector,
    as each connector's user and with that connector's `TMPDIR`, `TEMP` and
    `TMP`, so it works on that connector's `<temp>`. Run with another `<temp>`,
