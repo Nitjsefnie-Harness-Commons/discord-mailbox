@@ -51,6 +51,7 @@
 !/.github/workflows/
 !/.github/ISSUE_TEMPLATE/issue.md
 !/.github/PULL_REQUEST_TEMPLATE.md
+!/.github/ci-thresholds.json
 !/.github/comment-share.json
 !/.github/dependabot.yml
 !/.github/size-baseline.json
@@ -64,6 +65,7 @@
 !/.github/workflows/open-pull-request.yml
 !/.github/workflows/pin-guard.yml
 !/.github/workflows/pr-gate.yml
+!/.github/workflows/ratchet-push.yml
 !/.github/workflows/release.yml
 !/.github/workflows/requirements-runtime.in
 !/.github/workflows/requirements-runtime.txt
@@ -73,6 +75,11 @@
 !/.github/workflows/tag.yml
 !/.github/workflows/tests.yml
 !/.github/workflows/types.yml
+
+# ─── scripts/ci ───
+!/scripts/
+!/scripts/ci/
+!/scripts/ci/coverage_floor.py
 
 # ─── discord_mb_lib ───
 !/discord_mb_lib/
@@ -107,6 +114,7 @@
 !/tests/
 !/tests/_gateway.py
 !/tests/_util.py
+!/tests/test_ci_gates.py
 !/tests/test_discord_chunk_routing.py
 !/tests/test_discord_codex_flavor.py
 !/tests/test_discord_connector_lock.py
