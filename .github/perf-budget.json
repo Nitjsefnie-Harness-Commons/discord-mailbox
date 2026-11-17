@@ -8,8 +8,8 @@
     "runner": "ubuntu-24.04"
   },
   "workloads": {
-    "log-rotation": 1008922595,
-    "outbox-dispatch": 180852566,
-    "usage-parse": 91527781
+    "log-rotation": 1008743440,
+    "outbox-dispatch": 184336463,
+    "usage-parse": 113059967
   }
 }
