@@ -2,7 +2,9 @@ from . import _graphemes
 
 
 def chunk_body(body, limit):
-    """Cut at a paragraph, line or space past limit//4, else grapheme, else limit."""
+    """Cut at a paragraph, line or space past limit//4, else grapheme, else limit; fits: whole."""
+    if limit < 1:
+        raise ValueError('chunk limit must be positive')
     if len(body) <= limit:
         return [body]
     parts, rest = [], body
