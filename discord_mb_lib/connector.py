@@ -306,14 +306,17 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     except BaseException as exc:
         raise_startup_failure(exc, sys.exc_info()[2])
 
-    def log(msg):
-        # Human logs go to stderr + log file. stdout is reserved for JSON event
-        # stream consumed by Monitor (v0.6+).
+    def log(msg, strict=False):
+        # Human logs go to stderr and, once open, the log file; stdout carries the event
+        # stream. Only a strict write raises: a broken log never stops lifecycle control.
         line = f'[{time.strftime("%Y-%m-%dT%H:%M:%S")}] {msg}'
-        # Callable before the log file is opened -- the token resolution below
-        # logs its own failure. stderr still carries the line either way.
-        if log_fh is not None:
-            log_fh.write(line)
+        try:
+            if log_fh is not None:
+                log_fh.write(line)
+        except Exception as exc:
+            if strict:
+                raise
+            line += f' (connector log write failed: {type(exc).__name__}: {exc})'
         print(line, file=sys.stderr, flush=True)
 
     def emit_event(event):
@@ -330,11 +333,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
                 pass
 
     try:
-        # Delayed warnings are intentionally emitted inside this guard.  A
-        # failure on the first warning write must release every resource that
-        # the constructor acquired, including a stale PID identity lock.
+        # Delayed warnings are written strictly inside this guard: a failed first write
+        # releases every resource the constructor acquired, including a stale PID lock.
         for startup_message in startup_messages:
-            log(startup_message)
+            log(startup_message, strict=True)
 
         # Resolve the token + its flavor (which dir it came from) up front: the flavor
         # drives both the parent-CLI PID walkup and the default status plugin.
@@ -440,12 +442,10 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
     async def parent_watchdog():
         if claude_pid is None:
             return
-        while True:
+        while pid_alive(claude_pid):
             await asyncio.sleep(5)
-            if not pid_alive(claude_pid):
-                log(f'Parent PID {claude_pid} gone, shutting down')
-                await client.close()
-                return
+        await client.close()
+        log(f'Parent PID {claude_pid} gone, shutting down')
 
     async def outbox_watcher():
         outbox = outbox_dir(identity)
