@@ -258,14 +258,14 @@ def test_a_request_cancelled_mid_operation_is_answered_as_interrupted_and_not_ru
             await asyncio.sleep(0.05)
         watcher = next(t for t in asyncio.all_tasks() if t.get_coro().__name__ == "meta_watcher")
         watcher.cancel()
-        await asyncio.sleep(0.2)
+        await asyncio.wait([watcher])
         seen.update(response=_read(state / "out" / "r.json"), left=list((state / "in").iterdir()),
                     cancelled=watcher.cancelled())
 
     try:
         _gateway.run(tmp, script)
-    except asyncio.CancelledError:      # the cancelled watcher fails the harness's gather
-        pass
+    except asyncio.CancelledError as e:     # the cancelled watcher fails the harness's gather
+        assert e.__context__ is None, f"the script failed: {e.__context__!r}"
     assert seen["response"]["ok"] is False and "outcome is unknown" in seen["response"]["error"], seen
     assert seen["left"] == [] and seen["cancelled"] and runs == [1], (seen, runs)
 
