@@ -251,8 +251,8 @@ def test_a_backup_deleted_while_a_rotation_journal_is_pending_is_absent(tmp):
             fault["left"] -= 1
             raise OSError("injected fault after a published slot")
         real_fsync.__func__(directory)
-    # A fault after .1 is published leaves the active's bytes in the active alone.
-    for victim, after in (("connector.log.1", 1), ("connector.log.2", 1), ("connector.log.1", 2)):
+    # .1 moves to .2 first, then the stage takes .1: deleting .1 then leaves the active's bytes in the active alone.
+    for victim, after in (("connector.log.2", 1), ("connector.log.2", 2), ("connector.log.1", 2)):
         path = Path(tmp) / f"{victim}-{after}" / "connector.log"
         path.parent.mkdir()
         writer = _filled(m, path)
