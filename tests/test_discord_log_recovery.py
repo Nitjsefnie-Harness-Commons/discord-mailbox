@@ -78,7 +78,7 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
             _util.skip("this platform cannot create a symlink")
 
     real = {name: m._ConnectorLogWriter.__dict__[name] for name in
-            ("_journal_file_state", "_write_migration_manifest", "_cleanup_journal_temp")}
+            ("_journal_file_state", "_write_migration_manifest", "_write_migration_temp", "_cleanup_journal_temp")}
 
     def hardlink(backup):
         backup.with_name("external").write_bytes(b"EXTERNAL\n")
@@ -99,14 +99,15 @@ def test_a_replaced_backup_or_a_vanished_owned_file_is_still_refused(tmp):
         row.__name__ = name
         return row
 
-    journal_fault = hardlink_at("hardlink_then_journal_fault", "_write_migration_manifest")
+    staging_fault = hardlink_at("hardlink_then_staging_fault", "_write_migration_temp")
 
-    def rotation_then_hardlink_journal_fault(backup):  # a completed rotation clears its own mark
+    def rotation_then_hardlink_staging_fault(backup):  # a completed rotation clears its own mark
         writer.write("x" * 25)
-        journal_fault(backup)
+        staging_fault(backup)
 
     for replace in (foreign_file, hardlink_at("hardlink_mid_rotation", "_journal_file_state", fault=False),
-                    journal_fault, rotation_then_hardlink_journal_fault,
+                    hardlink_at("hardlink_then_journal_fault", "_write_migration_manifest"),
+                    staging_fault, rotation_then_hardlink_staging_fault,
                     hardlink_at("hardlink_then_publish_mark_fault", "_write_migration_manifest",
                                 when=lambda manifest, *_: any("publish_state" in d for d in manifest["destinations"])),
                     hardlink_at("hardlink_then_fault_after_journal_unlink", "_cleanup_journal_temp"), dangling_link):
@@ -137,15 +138,15 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
     journal = writer._rotation_manifest_path()
     real_replace, real_fsync = os.replace, m._ConnectorLogWriter._fsync_directory
     real_cleanup = m._ConnectorLogWriter._cleanup_journal_temp
-    fault = {"published": False, "on": True, "fired": 0}
+    fault = {"published": False, "left": 2, "fired": 0}
 
     def replace(src, dst, *args, **kwargs):
         real_replace(src, dst, *args, **kwargs)
         fault["published"] |= Path(dst).name.startswith("connector.log.")
 
     def fsync(directory):
-        if fault["on"] and fault["published"]:
-            fault["fired"] += 1
+        if fault["left"] and fault["published"]:
+            fault["left"], fault["fired"] = fault["left"] - 1, fault["fired"] + 1
             raise OSError(5, "injected I/O fault after a rotated slot was published")
         real_fsync(directory)
 
@@ -159,27 +160,30 @@ def test_a_rotation_that_failed_after_publishing_recovers_once_the_fault_clears(
             else:
                 raise AssertionError(f"write {attempt} succeeded under the injected fault")
             assert fault["fired"] == attempt and journal.exists(), (attempt, fault)
+
         def cleanup_fault(self, *args):  # a fault once the journal is gone, with nothing foreign moved
             m._ConnectorLogWriter._cleanup_journal_temp = real_cleanup
             raise OSError("injected fault after the journal unlink")
-        fault["on"], raised = False, []
-        m._ConnectorLogWriter._cleanup_journal_temp = cleanup_fault  # first in the recovery, then at i == 5 in a rotation
-        for i in range(12):  # rotations keep running after the recovery
+        raised = []
+        for i in range(16):  # rotations keep running after the recovery
             try:
                 writer.write(f"healed {i:02d}")
             except OSError as exc:
-                raised.append(str(exc))
+                raised.append(str(exc).split()[-1])
             if i == 2:
                 kept = [ln for p in reversed(_window(path)) for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("line ")]
                 assert kept and kept == sorted(set(kept)), kept  # pre-fault lines: each at most once, in order
-            if i == 5:
+            if i == 3:  # the next rotation faults after dropping its journal
                 m._ConnectorLogWriter._cleanup_journal_temp = cleanup_fault
-        assert raised == ["injected fault after the journal unlink"] * 2, raised
+            if i == 8:  # the next rotation faults after a publish, then its recovery after dropping the journal
+                fault.update(published=False, left=1)
+                m._ConnectorLogWriter._cleanup_journal_temp = cleanup_fault
+        assert raised == ["unlink", "published", "unlink"], raised
     finally:
         os.replace, m._ConnectorLogWriter._fsync_directory = real_replace, real_fsync
         m._ConnectorLogWriter._cleanup_journal_temp = real_cleanup
         writer.close()
-    assert "healed 11" in path.read_text(encoding="utf-8")
+    assert "healed 15" in path.read_text(encoding="utf-8")
     assert not journal.exists()
     assert all(p.stat().st_size <= LIMIT for p in _window(path))
 
