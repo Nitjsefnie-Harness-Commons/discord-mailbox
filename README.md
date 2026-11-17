@@ -32,20 +32,21 @@ Then `discord-mb --help`.
    select the permissions below, open the **Install Link** and add the bot to
    your server.
 
-Each permission, by its discord.py name, is needed only for what its row lists:
+Each permission, by its discord.py name, with every operation that needs it:
 
 | Permission | Needed for |
 | --- | --- |
 | `view_channel` | every channel the bot reads or writes |
-| `read_message_history` | reading the directory, credentials and attachments channels, the ✅ receipt, `send --reply-to`, `conversation`, `pins list`, `context`, `move`, `forum list --archived`, and fetching a message a delivered one links to or replies to |
-| `send_messages` | `send`, `register` and the directory entry the connector posts at startup, `creds add`, `attachments upload`, `forum create`, `move` |
-| `send_messages_in_threads` | `send` and `move` into a thread or forum post |
+| `read_message_history` | every read of messages already in a channel: the directory, credentials and attachments channel reads, `conversation`, `move`, `forum list --archived`, `pins list` and `context`; every command that names a message by id (`pins pin` and `unpin`, `message edit`, `delete`, `reactions`, `react` and `unreact`, `attachments download`, `send --reply-to`); the ✅ receipt; and, for each delivered message, its channel's pins, its forum's pinned posts and the messages it links to or replies to |
+| `send_messages` | `send`, `register` and the directory entry the connector posts at startup, `creds add`, `attachments upload`, `forum create`, `move`, and `thread unarchive` of a thread that is not locked |
+| `send_messages_in_threads` | `send`, `attachments upload` and `move` into a thread or forum post, including the post a `move` into a forum creates |
 | `attach_files` | `send --attach`, `attachments upload`, and `move` of a message with attachments |
 | `add_reactions` | the ✅ receipt and `message react`, when nobody has reacted to the message with that emoji yet |
+| `mention_everyone` | a `send` to `all`, unless the broadcast role is mentionable |
 | `pin_messages` | `pins pin`, `pins unpin` and `send --pin` |
 | `manage_messages` | `message delete` and `move` of a message another account wrote |
-| `manage_channels` | `setup`, `channels create`, `delete` and `edit`, `topic set`, and renaming the usage-board voice channels |
-| `manage_threads` | `forum delete`, and `thread` edits other than renaming or archiving a post the bot started |
+| `manage_channels` | `setup`, `channels create`, `channels delete` and `edit` of a channel or category, `topic set`, and renaming the usage-board and lease voice channels |
+| `manage_threads` | `forum delete` and `channels delete` of a thread, and every edit of a thread (`thread`, or `channels edit` given a thread) except renaming or archiving a thread the bot started and unarchiving a thread that is not locked |
 | `create_expressions` | `emoji upload`, and `emoji delete` or `rename` of an emoji the bot uploaded |
 | `manage_expressions` | `emoji delete` or `rename` of any other emoji |
 
@@ -54,9 +55,10 @@ Each permission, by its discord.py name, is needed only for what its row lists:
 When it connects, the connector looks up these channels and its broadcast
 role by name. Its main server is the one with the bridge channel; when no
 server has it, the connector takes the first server discord.py lists and logs
-a `WARN` line. Each channel or role it does not find gets a `WARN`
-log line, and what needs it does not work until a restarted connector finds
-it.
+a `WARN` line. It logs a `WARN` line naming each channel or role it does not
+find, and what needs one does not work until a restarted connector finds it.
+A `send` to `all` notifies the role's members only when the role is
+mentionable or the bot has `mention_everyone`.
 
 | What | Default name | Setting | `setup` creates it |
 | --- | --- | --- | --- |
@@ -75,9 +77,9 @@ is none. Create the other channels and the role in Discord.
 
 ### Token
 
-The connector takes its token from the first of `--token`, `--token-file`,
-`DISCORD_TOKEN` and `~/.agent-bundle/discord/<identity>.token` ([Secrets off
-the command line](#secrets-off-the-command-line)). `DISCORD_TOKEN` is read from
+[Secrets off the command line](#secrets-off-the-command-line) lists where the
+connector looks for its token, the token file
+`~/.agent-bundle/discord/<identity>.token` last. `DISCORD_TOKEN` is read from
 the environment only, never from the settings files. Keep a token file
 readable only by the user that runs the connector (mode 0600 on POSIX). The
 token directory also decides whose credentials entries are trusted
@@ -92,12 +94,14 @@ lists. A connector reads them once, at startup, so a change takes effect at
 its next start.
 
 `DISCORD_MB_USAGE_QUERY`, read from the environment only, is the path of the
-`usage_query.py` script the connector runs to rename a server's usage-board
-voice channels (those whose names contain `claude`, `kimi` or `codex`). When it
-is unset the connector looks for that script in and beside the
-`discord_mb_lib` package directory; without one it has no usage figures to
-show. `DISCORD_MB_TEST_LOCK_ROOT` and `DISCORD_MB_PORTABLE_PUBLICATION` exist
-for the test suite and CI; leave them unset.
+`usage_query.py` script whose figures the connector writes into the names of a
+server's usage-board voice channels, those whose names contain `claude`,
+`kimi` or `codex`; it writes its lease into the name of a voice channel
+containing `claim`. When the variable is unset or names no file, the connector
+looks for that script in and beside the `discord_mb_lib` package directory;
+without one it has no usage figures to show. `DISCORD_MB_TEST_LOCK_ROOT` and
+`DISCORD_MB_PORTABLE_PUBLICATION` exist for the test suite and CI; leave them
+unset.
 
 ### Starting and stopping
 
@@ -123,8 +127,8 @@ connector left.
 ### Rotating the token
 
 1. On the application's **Bot** page, **Reset Token** shows a new token.
-2. Put it where the connector takes its token from: the token file, the
-   `--token-file` file or `DISCORD_TOKEN`.
+2. Replace the old token in every token file, `--token-file` file and
+   `DISCORD_TOKEN` that holds it: each identity has its own token file.
 3. Restart every connector that runs as this bot. A connector reads its token
    once, at startup, and keeps the one it started with. `setup` reads the
    token each time it runs, and no other command uses it.
