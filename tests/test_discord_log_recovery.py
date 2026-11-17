@@ -17,7 +17,9 @@ LIMIT = 32
 
 def _filled(m, path):
     """A writer whose startup migration filled the active log and both retained backups."""
-    path.write_text("".join(f"line {i:02d}\n" for i in range(12)), encoding="utf-8")
+    # write_bytes, not write_text: the latter translates \n to \r\n on
+    # Windows, leaving a 9-byte active file the next write does not rotate.
+    path.write_bytes("".join(f"line {i:02d}\n" for i in range(12)).encode("utf-8"))
     writer = m._ConnectorLogWriter(path, max_bytes=LIMIT, backup_count=2)
     assert [p.name for p in _window(path)] == [path.name, f"{path.name}.1", f"{path.name}.2"]
     return writer
