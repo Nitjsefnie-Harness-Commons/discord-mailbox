@@ -829,6 +829,8 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
             for name, evicts in (("nt", False), (os.name, hasattr(os, "posix_fadvise"))):  # Windows refuses os.replace over an open file
                 with _patched(os, name=name):
                     assert ((fd := writer._hold_oldest_backup()) is not None) == evicts and (fd is None or os.close(fd) is None), name
+            if os.name != "nt":  # a symlink at the slot fails the open (ELOOP), which must not escape the worker before it signals the stage
+                assert (slots[0].unlink(), slots[0].symlink_to(slots[1]), writer._hold_oldest_backup())[2] is None
             writer._rotation_worker = threading.Thread(target=print)
             for call in (lambda: writer._write_migration_temp(b"x", None), lambda: writer._adopt_rotated_identities({})):
                 with _refuses("the caller staged or adopted beside a running worker", AssertionError):
@@ -850,10 +852,6 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     m, log, case, locked, release, staged, held, opens = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event(), set(), []
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_start_rotation_worker", "_rotate", "_recover_and_open")}
-
-    def opened(path, fd):  # an fd on the oldest backup stays in `held` until closed; the worker's open is the eviction
-        _ = os.fspath(path).endswith("connector.log.2") and (held.add(fd), opens.append(threading.current_thread().name))
-        return fd
 
     def seam(name):  # the row's fault fires once: on the worker, or on the caller swapping at the ceiling
         def wrapped(self, *args):
@@ -881,7 +879,8 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                   _recover_and_open=lambda self: real["_recover_and_open"](self) or log.append("recover"),
                   _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or wait(self),
                   _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)), \
-            _patched(os, open=lambda path, *args, real=os.open, **kw: opened(path, real(path, *args, **kw)), close=lambda fd, real=os.close: held.discard(fd) or real(fd)):
+            _patched(os, close=lambda fd, real=os.close: held.discard(fd) or real(fd),  # an fd on the oldest backup stays in `held` until closed; the worker's open is the eviction
+                     open=lambda path, *args, real=os.open, **kw: (fd := real(path, *args, **kw), os.fspath(path).endswith("connector.log.2") and (held.add(fd), opens.append(threading.current_thread().name)))[0]):
         for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
                                                       ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
