@@ -1,14 +1,104 @@
 """The connector log rotation transaction and the slot identities it adopts."""
 # The writer in storage.py supplies every attribute these methods use.
 # pylint: disable=no-member,attribute-defined-outside-init
+import errno
 import os
 import uuid
 from pathlib import Path
 from typing import Any
 
+# The errors that mean this filesystem cannot create or name an anonymous inode.
+_NO_ANONYMOUS = frozenset((errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EPERM,
+                           errno.EACCES, getattr(errno, 'EOPNOTSUPP', errno.ENOTSUP)))
+
 
 class _RotationJournal:
     """Rotation methods of the connector log writer."""
+
+    # A journal carrying this ``staging`` value stages bare payloads, owned by their claimed inode.
+    _PAYLOAD_STAGING = 'payload-v1'
+
+    def _write_rotation_temp(self: Any, data: bytes, mode: Any, name: Path,
+                             directory: Path, anonymous: bool) -> Path:
+        """Write one rotation payload once, claiming its inode before its first byte."""
+        if anonymous:
+            staged = self._link_rotation_temp(data, mode, name, directory)
+            if staged is not None:
+                return staged
+        fd = os.open(str(name), os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     getattr(os, 'O_BINARY', 0), 0o600)
+        opened = os.fstat(fd)
+        identity = (str(opened.st_dev), str(opened.st_ino))
+        try:
+            if mode is not None:
+                try:
+                    os.fchmod(fd, mode)
+                except (AttributeError, OSError):
+                    os.chmod(str(name), mode)
+            # A durable claim before any byte makes a torn write reclaimable by identity.
+            self._staging_claim_callback(name, identity)
+            self._fsync_directory(directory)
+            self._write_fd_bytes(fd, data)
+            os.fsync(fd)
+        except BaseException:
+            self._discard_rotation_temp(fd, name, identity)
+            raise
+        os.close(fd)
+        return name
+
+    def _link_rotation_temp(self: Any, data: bytes, mode: Any, name: Path,
+                            directory: Path) -> Path | None:
+        """Write and claim an anonymous inode, then name it; None where it cannot be named.
+
+        A crash leaves either no name or a name whose inode the journal holds.
+        """
+        try:
+            fd = os.open(str(directory), os.O_RDWR | os.O_TMPFILE |
+                         getattr(os, 'O_BINARY', 0), 0o600)
+        except OSError as exc:
+            if exc.errno in _NO_ANONYMOUS:
+                return None
+            raise
+        opened = os.fstat(fd)
+        identity = (str(opened.st_dev), str(opened.st_ino))
+        linked = False
+        try:
+            if mode is not None:
+                try:
+                    os.fchmod(fd, mode)
+                except (AttributeError, OSError):
+                    pass
+            self._write_fd_bytes(fd, data)
+            os.fsync(fd)
+            self._staging_claim_callback(name, identity)
+            try:
+                self._link_anonymous_fd(fd, name)
+            except OSError as exc:
+                if exc.errno not in _NO_ANONYMOUS:
+                    raise
+                os.close(fd)
+                return None
+            linked = True
+            if self._slot_identity(name) != (identity, identity):
+                raise RuntimeError(
+                    f'connector log staging temp was rebound after its link: {name}')
+            self._fsync_directory(directory)
+        except BaseException:
+            self._discard_rotation_temp(fd, name if linked else None, identity)
+            raise
+        os.close(fd)
+        return name
+
+    def _discard_rotation_temp(self: Any, fd: int, name: Path | None,
+                               identity: tuple[str, str]) -> None:
+        """Close a failed stage's fd, then unlink its name only while it holds that inode."""
+        try:
+            os.close(fd)
+        finally:
+            if (name is not None and
+                    not self._unlink_if_identity(name, identity, identity) and
+                    os.path.lexists(str(name))):
+                self._staging_cleanup_failed = True
 
     def _adopt_rotated_identities(
             self: Any, expected: dict[Path, tuple[str, str] | None]) -> None:
@@ -81,6 +171,7 @@ class _RotationJournal:
             'backup_count': self._backup_count,
             'generation': uuid.uuid4().hex,
             'transaction_nonce': self._transaction_nonce,
+            'staging': self._PAYLOAD_STAGING,
             'temporaries': [str(path) for path in staged_paths],
             'planned_temporaries': [str(path) for path in staged_paths],
             'created_temporaries': [],
@@ -123,17 +214,13 @@ class _RotationJournal:
                 self._staging_slot = index
                 self._staging_destination = destinations[index][0]
 
-                def claim(staged, index=index):
+                def claim(staged, identity, index=index):
                     entry = manifest['destinations'][index]
-                    staged_identity = self._owner._identity_for(staged)
-                    entry['temporary_identity'] = (
-                        list(staged_identity) if staged_identity is not None
-                        else None)
-                    staged_entry_identity = self._owner._entry_identity(staged)
-                    entry['temporary_entry_identity'] = (
-                        list(staged_entry_identity) if staged_entry_identity
-                        is not None else None)
-                    manifest['created_temporaries'].append(str(staged))
+                    entry['temporary_identity'] = list(identity)
+                    entry['temporary_entry_identity'] = list(identity)
+                    # A portable retry after an unnamed anonymous stage claims the same name again.
+                    if str(staged) not in manifest['created_temporaries']:
+                        manifest['created_temporaries'].append(str(staged))
                     self._write_migration_manifest(manifest, kind='rotate')
                 self._staging_claim_callback = claim
                 try:
@@ -157,7 +244,8 @@ class _RotationJournal:
                             expected_digest=self._sha256_bytes(_data),
                             expected_kind='rotate', expected_slot=index,
                             expected_destination=destination,
-                            expected_nonce=self._transaction_nonce)
+                            expected_nonce=self._transaction_nonce,
+                            expected_staging=self._PAYLOAD_STAGING)
                         try:
                             self._publish_in_place(
                                 destination, staged,
@@ -172,7 +260,8 @@ class _RotationJournal:
                             staged, len(_data), self._sha256_bytes(_data),
                             expected_kind='rotate', expected_slot=index,
                             expected_destination=destination,
-                            expected_nonce=self._transaction_nonce)
+                            expected_nonce=self._transaction_nonce,
+                            expected_staging=self._PAYLOAD_STAGING)
                         self._revalidate_destination(
                             destination,
                             self._manifest_identity(entry.get('before_identity')),
