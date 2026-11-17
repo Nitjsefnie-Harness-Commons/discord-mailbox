@@ -54,6 +54,7 @@
 !/.github/ci-thresholds.json
 !/.github/comment-share.json
 !/.github/dependabot.yml
+!/.github/perf-budget.json
 !/.github/size-baseline.json
 !/.github/zizmor.yml
 !/.github/workflows/actionlint.yml
@@ -64,6 +65,7 @@
 !/.github/workflows/coverage-comment.yml
 !/.github/workflows/lint.yml
 !/.github/workflows/open-pull-request.yml
+!/.github/workflows/perf.yml
 !/.github/workflows/pin-guard.yml
 !/.github/workflows/pr-gate.yml
 !/.github/workflows/ratchet-push.yml
@@ -81,6 +83,8 @@
 !/scripts/
 !/scripts/ci/
 !/scripts/ci/coverage_floor.py
+!/scripts/ci/perf_gate.py
+!/scripts/ci/perf_workloads.py
 
 # ─── discord_mb_lib ───
 !/discord_mb_lib/
