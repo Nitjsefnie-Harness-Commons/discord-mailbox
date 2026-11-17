@@ -53,7 +53,7 @@ jobs:
           cache: pip
 
       - name: Install pip-audit
-        run: pip install --require-hashes -r requirements-pip-audit.txt
+        run: pip install --require-hashes -r requirements-dev.txt
 
       - name: Audit dependencies
         # The runtime lock (discord.py, psutil and their tree) and every

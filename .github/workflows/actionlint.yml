@@ -20,9 +20,9 @@ name: actionlint
 #   every checkout left the job token in .git/config, and no workflow
 #   declared permissions at all.
 #
-# Both tools are pinned. actionlint is verified by checksum rather than
-# trusted from the release page, because a linter that runs before every
-# other gate is a supply-chain position worth defending.
+# Both tools are pinned, zizmor in requirements-dev.txt. actionlint is
+# verified by checksum: a linter that runs before every other gate is a
+# supply-chain position worth defending.
 #
 # Suppressions belong at the offending line as a `# zizmor: ignore[rule]`
 # comment WITH a justification, or in zizmor.yml, never as a raised
@@ -96,7 +96,7 @@ jobs:
 
       - name: Install zizmor
         id: install_zizmor
-        run: pip install --require-hashes -r requirements-zizmor.txt
+        run: pip install --require-hashes -r requirements-dev.txt
 
       - name: actionlint
         id: actionlint

@@ -181,7 +181,7 @@ jobs:
           # the resulting 1% as though it were a measurement. The tests put
           # the repo root on sys.path themselves, so the source tree is still
           # what gets measured. One command per manifest, as in types.yml.
-          python -m pip install --require-hashes -r requirements-test.txt
+          python -m pip install --require-hashes -r requirements-dev.txt
           python -m pip install --require-hashes -r .github/workflows/requirements-runtime.txt
           python -m pip install --require-hashes -r requirements-build.txt
           python -m pip install --no-deps --no-build-isolation .
