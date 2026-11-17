@@ -2,6 +2,8 @@
 # The writer in storage.py supplies every attribute these methods use.
 # pylint: disable=no-member,attribute-defined-outside-init
 import base64
+import hashlib
+import json
 import os
 import stat
 import uuid
@@ -17,15 +19,18 @@ class _RotationRecovery:
     def _recover_rotation(self: Any) -> None:
         """Finish or discard an interrupted rotation from its durable journal."""
         journal = self._rotation_manifest_path()
+        sidecar = self._rotation_sidecar(journal)
         if not journal.exists():
             # Without a durable journal there is no ownership proof for any
             # staged pathname. Never sweep similarly named user files from
             # the log directory.
             self._cleanup_journal_temp(journal, 'rotate')
+            sidecar.unlink(missing_ok=True)
             return
         manifest, root, log_name = self._journal_manifest(journal, 'rotate')
         plan = None
         try:
+            manifest = self._rotation_record(manifest, sidecar)
             if manifest.get('state') == 'preparing':
                 self._cleanup_preparing_temps(manifest, root, 'rotate', log_name)
             else:
@@ -39,9 +44,23 @@ class _RotationRecovery:
             self._adopt_rotated_identities(
                 {entry['destination']: expected for entry, _, expected in plan})
         journal.unlink()
+        sidecar.unlink(missing_ok=True)
         self._cleanup_journal_temp(journal, 'rotate')
         self._fsync_directory(root)
         self._fsync_directory(journal.parent)
+
+    @staticmethod
+    def _rotation_record(manifest: dict, sidecar: Path) -> dict:
+        """The named sidecar's whole record of this generation, else the journal's."""
+        if manifest.get('sidecar') != sidecar.name or not sidecar.exists():
+            return manifest
+        raw = sidecar.read_bytes()
+        payload = raw[40:40 + int.from_bytes(raw[:8], 'big')]
+        if hashlib.sha256(payload).digest() != raw[8:40]:
+            return manifest
+        record = json.loads(payload)
+        return record if all(record.get(key) == manifest.get(key)
+                             for key in ('generation', 'transaction_nonce', 'token')) else manifest
 
     def _slot_identity(self: Any, path: Path) -> tuple:
         return (self._owner._identity_for(path), self._owner._entry_identity(path))

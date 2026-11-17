@@ -2,8 +2,11 @@
 # The writer in storage.py supplies every attribute these methods use.
 # pylint: disable=no-member,attribute-defined-outside-init
 import base64
+import hashlib
+import json
 import os
 import threading
+from pathlib import Path
 from typing import Any
 
 
@@ -115,7 +118,7 @@ class _RotationWorker:
             mode = None
         src = os.open(str(self._path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
                       getattr(os, 'O_BINARY', 0))
-        context = {'src': src, 'cut': cut, 'mode': mode, 'manifest': None, 'staged': None}
+        context = {'src': src, 'cut': cut, 'mode': mode, 'manifest': None, 'staged': None, 'sidecar': None}
         try:
             opened = os.fstat(src)
             if self._owner.identity not in (None, (str(opened.st_dev), str(opened.st_ino))):
@@ -123,6 +126,7 @@ class _RotationWorker:
                     f'connector log identity was replaced while owned: {self._path}')
             manifest, planned = self._rotation_plan(cut, None, 5)
             context['journal'] = self._rotation_manifest_path()
+            manifest['sidecar'] = self._rotation_sidecar(context['journal']).name
             self._write_migration_manifest(manifest, kind='rotate', create=True)
             context['manifest'] = manifest
             data = self._read_rotation_prefix(src, cut)
@@ -132,6 +136,7 @@ class _RotationWorker:
                 manifest['destinations'][-2]['sha256'] = digest
                 self._use_anonymous_staging = True
                 context['staged'] = self._stage_rotation_copy(manifest, data, mode, planned)
+            context['sidecar'] = self._prepare_rotation_sidecar(cut)
             if hasattr(os, 'posix_fadvise'):  # the swap's truncate then frees no page
                 getattr(os, 'fdatasync', os.fsync)(src)
                 os.posix_fadvise(src, 0, cut, os.POSIX_FADV_DONTNEED)
@@ -158,16 +163,47 @@ class _RotationWorker:
             start += len(chunk)
         return b''.join(chunks)
 
+    @staticmethod
+    def _rotation_sidecar(journal: Path) -> Path:
+        return journal.with_suffix('.swap')
+
+    def _prepare_rotation_sidecar(self: Any, cut: int) -> int:
+        """Preallocate the record's file, durable with its name, for the swap to overwrite."""
+        path = self._rotation_sidecar(self._rotation_manifest_path())
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
+        try:  # the largest base64 tail and the record
+            self._write_fd_bytes(fd, bytes(4 * -(-(self._max_bytes - cut) // 3) + (256 << 10)))
+            os.fsync(fd)
+            self._fsync_directory(path.parent)
+        except BaseException:
+            os.close(fd)
+            path.unlink()
+            raise
+        return fd
+
+    def _write_rotation_record(self: Any, context: dict) -> None:
+        """Lock held: write length, SHA-256 and record over the sidecar; sync its data."""
+        fd, payload = context['sidecar'], json.dumps(
+            context['manifest'], sort_keys=True, separators=(',', ':')).encode('utf-8')
+        os.lseek(fd, 0, os.SEEK_SET)  # os.pwrite is POSIX only
+        self._write_fd_bytes(fd, len(payload).to_bytes(8, 'big') + hashlib.sha256(payload).digest() + payload)
+        getattr(os, 'fdatasync', os.fsync)(fd)
+        context['sidecar'] = None
+        os.close(fd)
+
     def _rollback_rotation(self: Any, context: dict) -> None:
         """Undo an unpublished stage and its journal, as a failed ``_rotate`` does."""
         try:
+            if context['sidecar'] is not None:  # first: a record beside a kept journal rolls forward
+                os.close(context['sidecar'])
+                self._rotation_sidecar(context['journal']).unlink()
             if context['manifest'] is not None:
                 self._unstage_rotation(context['manifest'], context['staged'], context['journal'])
         finally:
             os.close(context['src'])
 
     def _swap_rotation(self: Any, context: dict) -> None:
-        """Lock held: journal the tail, shift the slots, rewrite the active to the tail."""
+        """Lock held: record the tail, shift the slots, rewrite the active to the tail."""
         manifest, src, cut = context['manifest'], context['src'], context['cut']
         destinations = manifest['destinations']
         try:
@@ -175,7 +211,8 @@ class _RotationWorker:
             digest = self._sha256_bytes(tail)
             destinations[-1].update(tail=base64.b64encode(tail).decode('ascii'),
                                     tail_sha256=digest, size=len(tail), sha256=digest)
-            self._mark_generation_publishing(manifest, include_stage=True)
+            self._mark_generation_publishing(manifest, include_stage=True, append=False)
+            self._write_rotation_record(context)
         except BaseException:
             self._rollback_rotation(context)
             raise
@@ -196,3 +233,4 @@ class _RotationWorker:
 
     def _finish_rotation(self: Any, context: dict) -> None:
         self._drop_rotation_journal(context['journal'])
+        self._rotation_sidecar(context['journal']).unlink(missing_ok=True)
