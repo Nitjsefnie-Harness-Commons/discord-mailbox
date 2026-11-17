@@ -52,7 +52,7 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install pip-audit
+      - name: Install the dev toolchain
         run: pip install --require-hashes -r requirements-dev.txt
 
       - name: Audit dependencies
