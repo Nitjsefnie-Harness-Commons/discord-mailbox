@@ -3,9 +3,12 @@
 measure: write {python, environment, workloads, failed}, where a workload's
 count is Ir(--repeat K) - Ir(--repeat 0), its own start-up subtracted.
 check: exit 1 when a workload is over budget * (1 + tolerance), missing,
-failed or unbudgeted, or when a commit raises, adds or drops a budget
-without touching only the budget file and naming it in its trailer; print
-the table and the budget document re-recorded from the counts.
+failed or unbudgeted. Against a base budget it also exits 1 when a commit
+in the range changes the budget file beside another file, or when a raise
+of the head over the base (a workload raised, added or dropped, the
+tolerance raised, the python changed) is not named by a Perf-Budget-Raise
+trailer of a budget-only commit in the range. It prints the table and the
+budget document re-recorded from the counts.
 tighten: write the budget lowered to every count below budget *
 (1 - tolerance) and exit 0, or write nothing and exit 3.
 Exit 2 on a malformed document or argument.
@@ -76,11 +79,12 @@ def compare(measured, failed, budgets, tolerance):
 
 
 def raises(head, base):
-    """What the head budget raises over the base: workloads raised, added or dropped; '*' for tolerance or python."""
+    """The names of what the head budget raises over the base: workloads raised, added or dropped, 'tolerance', 'python'."""
     (workloads, tolerance, python), (base_workloads, base_tolerance, base_python) = head, base
     raised = {name for name, value in workloads.items() if value > base_workloads.get(name, 0)}
     raised |= set(base_workloads) - set(workloads)
-    return raised | ({'*'} if tolerance > base_tolerance or python != base_python else set())
+    raised |= {'tolerance'} if tolerance > base_tolerance else set()
+    return raised | ({'python'} if python != base_python else set())
 
 
 def spent(base, total):
@@ -88,20 +92,15 @@ def spent(base, total):
     return None if base is None or total is None or total <= base else total - base
 
 
-def undeclared_raises(raised, commits):
-    """The raises not made only by budget-only commits whose own trailer names them ('*' names all).
+def mixed_budget_commits(commits):
+    """The commits that change the budget file beside any other file."""
+    return [commit['sha'] for commit in commits if BUDGET_FILE in commit['files'] and commit['files'] != [BUDGET_FILE]]
 
-    Each commit carries the raises its own diff makes; a raise no commit made is undeclared.
-    """
-    made, undeclared = set(), set()
-    for commit in commits:
-        own = set(commit['raised']) & set(raised)
-        made |= own
-        if commit['files'] != [BUDGET_FILE]:
-            undeclared |= own
-        elif '*' not in commit['declares']:
-            undeclared |= own - set(commit['declares'])
-    return sorted(undeclared | (set(raised) - made))
+
+def undeclared_raises(raised, commits):
+    """The raises no budget-only commit names in its trailer."""
+    named = {name for commit in commits if commit['files'] == [BUDGET_FILE] for name in commit['declares']}
+    return sorted(set(raised) - named)
 
 
 def tighten(document, measured):
@@ -116,31 +115,14 @@ def tighten(document, measured):
     return document
 
 
-def _git(*args):
-    return subprocess.run(['git', *args], check=True, capture_output=True, text=True).stdout
-
-
-def _budget_at(revision):
-    shown = subprocess.run(['git', 'show', f'{revision}:{BUDGET_FILE}'], capture_output=True, text=True, check=False)
-    try:
-        return budget(json.loads(shown.stdout)) if shown.returncode == 0 else None
-    except ValueError:
-        return None
-
-
-def _commits(revision_range):
-    """Each commit's files, trailer names and own raises, all against its first parent."""
-    for sha, *parents in (line.split() for line in _git('rev-list', '--parents', revision_range).splitlines()):
-        diff = ['diff', '--name-only', '-z', parents[0], sha] if parents else ['diff-tree', '--root', '--no-commit-id', '--name-only', '-z', '-r', sha]
-        files = [f for f in _git(*diff).split('\0') if f]
-        values = _git('log', '-1', f'--format=%(trailers:key={TRAILER},valueonly,separator=%x2C)', sha)
-        before = _budget_at(parents[0]) if parents and BUDGET_FILE in files else None
-        raised = set()
-        if before is not None:
-            # A commit that deletes or breaks the budget drops every workload in it.
-            after = _budget_at(sha)
-            raised = raises(after, before) if after is not None else {'*', *before[0]}
-        yield {'files': files, 'declares': [v.strip() for v in values.split(',') if v.strip()], 'raised': raised}
+def commits_in(revision_range, repo='.'):
+    """Each commit's sha, trailer names and changed files; a merge lists only files it changed against every parent."""
+    def git(*args):
+        return subprocess.run(['git', '-C', repo, *args], check=True, capture_output=True, text=True).stdout
+    for sha in git('rev-list', revision_range).split():
+        files = git('diff-tree', '-c', '-r', '--root', '--no-commit-id', '--name-only', '-z', sha).split('\0')
+        values = git('log', '-1', f'--format=%(trailers:key={TRAILER},valueonly,separator=%x2C)', sha)
+        yield {'sha': sha, 'files': [f for f in files if f], 'declares': [v.strip() for v in values.split(',') if v.strip()]}
 
 
 def _instructions(name, repeat, work, env):
@@ -214,12 +196,14 @@ def check(counts_doc, head_doc, base_doc=None, commits=()):
         print(f"::notice::perf environment {environment} differs from the budget's")
     if base_doc is not None:
         base = budget(base_doc)
-        undeclared = undeclared_raises(raises(head, base), commits)
+        mixed, undeclared = mixed_budget_commits(commits), undeclared_raises(raises(head, base), commits)
+        if mixed:
+            notes.append(f'FAIL: these commits change {BUDGET_FILE} beside other files: {", ".join(mixed)}.')
         if undeclared:
-            notes.append(f'FAIL: raised, added or dropped outside a budget-only commit whose {TRAILER} trailer names it: {", ".join(undeclared)}.')
-        for name in set(undeclared) - {'*'}:
+            notes.append(f'FAIL: raised, added or dropped with no {TRAILER} trailer on a budget-only commit naming it: {", ".join(undeclared)}.')
+        for name in set(undeclared) - {'tolerance', 'python'}:
             judged[name] = min(v for v in (judged.get(name), base[0].get(name)) if v is not None)
-        if '*' in undeclared:
+        if 'tolerance' in undeclared:
             tolerance = min(tolerance, base[1])
     rows = compare(measured, failed, judged, tolerance)
     document = {**copy.deepcopy(head_doc), 'python': python, 'environment': environment, 'workloads': measured}
@@ -253,7 +237,7 @@ def main(argv=None):
             args.out.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
             return 0
         if args.command == 'check':
-            commits = list(_commits(args.range)) if args.range else []
+            commits = list(commits_in(args.range)) if args.range else []
             return check(_read(args.counts), _read(args.budget), args.base_budget and _read(args.base_budget), commits)
         measured, _, python, _ = counts(_read(args.counts))
         document = _read(args.budget)
