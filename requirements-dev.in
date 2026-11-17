@@ -1,6 +1,7 @@
 # The CI toolchain, each tool pinned so a release cannot turn CI red on an
 # unchanged commit: pycodestyle and pylint for lint.yml, pyright for
-# types.yml, coverage for the coverage job in tests.yml, zizmor for
+# types.yml, coverage for the coverage job in tests.yml, diff-cover for
+# that job's patch-coverage report on pull requests, zizmor for
 # actionlint.yml, and pip-audit for audit.yml, which audits this lock too.
 #
 # requirements-dev.txt is this file compiled with every transitive pin and
@@ -15,11 +16,13 @@
 # requirements-build.in is a pair of its own for that reason: it compiles
 # with --allow-unsafe to pin setuptools, which here would pin pip too.
 #
-# The suites need nothing past the package's runtime dependencies: they are
-# stdlib unittest driven by run_tests.py, with no pytest.
+# The suites need nothing past the package's runtime dependencies: run_tests.py
+# runs each tests/test_*.py file, whose plain test_* functions tests/_util.py's
+# runner calls, with no pytest.
 pycodestyle==2.15.0
 pylint==4.1.3
 pyright==1.1.414
 coverage==7.17.3
+diff-cover==11.0.3
 zizmor==1.32.0
 pip-audit==2.10.1

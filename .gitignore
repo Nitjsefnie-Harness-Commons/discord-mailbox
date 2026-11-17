@@ -61,6 +61,7 @@
 !/.github/workflows/claim.yml
 !/.github/workflows/codeql.yml
 !/.github/workflows/comment-share.yml
+!/.github/workflows/coverage-comment.yml
 !/.github/workflows/lint.yml
 !/.github/workflows/open-pull-request.yml
 !/.github/workflows/pin-guard.yml
