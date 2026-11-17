@@ -96,12 +96,18 @@ its next start.
 `DISCORD_MB_USAGE_QUERY`, read from the environment only, is the path of the
 `usage_query.py` script whose figures the connector writes into the names of a
 server's usage-board voice channels, those whose names contain `claude`,
-`kimi` or `codex`; it writes its lease into the name of a voice channel
-containing `claim`. When the variable is unset or names no file, the connector
-looks for that script in and beside the `discord_mb_lib` package directory;
-without one it has no usage figures to show. `DISCORD_MB_TEST_LOCK_ROOT` and
-`DISCORD_MB_PORTABLE_PUBLICATION` exist for the test suite and CI; leave them
-unset.
+`kimi` or `codex`. In a server with at least one of them, the connector that
+claims the current 5-minute update period for that server on its host also
+keeps a lease in the name of a voice channel containing `claim`, when the
+server has one: `claim · <identity>@<host> · <HH:MM>Z`, the identity and short
+host name of the connector that publishes that server's board and the UTC time
+it last renewed the lease. It renews its own lease once that is 10 minutes old
+and takes over one that is 15 minutes old; while another connector's lease is
+younger, it leaves the board alone. When the variable is unset or names no
+file, the connector looks for that script in and beside the `discord_mb_lib`
+package directory; without one it has no usage figures to show.
+`DISCORD_MB_TEST_LOCK_ROOT` and `DISCORD_MB_PORTABLE_PUBLICATION` exist for the
+test suite and CI; leave them unset.
 
 ### Starting and stopping
 
@@ -127,8 +133,8 @@ connector left.
 ### Rotating the token
 
 1. On the application's **Bot** page, **Reset Token** shows a new token.
-2. Replace the old token in every token file, `--token-file` file and
-   `DISCORD_TOKEN` that holds it: each identity has its own token file.
+2. Replace the old token in every `--token` value, token file, `--token-file`
+   file and `DISCORD_TOKEN` that holds it: each identity has its own token file.
 3. Restart every connector that runs as this bot. A connector reads its token
    once, at startup, and keeps the one it started with. `setup` reads the
    token each time it runs, and no other command uses it.
