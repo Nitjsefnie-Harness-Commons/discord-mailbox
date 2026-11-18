@@ -746,7 +746,8 @@ for n in range(240, 440):
                         *(("after-prepared", f"stale-{key}") for key in ("generation", "transaction_nonce", "token", "kind", "list")), *((step, "") for step in in_lock),
                         ("after-journal-unlink", ""), ("after-prepared", "digest"), ("after-prepared", "length"), ("after-prepared", "version"),
                         *((step, "worker") for step in in_lock), ("after-prepared", "repeat"), ("after-release", "worker"),
-                        ("after-swapped", ""), ("after-swapped", "torn-alone"), ("after-swapped", "torn-short"),
+                        ("after-swapped", ""), ("after-swapped", "torn-alone"), ("after-swapped", "torn-short"), ("after-swapped", "reused"),
+                        ("after-stage-publish", "reused-absent"),
                         *((step, extra) for step in (*in_lock, "after-release", "after-swapped") for extra in ("torn-active", "foreign-c.log", "foreign-c.log.1"))):
         case, rolled_back, backups = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" or extra.startswith("stale"), 3 - 3 * (extra == "torn-alone")
         case.mkdir()
@@ -783,12 +784,14 @@ for n in range(240, 440):
                     _restart(slots[-1], 4096, 3)
                 assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
                 _ = sidecar.write_bytes(saved), journal.write_bytes(kept)
-        elif extra.startswith(("torn-", "foreign-")):  # power loss tears the active, or a file is put at a slot, after the crash
-            foreign, kept, victim, aside = extra.startswith("foreign"), step == "after-swapped" and extra in ("torn-active", "torn-short"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"
+        elif extra.startswith(("torn-", "foreign-", "reused")):  # power loss tears the active, or a file is put at a slot, after the crash
+            foreign, victim, aside = extra.startswith("foreign"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"
             saved, _ = (victim.read_bytes(), foreign and os.replace(victim, aside)) if victim.exists() else (b"", None)
-            victim.write_bytes(crafted := b"FOREIGN\n" if foreign else saved[:16] if extra == "torn-short" else b"x" * 16 + saved[16:])
-            # Only a swapped generation whose prefix .1 holds keeps a torn active; a foreign active is another inode, its journal its own.
-            with contextlib.nullcontext() if kept or extra == "foreign-c.log" else _refuses(f"recovery accepted a {extra} slot after {step}"):
+            _ = extra == "reused-absent" and slots[2].unlink()  # .1 deleted: the active holds the only copy of its bytes
+            victim.write_bytes(crafted := b"FOREIGN\n" if foreign or extra.startswith("reused") else saved[:16] if extra == "torn-short" else b"x" * 16 + saved[16:])
+            # A torn active refuses; "reused" writes foreign bytes into the owned inode, as a new file reusing its number holds them;
+            # a foreign active at another inode is opened as a fresh log, its journal its own.
+            with contextlib.nullcontext() if extra == "foreign-c.log" else _refuses(f"recovery accepted a {extra} slot after {step}"):
                 _restart(slots[-1], 4096, backups)
             assert victim.read_bytes() == crafted and (extra != "foreign-c.log" or any(lock_root.glob("*.rotate.json"))), (step, extra)  # never written through
             _ = (victim.unlink(), aside.exists() and os.replace(aside, victim)) if foreign else victim.write_bytes(saved)
