@@ -345,9 +345,10 @@ def test_the_cli_forwards_the_dm_user_in_the_request(tmp):
     if c is None:
         return
     from discord_mb_lib import core
-    sent = _util.run_cli(functools.partial(core.conversation_cli, "me", 5, channel_id="1", dm="alice", before_id="2", after_id="3"), {"ok": True, "messages": []})[3]
-    assert sent == [("me", {"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice",
-                            "before_id": "2", "after_id": "3"})], sent
+    code, _, _, sent = _util.run_cli(functools.partial(core.conversation_cli, "me", 5, channel_id="1", dm="alice", before_id="2", after_id="3"),
+                                     {"ok": True, "messages": []})
+    assert (code, sent) == (None, [("me", {"op": "conversation", "limit": 5, "channel_id": "1", "dm_user": "alice",
+                                           "before_id": "2", "after_id": "3"})]), (code, sent)
 
 
 def test_the_parser_wires_dm_and_refuses_it_with_channel(tmp):
