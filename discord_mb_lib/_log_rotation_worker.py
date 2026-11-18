@@ -70,10 +70,16 @@ class _RotationWorker:
         self._rotation_stop = True
 
     def _run_rotation_worker(self: Any, cut: int) -> None:
-        held = self._hold_oldest_backup()
+        staged, held = self._rotation_staged, None  # ours; a later start replaces it
         try:
+            held = self._hold_oldest_backup()
             self._rotate_on_worker(cut)
+        except BaseException as exc:
+            if staged.is_set():
+                raise
+            self._rotation_context = exc
         finally:
+            staged.set()
             if held is not None:
                 os.close(held)  # after the lock: the swap freed no inode
 
