@@ -19,8 +19,9 @@ class _RotationRecovery:
     def _recover_rotation(self: Any) -> None:
         """Finish or discard an interrupted rotation from its durable journal.
 
-        Renames synced after the lock persist sooner only where metadata commits in order
-        (ext4); else at most one backup is lost, never refused; the prefix is staged first.
+        A background rotation syncs its renames only after its swap: they persist in order
+        only where metadata commits in order (ext4). Elsewhere a crash loses at most one backup
+        and refuses nothing, as the prefix is staged first.
         """
         journal = self._rotation_manifest_path()
         sidecar = self._rotation_sidecar(journal)
