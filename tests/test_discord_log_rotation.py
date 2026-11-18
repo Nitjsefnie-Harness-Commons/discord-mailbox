@@ -886,7 +886,8 @@ def test_connector_log_background_rotation_keeps_order_and_the_ceiling(tmp):
 
 
 def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
-    """A worker's failure raises once from the next write, which appends nothing; logging then recovers, or refuses for good."""
+    """A worker's failure raises once, from the next write or, when it escapes before the stage, from the first write at the ceiling;
+    that write appends nothing, and logging then recovers, or refuses for good."""
     m, log, case, locked, release, staged, held, opens = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event(), set(), []
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_prepare_rotation_sidecar",
