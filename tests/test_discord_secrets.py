@@ -101,6 +101,7 @@ def test_the_cli_takes_the_flag_then_the_file_and_only_the_flag_warns(tmp):
                             (["setup", "--token-file", good], "setup", held),
                             (["setup"], "setup", env)):
         seen, out, err, _ = _cli(argv, env=env)
+        err = err.removesuffix("setup finished without finding or creating the attachments channel\n")    # the stand-in bot never settles
         got = seen.get(key)
         if key == "exit":
             assert want in got and held not in got and env not in got, _hide((argv, got), names)

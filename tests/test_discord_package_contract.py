@@ -129,7 +129,7 @@ def test_setup_hints_name_the_invoked_command(tmp):
         assert f"({name} does not handle OAuth" in err, err
 
 
-def _run_setup(guilds, ready=True):
+def _run_setup(guilds, ready=True, stdout=None):
     """Run `setup` as a bot in `guilds` -> (stdout, stderr, exit status); `ready` False: no on_ready."""
     import discord
     from discord_mb_lib import core
@@ -141,7 +141,7 @@ def _run_setup(guilds, ready=True):
         return client
 
     status = 0
-    with mock.patch.object(discord, "Client", bot), contextlib.redirect_stdout(io.StringIO()) as out, \
+    with mock.patch.object(discord, "Client", bot), contextlib.redirect_stdout(stdout or io.StringIO()) as out, \
             contextlib.redirect_stderr(io.StringIO()) as err:
         try:
             core.setup_main(token="unused")
@@ -192,10 +192,24 @@ def test_setup_exits_nonzero_unless_it_finds_or_creates_the_channel(tmp):
     rows = [  # guilds, on_ready runs, stderr text, exit status
         ([], True, "not in any guild", 1), ([_guild("g")], True, "", 0), ([_guild("g", att)], True, "", 0),
         ([_guild("g", refuse=denied)], True, "missing perms (need Manage Channels): 403", 1),
-        ([_guild("g", refuse=OSError("boom"))], True, "setup error: boom", 1), ([_guild("g", att)], False, "", 1)]
+        ([_guild("g", refuse=OSError("boom"))], True, "setup error: boom", 1), ([_guild("g", att)], False, "setup finished without finding or creating", 1)]
     for guilds, ready, text, status in rows:
         out, err, code = _run_setup(guilds, ready)
         assert (code, text in err, (text == "") == (err == "")) == (status, True, True), (guilds, out, err, code)
+
+
+def test_setup_succeeds_once_the_channel_exists_even_if_reporting_it_fails(tmp):
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    from discord_mb_lib import core
+
+    class Closed(io.StringIO):
+        def write(self, text):
+            raise OSError("closed")
+    guild = _guild("g")
+    guild.categories = [types.SimpleNamespace(name=core.META_CATEGORY_NAME)]
+    _, err, status = _run_setup([guild], stdout=Closed())
+    assert (guild.made, status, "setup error: closed" in err) == ([core.ATTACHMENTS_CHANNEL_NAME], 0, True), (err, status)
 
 
 def test_the_connector_resolves_the_guild_setup_works_in(tmp):

@@ -5,7 +5,7 @@ import sys
 from . import _guild, _prog
 
 
-def run(token, bridge_name, attachments_name, meta_name):
+def run(token: str | None, bridge_name: str, attachments_name: str, meta_name: str) -> None:
     import discord
 
     token = token or os.environ.get('DISCORD_TOKEN')
@@ -33,7 +33,7 @@ def run(token, bridge_name, attachments_name, meta_name):
                 print(f'Meta category {meta_name!r} not found; placing channel at guild root')
             existing = discord.utils.find(lambda c: c.name == attachments_name, guild.text_channels)
             if existing:
-                print(f'#{attachments_name} already exists (id={existing.id})')
+                report = f'#{attachments_name} already exists (id={existing.id})'
             else:
                 ch = await guild.create_text_channel(
                     attachments_name,
@@ -41,8 +41,9 @@ def run(token, bridge_name, attachments_name, meta_name):
                     topic='Binary side-channel for oversized mailbox payloads. See discord_mb.py.',
                     reason='discord_mb.py setup',
                 )
-                print(f'created #{attachments_name} (id={ch.id})')
-            settled = True
+                report = f'created #{attachments_name} (id={ch.id})'
+            settled = True    # before the report: a failing print leaves the channel in place
+            print(report)
         except discord.Forbidden as e:
             print(f'missing perms (need Manage Channels): {e}', file=sys.stderr)
         except Exception as e:
@@ -52,4 +53,5 @@ def run(token, bridge_name, attachments_name, meta_name):
 
     client.run(token, log_handler=None)
     if not settled:
+        print('setup finished without finding or creating the attachments channel', file=sys.stderr)
         sys.exit(1)
