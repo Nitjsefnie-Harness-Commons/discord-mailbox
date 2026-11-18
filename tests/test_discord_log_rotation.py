@@ -747,7 +747,7 @@ for n in range(240, 440):
                         ("after-journal-unlink", ""), ("after-prepared", "digest"), ("after-prepared", "length"), ("after-prepared", "version"),
                         *((step, "worker") for step in in_lock), ("after-prepared", "repeat"), ("after-release", "worker"),
                         ("after-swapped", ""), ("after-swapped", "torn-alone"), ("after-swapped", "torn-short"), ("after-swapped", "reused"),
-                        ("after-stage-publish", "reused-absent"),
+                        ("after-stage-publish", "reused-absent"), ("after-stage-publish", "torn-absent"), ("after-stage-publish", "torn-tail-absent"),
                         *((step, extra) for step in (*in_lock, "after-release", "after-swapped") for extra in ("torn-active", "foreign-c.log", "foreign-c.log.1"))):
         case, rolled_back, backups = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" and step != "after-swapped" or extra.startswith("stale"), 3 - 3 * (extra == "torn-alone")
         case.mkdir()
@@ -787,8 +787,8 @@ for n in range(240, 440):
         elif extra.startswith(("torn-", "foreign-", "reused")):  # power loss tears the active, or a file is put at a slot, after the crash
             foreign, victim, aside = extra.startswith("foreign"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"
             saved, _ = (victim.read_bytes(), foreign and os.replace(victim, aside)) if victim.exists() else (b"", None)
-            _ = extra == "reused-absent" and slots[2].unlink()  # .1 deleted: the active holds the only copy of its bytes
-            victim.write_bytes(crafted := b"FOREIGN\n" if foreign or extra.startswith("reused") else saved[:16] if extra == "torn-short" else b"x" * 16 + saved[16:])
+            _ = extra.endswith("-absent") and slots[2].unlink()  # .1 deleted: the active holds the only copy of its bytes
+            victim.write_bytes(crafted := b"FOREIGN\n" if foreign or extra.startswith("reused") else saved[:16] if extra == "torn-short" else saved[:-2] + b"x\n" if extra == "torn-tail-absent" else b"x" * 16 + saved[16:])
             # A torn active refuses; "reused" writes foreign bytes into the owned inode, as a new file reusing its number holds them;
             # a foreign active at another inode is opened as a fresh log, its journal its own.
             with contextlib.nullcontext() if extra == "foreign-c.log" else _refuses(f"recovery accepted a {extra} slot after {step}"):
