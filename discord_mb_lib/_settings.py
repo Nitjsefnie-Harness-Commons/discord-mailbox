@@ -79,13 +79,10 @@ def setting(name, default=None):
 
 
 def renamed(read, old, default=None, new=None):
-    """Value of a variable that has a prefixed name and an old one: the prefixed name wins.
+    """Value of a renamed variable: `new` (default: `old` under PREFIX) wins over `old`.
 
-    `new` defaults to `old` under the package prefix. `read` is the lookup:
-    `os.environ.get` for a variable read from the environment only, `setting`
-    for one the settings files may carry too. The prefixed name is resolved
-    through every source `read` consults before the old name is looked at, so
-    an old name in the environment never outranks a prefixed one in a file.
+    `read` is `os.environ.get` or `setting`; `new` is resolved through all of
+    its sources before `old`, and a blank value counts as unset.
     """
     return read(new or PREFIX + old) or read(old) or default
 

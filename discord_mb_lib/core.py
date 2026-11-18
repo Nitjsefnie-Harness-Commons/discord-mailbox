@@ -94,7 +94,6 @@ from ._meta_claim import MetaRequestPending, _submitted, _take_response, _withdr
 # these in the `env` block of ~/.agent-bundle/settings.json instead of editing this
 # canonical script. The literals are the defaults a fresh server gets from
 # `discord_mb.py setup`, so an untouched install needs no configuration at all.
-# Each name is the old one; `DISCORD_MAILBOX_` + the name takes precedence over it.
 __SETTING_SPECS = (
     ('BRIDGE_CHANNEL_NAME', 'DISCORD_MB_BRIDGE_CHANNEL', 'agents'),
     ('DIRECTORY_CHANNEL_NAME', 'DISCORD_MB_DIRECTORY_CHANNEL',
