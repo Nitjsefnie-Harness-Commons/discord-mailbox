@@ -157,7 +157,7 @@ def _guild(name, *channels):
 
 def test_setup_works_in_the_guild_the_connector_does(tmp):
     if not _gateway.have_discord():
-        return _util.skip("discord.py is not installed")
+        _util.skip("discord.py is not installed")
     from discord_mb_lib import core
     bridge, att = core.BRIDGE_CHANNEL_NAME, core.ATTACHMENTS_CHANNEL_NAME
     rows = [  # each guild's channels, what setup creates in each guild (None: it refuses)
@@ -181,6 +181,7 @@ def test_the_connector_resolves_the_guild_setup_works_in(tmp):
     client.guild.categories = []
     out, err = _run_setup([other, client.guild])
     assert other.made == [] and f"already exists (id={_gateway.ATTACHMENTS})" in out, (out, err)
+
 
 def test_package_modules_are_importable_from_the_script_directory(tmp):
     """The package seam is real, not an installer-only path assumption."""
