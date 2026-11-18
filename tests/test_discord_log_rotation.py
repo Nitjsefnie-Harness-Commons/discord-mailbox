@@ -927,15 +927,20 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
                                                       *(("_prepare_rotation_sidecar", plant, "refused") for plant in ("plant-symlink", "plant-hardlink")),
                                                       ("_write_rotation_record", OSError("injected record fault"), "refused"), ("_drop_rotation_journal", OSError("injected fault after the swap"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
-                                                      ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
+                                                      ("_start_rotation_worker", "start", ""), ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
             if error == "fork" and not hasattr(os, "fork") or error == "connector.log" and os.name == "nt":  # rows 4 and 5 run last
                 _util.skip("this platform cannot fork" if error == "fork" else "Windows refuses to rename the active while the worker reads it")
             case.update(seam=name, error=error, refused=refused, fired=False, ceiling=threading.Event(), path=Path(tmp) / f"row-{row}" / "connector.log", target=Path(tmp) / f"row-{row}" / "target")
             case["path"].parent.mkdir()
             writer, path, planted, _ = _filled(m, case["path"]), case["path"], str(error).startswith("plant"), log.clear()
-            with contextlib.closing(writer):
+            with contextlib.closing(writer), _patched(threading.Thread, start=mock.Mock(side_effect=RuntimeError("can't start new thread"))) if error == "start" else contextlib.nullcontext():
                 writer.write("y" * 15)  # a synchronous rotation leaves 16 bytes, so the next record starts the worker
                 writer.write("b" * 7)
+                if error == "start":  # no thread starts: every write goes on, and the writer rotates synchronously at the ceiling
+                    _ = [writer.write(f"{n:07d}") for n in range(9)]
+                    assert log[:4] == ["rotate", None, "rotate", None] and b"".join(p.read_bytes() for p in reversed(_window(path))).endswith(
+                        b"".join(f"{n:07d}\n".encode() for n in range(9))) and all(p.stat().st_size <= LIMIT for p in _window(path)), log
+                    continue
                 if error == "fork":  # the worker stages, then waits on the lock another thread holds across the fork
                     holder = threading.Thread(target=lambda w=writer: w._thread_lock.acquire() and (locked.set(), release.wait(), w._thread_lock.release()))
                     worker, _ = log[1], holder.start()
