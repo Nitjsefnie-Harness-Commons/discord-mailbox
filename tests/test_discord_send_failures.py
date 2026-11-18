@@ -78,13 +78,13 @@ def test_a_send_that_can_never_succeed_is_dropped_and_a_transient_failure_keeps_
         async def fetch_user(user_id):
             await raise_for(names[user_id], "fetch_user")
 
+        def waiting():
+            text = log.read_text(encoding="utf-8")
+            return [n for n, (_, _, o) in CASES.items() if (f"send retry ({n}.json)" not in text if o == "queued" else (box / f"{n}.json").exists())]
         client.get_user, client.fetch_channel, client.fetch_user = lambda user_id: None, fetch_channel, fetch_user
         for name, (call, _, _) in CASES.items():
             to = {"dm": True, "to": str(ids[name])} if call == "fetch_user" else {"to": "nobody", "reply_to": "1", "reply_channel_id": str(ids[name])}
             (box / f"{name}.json").write_text(json.dumps({"subject": name, "body": "b", **to}), encoding="utf-8")
-        def waiting():
-            text = log.read_text(encoding="utf-8")
-            return [n for n, (_, _, o) in CASES.items() if (f"send retry ({n}.json)" not in text if o == "queued" else (box / f"{n}.json").exists())]
         await _until(waiting)
 
     client = _gateway.run(tmp, script, outbox=True)
