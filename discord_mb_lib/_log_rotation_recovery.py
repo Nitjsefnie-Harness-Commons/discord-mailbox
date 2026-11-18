@@ -139,8 +139,7 @@ class _RotationRecovery:
                 'temporary': None, 'staged': _ABSENT, 'post': _ABSENT,
                 'context': {'expected_kind': 'rotate', 'expected_slot': index,
                             'expected_destination': destination,
-                            'expected_nonce': manifest.get('transaction_nonce'),
-                            'expected_staging': manifest.get('staging')}}
+                            'expected_nonce': manifest.get('transaction_nonce')}}
             if method == 'rewrite':
                 tail = base64.b64decode(item['tail'], validate=True) if v4 else b''
                 if tail and not v5:
