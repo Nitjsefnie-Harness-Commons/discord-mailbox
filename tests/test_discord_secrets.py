@@ -138,7 +138,7 @@ def test_setup_reads_the_prefixed_token_first_and_refuses_without_one(tmp):
         _util.skip("discord.py is not installed")
     new, old = _value(), _value()
     for env, want in (({"DISCORD_MAILBOX_DISCORD_TOKEN": new}, new), ({"DISCORD_TOKEN": old}, old),
-                      ({"DISCORD_MAILBOX_DISCORD_TOKEN": new, "DISCORD_TOKEN": old}, new)):
+                      ({"DISCORD_MAILBOX_DISCORD_TOKEN": new, "DISCORD_TOKEN": old}, new), ({"DISCORD_MAILBOX_DISCORD_TOKEN": "", "DISCORD_TOKEN": old}, old)):
         assert _cli(["setup"], env=env)[0]["setup"] == want, sorted(env)
     seen, _, err, _ = _cli(["setup"])
     assert seen == {"exit": 1} and "set DISCORD_MAILBOX_DISCORD_TOKEN" in err, (seen, err)
