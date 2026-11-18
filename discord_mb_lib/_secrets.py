@@ -5,6 +5,8 @@ from collections.abc import Callable
 from getpass import getpass
 from pathlib import Path
 
+from ._settings import renamed
+
 
 def _warn_argv(what: str, instead: str) -> None:
     # stdout carries the connector's event stream
@@ -24,9 +26,9 @@ def read_token_file(path: str) -> str:
 
 
 def cli_token(token: str | None, token_file: str | None) -> str | None:
-    """None leaves DISCORD_TOKEN and the token directory to the command."""
+    """None leaves DISCORD_MAILBOX_DISCORD_TOKEN and the token directory to the command."""
     if token:
-        _warn_argv('--token', '--token-file or DISCORD_TOKEN')
+        _warn_argv('--token', '--token-file or DISCORD_MAILBOX_DISCORD_TOKEN')
         return token
     return read_token_file(token_file) if token_file else None
 
@@ -35,7 +37,7 @@ def connector_token(token: str | None, identity: str, flavor: str | None,
                     find_in_directory: Callable[[str, str | None], tuple[str | None, str]]
                     ) -> tuple[str | None, str]:
     """The caller passes its own directory lookup, so a facade TOKEN_DIR patch reaches it."""
-    token = token or os.environ.get('DISCORD_TOKEN')
+    token = token or renamed(os.environ.get, 'DISCORD_TOKEN')
     if not token:
         return find_in_directory(identity, flavor)
     return token, flavor or 'claude'    # a caller that names no flavor gets Claude's

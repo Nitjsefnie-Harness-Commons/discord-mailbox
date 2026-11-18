@@ -84,6 +84,7 @@ if hasattr(sys.stdout, 'buffer') and not getattr(sys, '_discord_mb_utf8', False)
 
 SCRIPT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_ROOT))
+from ._settings import renamed as _renamed  # noqa: E402
 from ._settings import setting  # noqa: E402  (env -> ~/.agent-bundle/settings.json)
 from ._temp_provenance import _linklike, ensure_owned_temp_dir  # noqa: E402
 from ._meta_claim import MetaRequestPending, _submitted, _take_response, _withdraw  # noqa: E402
@@ -93,6 +94,7 @@ from ._meta_claim import MetaRequestPending, _submitted, _take_response, _withdr
 # these in the `env` block of ~/.agent-bundle/settings.json instead of editing this
 # canonical script. The literals are the defaults a fresh server gets from
 # `discord_mb.py setup`, so an untouched install needs no configuration at all.
+# Each name is the old one; `DISCORD_MAILBOX_` + the name takes precedence over it.
 __SETTING_SPECS = (
     ('BRIDGE_CHANNEL_NAME', 'DISCORD_MB_BRIDGE_CHANNEL', 'agents'),
     ('DIRECTORY_CHANNEL_NAME', 'DISCORD_MB_DIRECTORY_CHANNEL',
@@ -155,7 +157,7 @@ def __refresh_reload_state(dependencies=None):
         home / '.codex' / 'skills' / 'discord' /
         'discord_status_codex.py')
     values = {
-        public_name: current_setting(environment_name, default)
+        public_name: _renamed(current_setting, environment_name, default)
         for public_name, environment_name, default in __SETTING_SPECS
     }
     values.update({
@@ -1111,7 +1113,7 @@ def fetch_usage(timeout=60):
     # (including ConnectorApp) retain core.py's globals one level lower. Keep
     # facade relocation/``__file__`` monkeypatches working, then fall back to
     # the package's parent scripts directory.
-    override = os.environ.get('DISCORD_MB_USAGE_QUERY')
+    override = _renamed(os.environ.get, 'DISCORD_MB_USAGE_QUERY')
     here = Path(__file__).resolve().parent
     candidates = [Path(override)] if override else []
     # Installed as a wheel there is no sibling helper at all: site-packages is
@@ -2653,6 +2655,7 @@ __all__ = [
     '_linklike',
     '_meta_request',
     '_prog',
+    '_renamed',
     '_retention',
     '_setup',
     '_submitted',

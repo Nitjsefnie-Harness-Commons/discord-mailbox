@@ -3,14 +3,15 @@ import os
 import sys
 
 from . import _guild, _prog
+from ._settings import renamed
 
 
 def run(token: str | None, bridge_name: str, attachments_name: str, meta_name: str) -> None:
     import discord
 
-    token = token or os.environ.get('DISCORD_TOKEN')
+    token = token or renamed(os.environ.get, 'DISCORD_TOKEN')
     if not token:
-        print('No token. Pass --token-file or set DISCORD_TOKEN.', file=sys.stderr)
+        print('No token. Pass --token-file or set DISCORD_MAILBOX_DISCORD_TOKEN.', file=sys.stderr)
         sys.exit(1)
 
     intents = discord.Intents.default()

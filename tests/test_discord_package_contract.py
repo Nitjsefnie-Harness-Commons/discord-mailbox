@@ -959,7 +959,7 @@ def test_reload_rebinds_from_import_dependencies(tmp):
         "    assert all(getattr(module, name, marker) is marker "
         "for module in modules), name\n"
         "assert discord_mb.BRIDGE_CHANNEL_NAME == "
-        "'PATCHED-DISCORD_MB_BRIDGE_CHANNEL'\n"
+        "'PATCHED-DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'\n"
     )
     _child_ok(script)
 

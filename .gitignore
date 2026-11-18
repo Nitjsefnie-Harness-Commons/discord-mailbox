@@ -137,6 +137,7 @@
 !/tests/test_discord_conversation_grep.py
 !/tests/test_discord_delivery_gates.py
 !/tests/test_discord_directory.py
+!/tests/test_discord_env_prefix.py
 !/tests/test_discord_event_stream.py
 !/tests/test_discord_extension_trust.py
 !/tests/test_discord_extensions.py
