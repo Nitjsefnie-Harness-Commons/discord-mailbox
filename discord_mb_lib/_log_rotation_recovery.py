@@ -229,9 +229,9 @@ class _RotationRecovery:
                 holds_prefix = holder is None or (
                     holder[1] in ('complete', 'publish') and
                     holder[0].get('sha256') == entry['prefix_sha256'])
-                whole = (data[cut:] == tail and len(data) == cut + len(tail) and
-                         self._sha256_bytes(data[:cut]) == entry['prefix_sha256'] and
-                         holds_prefix)
+                exact = (data[cut:] == tail and len(data) == cut + len(tail) and
+                         self._sha256_bytes(data[:cut]) == entry['prefix_sha256'])
+                whole = exact and holds_prefix
                 if data == tail:
                     outcome = 'complete'
                 elif not swapped and (whole or (entry['v5'] and holds_prefix and tail.startswith(data))):
@@ -244,9 +244,8 @@ class _RotationRecovery:
                 elif entry['v5'] and data.startswith(tail):
                     # The tail, then later appends: checked after prefix plus tail, which may begin with the tail.
                     outcome = 'complete'
-                elif (holder is not None and holder[1] == 'absent' and data[cut:] == tail and
-                        len(data) == cut + len(tail) and self._sha256_bytes(data[:cut]) == entry['prefix_sha256']):
-                    outcome = 'keep'  # exactly the journaled prefix and tail
+                elif holder is not None and holder[1] == 'absent' and exact:
+                    outcome = 'keep'  # the only copy of the journaled bytes
                 else:
                     raise RuntimeError(
                         f'connector log journal destination content changed: {destination}')
