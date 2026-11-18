@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import _control_files, _guild, _prog, _retention, _usage_windows
+from . import _control_files, _prog, _retention, _setup, _usage_windows
 from ._chunking import chunk_body
 
 # Declared for readers and static analysis only; never executed, because
@@ -1269,49 +1269,7 @@ def send(identity, to, subject, body, reply_to=None, pin=False, channel=None,
 
 def setup_main(token=None):
     'Create missing infrastructure channels (currently: #attachments).'
-    import discord
-
-    token = token or os.environ.get('DISCORD_TOKEN')
-    if not token:
-        print('No token. Pass --token-file or set DISCORD_TOKEN.', file=sys.stderr)
-        sys.exit(1)
-
-    intents = discord.Intents.default()
-    intents.guilds = True
-    client = discord.Client(intents=intents)
-
-    @client.event
-    async def on_ready():
-        try:
-            if not client.guilds:
-                print(f'bot is not in any guild — invite it first ({_prog.program_name()} does not handle OAuth flow)', file=sys.stderr)
-                await client.close()
-                return
-            guild = _guild.setup_guild(client.guilds, BRIDGE_CHANNEL_NAME)
-            # Locate or create Meta category
-            meta = discord.utils.find(lambda c: c.name.lower() == META_CATEGORY_NAME.lower(),
-                                      guild.categories)
-            if meta is None:
-                print(f'Meta category {META_CATEGORY_NAME!r} not found; placing channel at guild root')
-            existing = discord.utils.find(lambda c: c.name == ATTACHMENTS_CHANNEL_NAME, guild.text_channels)
-            if existing:
-                print(f'#{ATTACHMENTS_CHANNEL_NAME} already exists (id={existing.id})')
-            else:
-                ch = await guild.create_text_channel(
-                    ATTACHMENTS_CHANNEL_NAME,
-                    category=meta,
-                    topic='Binary side-channel for oversized mailbox payloads. See discord_mb.py.',
-                    reason='discord_mb.py setup',
-                )
-                print(f'created #{ATTACHMENTS_CHANNEL_NAME} (id={ch.id})')
-        except discord.Forbidden as e:
-            print(f'missing perms (need Manage Channels): {e}', file=sys.stderr)
-        except Exception as e:
-            print(f'setup error: {e}', file=sys.stderr)
-        finally:
-            await client.close()
-
-    client.run(token, log_handler=None)
+    _setup.run(token, BRIDGE_CHANNEL_NAME, ATTACHMENTS_CHANNEL_NAME, META_CATEGORY_NAME)
 
 
 # --- Control-plane CLI (round-trip via connector through filesystem) ---
@@ -2690,13 +2648,13 @@ __all__ = [
     '_PARENT_CMD_PATTERNS',
     '_TEST_LOCK_ROOT_ENV',
     '_control_files',
-    '_guild',
     '_ensure_state_root',
     '_flat_component',
     '_linklike',
     '_meta_request',
     '_prog',
     '_retention',
+    '_setup',
     '_submitted',
     '_take_response',
     '_usage_segment',
