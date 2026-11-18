@@ -5,6 +5,7 @@
 # assertion; check=True would raise before the test could read it.
 
 import os
+import ast
 import asyncio
 import contextlib
 import gc
@@ -918,7 +919,7 @@ def test_reload_rebinds_from_import_dependencies(tmp):
         "importlib.reload(discord_mb)\n"
         "for name, marker in markers.items():\n"
         "    assert getattr(discord_mb, name) is marker, name\n"
-        "    assert all(getattr(module, name) is marker "
+        "    assert all(getattr(module, name, marker) is marker "
         "for module in modules), name\n"
         "assert discord_mb.BRIDGE_CHANNEL_NAME == "
         "'PATCHED-DISCORD_MB_BRIDGE_CHANNEL'\n"
@@ -1964,25 +1965,24 @@ def test_cli_reads_the_live_facade_docstring(tmp):
 
 
 def test_core_exports_match_the_module_namespace(tmp):
-    """core.__all__ is a literal, so nothing recomputes it on drift.
+    """core.__all__ lists exactly the names core defines.
 
     A comprehension over globals() is one no static analyser can evaluate, so
     `from .core import *` would resolve to nothing in the three modules that do
-    it. A hand-maintained export list carries the usual hazard: a new public
-    name can silently never reach the facade. This recomputes the globals()
-    expression and requires the two to agree.
+    it. A hand-maintained list can miss a new name, which never reaches the
+    facade, or list an import, which leaks into every wildcard importer: the
+    namespace less what core.py imports from outside the package must equal it.
     """
     # Through the facade, never `from discord_mb_lib import core`: this
     # package is also installed as a wheel, so a bare import resolves to
     # site-packages and the test would pass while describing somebody else's
     # copy of core.py.
     core = _util.load(MB, "mb_core_exports")._core_module
-
-    expected = sorted(
-        name for name in vars(core)
-        if (not name.startswith('__')
-            and not name.startswith('_discord_mb_class_')
-            and name != 'SCRIPT_ROOT'))
+    source = ast.parse(Path(core.__file__).read_text(encoding="utf-8"))
+    imported = {alias.name.split('.')[0] for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
+                and not getattr(node, 'level', 0) for alias in node.names}      # level 0: an absolute import
+    expected = sorted(name for name in vars(core) if not name.startswith(('__', '_discord_mb_class_'))
+                      and name not in imported | {'SCRIPT_ROOT'})
     declared = sorted(core.__all__)
     assert declared == expected, (
         "core.__all__ has drifted from the module namespace.\n"
@@ -1993,25 +1993,26 @@ def test_core_exports_match_the_module_namespace(tmp):
 def test_module_exports_cover_the_package(tmp):
     """storage, connector and cli list only their own names.
 
-    The facade unions the four __all__ lists, so each module listing just what
-    it defines exports the same set as listing its whole namespace would --
-    but only while every public name is actually reachable from one of the
-    four. This recomputes each module's whole-namespace expression (wildcard
-    imports included) and requires the union to match.
+    The facade unions the four __all__ lists and the standard-library names
+    they import, so each module listing just what it defines exports the same
+    set as listing its whole namespace would -- but only while every name is
+    reachable from one of the four. This recomputes each module's whole
+    namespace (wildcard imports included) and requires the union to match, and
+    the facade to keep each standard-library object a patch goes through.
     """
     facade = _util.load(MB, "mb_module_exports")
     modules = (facade._core_module, facade._storage_module,
                facade._connector_module, facade._cli_module)
-    declared = set()
-    for module in modules:
-        declared.update(module.__all__)
-    reachable = set()
-    for module in modules:
-        reachable.update(
-            name for name in vars(module)
-            if (not name.startswith('__')
-                and not name.startswith('_discord_mb_class_')
-                and name != 'SCRIPT_ROOT'))
+    stdlib = {name: importlib.import_module(name) for name in (
+        "argparse asyncio base64 binascii codecs errno hashlib hmac io json os "
+        "random re socket stat subprocess sys tempfile time uuid").split()}
+    stdlib.update((name, getattr(importlib.import_module(source), name)) for source, name in (
+        ("pathlib", "Path"), ("typing", "Any"), ("collections", "deque"), ("typing", "TYPE_CHECKING")))
+    lost = [name for name, value in stdlib.items() if getattr(facade, name, None) is not value]
+    assert not lost, f"the facade no longer exposes these as the same object: {lost}"
+    declared = set(stdlib).union(*(module.__all__ for module in modules))
+    reachable = {name for module in modules for name in vars(module)
+                 if not name.startswith(('__', '_discord_mb_class_')) and name != 'SCRIPT_ROOT'}
     assert declared == reachable, (
         "the package's exported set has drifted.\n"
         f"reachable but unexported: {sorted(reachable - declared)}\n"
@@ -2025,8 +2026,6 @@ def _functions_calling_os_open(path):
     earlier, so the whole enclosing function is the unit that has to mention
     O_BINARY, not the call's second argument.
     """
-    import ast
-
     source = Path(path).read_text(encoding="utf-8")
     tree = ast.parse(source, str(path))
     found = []
