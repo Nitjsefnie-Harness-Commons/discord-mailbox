@@ -166,8 +166,7 @@ def test_the_cli_sends_each_request_and_prints_the_warning_on_stderr_only(tmp):
              {"op": "creds-add", "domain": "d", "login": "l", "password": "p", "upsert": True}, None, None)):
         got_code, out, err, sent = _util.run_cli(functools.partial(core.creds_cli, types.SimpleNamespace(**{**base, **extra, "creds_action": action})), {
             "ok": True, "entries": json.loads(json.dumps(answer)), "warning": "w-text", "action": "added", "msg_id": "5"})
-        assert got_code == code, (action, got_code)
-        assert sent == [("me", payload)], (action, sent)
+        assert (got_code, sent) == (code, [("me", payload)]), (action, got_code, sent)
         assert err.startswith("warning: w-text\n"), (action, err)
         if stdout is not None:      # --json parses whole; the text form is read off its `(by ...)` tails
             got = json.loads(out) if extra.get("json", True) else [
