@@ -2421,7 +2421,7 @@ def test_portable_publication_env_forces_the_named_path(tmp):
     for env, forced in (({name: "1"}, True), ({name: "0"}, False), ({}, False), ({prefixed: "1"}, True),
                         ({prefixed: "0", name: "1"}, False), ({prefixed: "", name: "1"}, True)):
         # A platform that publishes anonymously, so only the variable decides.
-        with mock.patch.dict(os.environ, env), mock.patch.object(os, "O_TMPFILE", 1, create=True), mock.patch.object(os, "name", "posix"):
+        with mock.patch.dict(os.environ, {name: "", prefixed: "", **env}), mock.patch.object(os, "O_TMPFILE", 1, create=True), mock.patch.object(os, "name", "posix"):
             assert available() is not forced, env
 
 
