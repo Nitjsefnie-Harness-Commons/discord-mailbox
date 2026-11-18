@@ -241,17 +241,19 @@ def local_target(uses, files, workflow):
 
 
 def covered_workflows(text, workflows):
-    """COVERED, bound once to a non-empty literal tuple of `workflows`; any other shape refuses."""
+    """COVERED, or the refusal below; a star import counts as naming it."""
     try:
         tree = ast.parse(text)
-        stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == 'COVERED'
-                  and isinstance(node.ctx, ast.Store)]
-        values = [node.value for node in tree.body if isinstance(node, ast.Assign) and node.targets == stores]
+        names = [node for node in ast.walk(tree) if isinstance(node, ast.alias) and node.name == '*'
+                 or not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load))
+                 and any(value == 'COVERED' for _, value in ast.iter_fields(node))]
+        values = [node.value for node in tree.body if isinstance(node, ast.Assign) and node.targets == names]
         covered = ast.literal_eval(values[0]) if len(values) == 1 else None
     except (SyntaxError, ValueError, TypeError):
         covered = None
     if not (isinstance(covered, tuple) and covered and all(isinstance(path, str) and path in workflows for path in covered)):
-        raise GateError(f'{FOLDER}: COVERED is not one non-empty literal tuple of tracked workflows')
+        raise GateError(f'{FOLDER}: COVERED is not one non-empty literal tuple of tracked workflows, '
+                        'set once at top level and otherwise only read')
     return covered
 
 
