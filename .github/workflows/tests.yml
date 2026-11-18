@@ -29,8 +29,8 @@ permissions:
   contents: read
 
 concurrency:
-  # A new run for the same ref cancels the in-flight one, except a push to
-  # main: each commit there keeps its own run, so its own result.
+  # Each push to main has its own group, so no run cancels it; any other run
+  # cancels the earlier in-flight run of its ref's group.
   group: tests-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 

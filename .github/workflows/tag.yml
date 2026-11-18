@@ -45,9 +45,8 @@ defaults:
     shell: bash
 
 concurrency:
-  # NOT cancel-in-progress: a superseded test run teaches you nothing and is
-  # worth cancelling; a superseded tag run may be midway through creating a
-  # tag.
+  # NOT cancel-in-progress: a superseded tag run may be midway through
+  # creating a tag.
   group: tag
   cancel-in-progress: false
 
@@ -192,8 +191,8 @@ jobs:
         # runs: a comment-triggered run neither gates nor blocks, and no run of
         # this workflow, an earlier failed one included, counts either way. It
         # needs at least one such check that is not `skipped`, so it cannot
-        # pass before CI is scheduled. `cancelled` fails: a superseded commit
-        # is not released. Check runs are read first: a workflow run starting
+        # pass before CI is scheduled. `cancelled` fails: a cancelled check is
+        # not a pass. Check runs are read first: a workflow run starting
         # between the two reads is counted on the next poll instead of having
         # its checks dropped.
         run: |
