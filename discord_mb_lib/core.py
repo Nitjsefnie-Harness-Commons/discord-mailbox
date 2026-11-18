@@ -36,7 +36,7 @@ import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from . import _control_files, _prog, _retention, _usage_windows
+from . import _control_files, _guild, _prog, _retention, _usage_windows
 from ._chunking import chunk_body
 
 # Declared for readers and static analysis only; never executed, because
@@ -1295,14 +1295,13 @@ def setup_main(token=None):
                 print(f'bot is not in any guild — invite it first ({_prog.program_name()} does not handle OAuth flow)', file=sys.stderr)
                 await client.close()
                 return
-            guild = client.guilds[0]
+            guild = _guild.setup_guild(client.guilds, BRIDGE_CHANNEL_NAME)
             # Locate or create Meta category
             meta = discord.utils.find(lambda c: c.name.lower() == META_CATEGORY_NAME.lower(),
                                       guild.categories)
             if meta is None:
                 print(f'Meta category {META_CATEGORY_NAME!r} not found; placing channel at guild root')
-            existing = discord.utils.find(lambda c: c.name == ATTACHMENTS_CHANNEL_NAME,
-                                          guild.text_channels)
+            existing = discord.utils.find(lambda c: c.name == ATTACHMENTS_CHANNEL_NAME, guild.text_channels)
             if existing:
                 print(f'#{ATTACHMENTS_CHANNEL_NAME} already exists (id={existing.id})')
             else:
@@ -2697,6 +2696,7 @@ __all__ = [
     '_PARENT_CMD_PATTERNS',
     '_TEST_LOCK_ROOT_ENV',
     '_control_files',
+    '_guild',
     '_ensure_state_root',
     '_flat_component',
     '_linklike',

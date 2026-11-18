@@ -107,27 +107,11 @@ def test_setup_hints_name_the_invoked_command(tmp):
     if not _gateway.have_discord():
         return _util.skip("discord.py is not installed")
     import discord
-    from discord_mb_lib import connector, core
+    from discord_mb_lib import connector
     get = discord.utils.get
 
     async def script(client):    # the guild lacks #attachments: the warning is logged, the upload refused
         await client.ask({"up": {"op": "attachment-upload", "path": str(Path(tmp, "f.txt"))}})
-
-    class Bare:    # a bot that is in no guild
-        guilds = []
-
-        def __init__(self, *args, **kwargs):
-            self.ready = None
-
-        def event(self, function):
-            self.ready = function
-            return function
-
-        def run(self, *args, **kwargs):
-            asyncio.run(self.ready())
-
-        async def close(self):
-            pass
 
     Path(tmp, "f.txt").write_text("x", encoding="utf-8")
 
@@ -137,13 +121,66 @@ def test_setup_hints_name_the_invoked_command(tmp):
     for argv0, name in INVOKED_AS:
         with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord.utils, "get", without):
             client = _gateway.run(tmp, script)
-        with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord, "Client", Bare), \
-                contextlib.redirect_stderr(io.StringIO()) as err:
-            core.setup_main(token="unused")
+        with mock.patch.object(sys, "argv", [argv0]):
+            _, err = _run_setup([])    # a bot that is in no guild
         assert f"run `{name} setup` or create" in client.log, client.log
         assert f"run `{name} setup` first" in client.responses["up"]["error"], client.responses
-        assert f"({name} does not handle OAuth" in err.getvalue(), err.getvalue()
+        assert f"({name} does not handle OAuth" in err, err
 
+
+def _run_setup(guilds):
+    """Run `setup` as a bot that is in `guilds` -> (stdout, stderr)."""
+    import discord
+    from discord_mb_lib import core
+
+    def bot(*args, **kwargs):
+        client = types.SimpleNamespace(guilds=guilds, close=lambda: asyncio.sleep(0))
+        client.event = lambda function: setattr(client, "ready", function) or function
+        client.run = lambda *args, **kwargs: asyncio.run(client.ready())
+        return client
+
+    with mock.patch.object(discord, "Client", bot), contextlib.redirect_stdout(io.StringIO()) as out, \
+            contextlib.redirect_stderr(io.StringIO()) as err:
+        core.setup_main(token="unused")
+    return out.getvalue(), err.getvalue()
+
+
+def _guild(name, *channels):
+    """A guild with these text channels; `made` lists what `setup` creates in it."""
+    async def create_text_channel(channel, **kwargs):
+        guild.made.append(channel)
+        return types.SimpleNamespace(id=7)
+    guild = types.SimpleNamespace(id=len(name), name=name, categories=[], made=[], create_text_channel=create_text_channel,
+                                  text_channels=[types.SimpleNamespace(id=i, name=c) for i, c in enumerate(channels, 1)])
+    return guild
+
+
+def test_setup_works_in_the_guild_the_connector_does(tmp):
+    if not _gateway.have_discord():
+        return _util.skip("discord.py is not installed")
+    from discord_mb_lib import core
+    bridge, att = core.BRIDGE_CHANNEL_NAME, core.ATTACHMENTS_CHANNEL_NAME
+    rows = [  # each guild's channels, what setup creates in each guild (None: it refuses)
+        (((), (bridge,)), [[], [att]]),
+        (((att,), (bridge,)), [[], [att]]),
+        (((bridge,), (bridge,)), [[att], []]),
+        (((),), [[att]]),
+        (((), ()), None)]
+    for specs, made in rows:
+        guilds = [_guild(f"g{i}", *channels) for i, channels in enumerate(specs)]
+        out, err = _run_setup(guilds)
+        assert [g.made for g in guilds] == (made or [[]] * len(guilds)), (specs, out, err)
+        assert (made is None) == (f"none has a #{bridge} channel; create #{bridge} in the intended server first" in err), (specs, err)
+        assert (made is None) == (out == "" and err != ""), (specs, out, err)
+
+
+def test_the_connector_resolves_the_guild_setup_works_in(tmp):
+    other = _guild("other")
+    client = _gateway.run(tmp, lambda client: asyncio.sleep(0), others=[other])
+    assert "main guild: 'guild'; also in 1 other server(s): ['other']" in client.log, client.log
+    client.guild.categories = []
+    out, err = _run_setup([other, client.guild])
+    assert other.made == [] and f"already exists (id={_gateway.ATTACHMENTS})" in out, (out, err)
 
 def test_package_modules_are_importable_from_the_script_directory(tmp):
     """The package seam is real, not an installer-only path assumption."""
@@ -536,6 +573,33 @@ def test_failed_private_wrapper_build_removes_package_tree(tmp):
     _child_ok(script)
 
 
+def _staged_reload(fails):
+    """Child script lines: `discord_mb` reloads on a thread paused at its first `inspect.signature` call
+    until `release` is set; with `fails` the reload raises once it reaches `cli`. `failure` collects its error."""
+    return (
+        "entered = threading.Event()\n"
+        "release = threading.Event()\n"
+        "original_signature = inspect.signature\n"
+        "first = True\n"
+        "def paused_signature(value):\n"
+        "    global first\n"
+        "    if first:\n"
+        "        first = False\n"
+        "        entered.set()\n"
+        "        assert release.wait(10)\n"
+        + ("    if getattr(value, '__module__', '').endswith('.cli'):\n"
+           "        raise RuntimeError('injected reload failure')\n" if fails else "")
+        + "    return original_signature(value)\n"
+        "inspect.signature = paused_signature\n"
+        "failure = []\n"
+        "def reload_it():\n"
+        "    try: importlib.reload(discord_mb)\n"
+        "    except BaseException as exc: failure.append(exc)\n"
+        "thread = threading.Thread(target=reload_it)\n"
+        "thread.start()\n"
+        "assert entered.wait(10)\n")
+
+
 def test_failed_reload_preserves_override_assigned_while_staged(tmp):
     """Rollback merges a concurrent public write instead of erasing it."""
     script = (
@@ -543,27 +607,7 @@ def test_failed_reload_preserves_override_assigned_while_staged(tmp):
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
         "import discord_mb\n"
         "from discord_mb_lib import core, storage, connector, cli\n"
-        "entered = threading.Event()\n"
-        "release = threading.Event()\n"
-        "original_signature = inspect.signature\n"
-        "first = True\n"
-        "def paused_then_failing(value):\n"
-        "    global first\n"
-        "    if first:\n"
-        "        first = False\n"
-        "        entered.set()\n"
-        "        assert release.wait(10)\n"
-        "    if getattr(value, '__module__', '').endswith('.cli'):\n"
-        "        raise RuntimeError('injected reload failure')\n"
-        "    return original_signature(value)\n"
-        "inspect.signature = paused_then_failing\n"
-        "failure = []\n"
-        "def reload_it():\n"
-        "    try: importlib.reload(discord_mb)\n"
-        "    except BaseException as exc: failure.append(exc)\n"
-        "thread = threading.Thread(target=reload_it)\n"
-        "thread.start()\n"
-        "assert entered.wait(10)\n"
+        + _staged_reload(True) +
         "fake = lambda pid: True\n"
         "discord_mb.pid_alive = fake\n"
         "release.set()\n"
@@ -586,27 +630,7 @@ def test_failed_reload_preserves_concurrent_override_deletion(tmp):
         "import discord_mb\n"
         "from discord_mb_lib import core\n"
         "discord_mb.coarse_duration = lambda value: 'STALE'\n"
-        "entered = threading.Event()\n"
-        "release = threading.Event()\n"
-        "original_signature = inspect.signature\n"
-        "first = True\n"
-        "def paused_then_failing(value):\n"
-        "    global first\n"
-        "    if first:\n"
-        "        first = False\n"
-        "        entered.set()\n"
-        "        assert release.wait(10)\n"
-        "    if getattr(value, '__module__', '').endswith('.cli'):\n"
-        "        raise RuntimeError('injected reload failure')\n"
-        "    return original_signature(value)\n"
-        "inspect.signature = paused_then_failing\n"
-        "failure = []\n"
-        "def reload_it():\n"
-        "    try: importlib.reload(discord_mb)\n"
-        "    except BaseException as exc: failure.append(exc)\n"
-        "thread = threading.Thread(target=reload_it)\n"
-        "thread.start()\n"
-        "assert entered.wait(10)\n"
+        + _staged_reload(True) +
         "del discord_mb.coarse_duration\n"
         "release.set()\n"
         "thread.join(10)\n"
@@ -627,25 +651,7 @@ def test_public_call_during_reload_cannot_publish_raw_implementations(tmp):
         "import importlib, inspect, sys, threading\n"
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
         "import discord_mb\n"
-        "entered = threading.Event()\n"
-        "release = threading.Event()\n"
-        "original_signature = inspect.signature\n"
-        "first = True\n"
-        "def paused_signature(value):\n"
-        "    global first\n"
-        "    if first:\n"
-        "        first = False\n"
-        "        entered.set()\n"
-        "        assert release.wait(10)\n"
-        "    return original_signature(value)\n"
-        "inspect.signature = paused_signature\n"
-        "failure = []\n"
-        "def reload_it():\n"
-        "    try: importlib.reload(discord_mb)\n"
-        "    except BaseException as exc: failure.append(exc)\n"
-        "thread = threading.Thread(target=reload_it)\n"
-        "thread.start()\n"
-        "assert entered.wait(10)\n"
+        + _staged_reload(False) +
         "discord_mb.pid_alive(999999999)\n"
         "release.set()\n"
         "thread.join(10)\n"
@@ -675,25 +681,7 @@ def test_old_call_cannot_repropagate_patch_into_staged_reload(tmp):
         "fake = lambda pid: True\n"
         "discord_mb.pid_alive = fake\n"
         "old_call(999999999, 'nobody')\n"
-        "entered = threading.Event()\n"
-        "release = threading.Event()\n"
-        "original_signature = inspect.signature\n"
-        "first = True\n"
-        "def paused_signature(value):\n"
-        "    global first\n"
-        "    if first:\n"
-        "        first = False\n"
-        "        entered.set()\n"
-        "        assert release.wait(10)\n"
-        "    return original_signature(value)\n"
-        "inspect.signature = paused_signature\n"
-        "failure = []\n"
-        "def reload_it():\n"
-        "    try: importlib.reload(discord_mb)\n"
-        "    except BaseException as exc: failure.append(exc)\n"
-        "thread = threading.Thread(target=reload_it)\n"
-        "thread.start()\n"
-        "assert entered.wait(10)\n"
+        + _staged_reload(False) +
         "old_call(999999999, 'nobody')\n"
         "release.set()\n"
         "thread.join(10)\n"

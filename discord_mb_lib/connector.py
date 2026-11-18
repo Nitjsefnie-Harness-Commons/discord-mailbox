@@ -18,7 +18,7 @@ from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._send_errors import _send_failure, _send_nonce
-from . import _linked, _pins, _prog
+from . import _guild, _linked, _pins, _prog
 from . import _meta_claim
 from . import _control_files
 from . import _ext_trust
@@ -415,8 +415,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # servers, and guilds[0] is arbitrary). Other servers are reachable by
         # numeric channel id (send/topic/pins/conversation --channel); only the
         # named infra channels and the broadcast role are main-only.
-        guild = next((g for g in client.guilds
-                      if discord.utils.get(g.text_channels, name=BRIDGE_CHANNEL_NAME)), None)
+        guild = _guild.bridge_guild(client.guilds, BRIDGE_CHANNEL_NAME)
         if guild is None:
             guild = client.guilds[0]
             log(f'WARN: no guild has a #{BRIDGE_CHANNEL_NAME} channel; defaulting main to {guild.name!r}')
@@ -2837,6 +2836,7 @@ __all__ = [
     '_claim_ownership',
     '_ext_trust',
     '_gateway_state',
+    '_guild',
     '_linked',
     '_meta_claim',
     '_open_dm_channel',
