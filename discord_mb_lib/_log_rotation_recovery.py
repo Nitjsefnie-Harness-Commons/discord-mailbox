@@ -55,17 +55,19 @@ class _RotationRecovery:
 
     @staticmethod
     def _rotation_record(manifest: dict, sidecar: Path) -> dict:
-        """The sidecar's whole record of this generation unless the journal's is ``swapped``."""
-        if manifest['state'] == 'swapped' or manifest.get('sidecar') != sidecar.name or not sidecar.exists():
+        """This generation's whole sidecar record, else the journal's; ``swapped`` marks it."""
+        if manifest.get('sidecar') != sidecar.name or not sidecar.exists():
             return manifest
         raw = sidecar.read_bytes()
         payload = raw[40:40 + int.from_bytes(raw[:8], 'big')]
         if hashlib.sha256(payload).digest() != raw[8:40]:
             return manifest
         record = json.loads(payload)
-        return record if isinstance(record, dict) and all(
-            record.get(key) == manifest.get(key)
-            for key in ('version', 'kind', 'generation', 'transaction_nonce', 'token')) else manifest
+        if not isinstance(record, dict) or any(
+                record.get(key) != manifest.get(key)
+                for key in ('version', 'kind', 'generation', 'transaction_nonce', 'token')):
+            return manifest
+        return {**record, 'state': 'swapped'} if manifest['state'] == 'swapped' else record
 
     def _slot_identity(self: Any, path: Path) -> tuple:
         return (self._owner._identity_for(path), self._owner._entry_identity(path))
@@ -245,7 +247,7 @@ class _RotationRecovery:
                     # The only copy of the active's bytes is the active itself.
                     outcome = 'keep'
                 elif swapped and holder is not None and holds_prefix:
-                    # Synced, so torn only by power loss; the journal names this inode.
+                    # The tail is synced: only an in-place edit or lost fsync gets here
                     outcome = 'keep'
                 else:
                     raise RuntimeError(

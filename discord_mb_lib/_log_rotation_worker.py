@@ -263,8 +263,10 @@ class _RotationWorker:
             self._fsync_directory(self._path.parent)
             if os.name != 'nt':  # Windows syncs only writable handles: the swap did
                 getattr(os, 'fdatasync', os.fsync)(context['src'])
-            context['manifest']['state'] = 'swapped'
-            self._write_migration_manifest(context['manifest'], kind='rotate')
+            manifest = context['manifest']
+            self._write_migration_manifest({**{key: manifest[key] for key in (
+                'version', 'kind', 'token', 'root', 'log_name', 'generation', 'transaction_nonce', 'sidecar',
+                'stable_paths')}, 'state': 'swapped'}, kind='rotate')
             self._drop_rotation_journal(context['journal'])
             self._rotation_sidecar(context['journal']).unlink(missing_ok=True)
         finally:
