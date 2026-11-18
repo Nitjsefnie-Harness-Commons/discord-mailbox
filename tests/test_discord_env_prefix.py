@@ -3,8 +3,7 @@
 
 Each variable is driven through the code that reads it, once per limb: only the
 prefixed name, only the old name, both (the prefix wins) and a blank prefixed
-name (counts as unset). Tokens are random values built at runtime; failures name
-the variables, never the values.
+name (counts as unset).
 """
 import asyncio
 import contextlib
