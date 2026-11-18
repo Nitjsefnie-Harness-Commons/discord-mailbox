@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: perf-${{ github.ref }}
+  group: perf-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
