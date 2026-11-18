@@ -2210,12 +2210,9 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
     @classmethod
     def _staged_payload(cls, raw, *, key=None, expected_token=None,
                         expected_nonce=None, expected_kind=None,
-                        expected_slot=None, expected_destination=None,
-                        expected_staging=None):
+                        expected_slot=None, expected_destination=None):
         """Decode and, when possible, authenticate a staged temp envelope."""
         raw = bytes(raw)
-        if expected_staging == cls._PAYLOAD_STAGING:
-            return raw, None
         if raw.startswith(cls._LEGACY_TEMP_MAGIC):
             try:
                 header, payload = raw.split(b'\n', 1)
@@ -2285,8 +2282,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
     def _read_staged_payload(self, temporary, expected_size=None,
                              expected_digest=None, require_provenance=False,
                              expected_kind=None, expected_slot=None,
-                             expected_destination=None, expected_nonce=None,
-                             expected_staging=None):
+                             expected_destination=None, expected_nonce=None):
         raw = temporary.read_bytes()
         try:
             payload, provenance = self._staged_payload(
@@ -2295,8 +2291,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                 expected_nonce=expected_nonce,
                 expected_kind=expected_kind,
                 expected_slot=expected_slot,
-                expected_destination=expected_destination,
-                expected_staging=expected_staging)
+                expected_destination=expected_destination)
         except (RuntimeError, ValueError) as exc:
             raise RuntimeError(
                 f'connector log staging temp is not owned: {temporary}') from exc
@@ -2419,8 +2414,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                     expected_nonce=context.get('expected_nonce'),
                     expected_kind=context.get('expected_kind'),
                     expected_slot=context.get('expected_slot'),
-                    expected_destination=context.get('expected_destination'),
-                    expected_staging=context.get('expected_staging'))
+                    expected_destination=context.get('expected_destination'))
             except (RuntimeError, ValueError) as exc:
                 raise RuntimeError(
                     f'connector log staging temp changed during preparation: '
