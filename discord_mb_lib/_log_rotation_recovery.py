@@ -243,12 +243,9 @@ class _RotationRecovery:
                 elif entry['v5'] and data.startswith(tail):
                     # The tail, then later appends: checked after prefix plus tail, which may begin with the tail.
                     outcome = 'complete'
-                elif holder is not None and holder[1] == 'absent':
-                    # The only copy of the active's bytes is the active itself.
-                    outcome = 'keep'
-                elif swapped and holder is not None and holds_prefix:
-                    # The tail is synced: only an in-place edit or lost fsync gets here
-                    outcome = 'keep'
+                elif (holder is not None and holder[1] == 'absent' and data[cut:] == tail and
+                        len(data) == cut + len(tail) and self._sha256_bytes(data[:cut]) == entry['prefix_sha256']):
+                    outcome = 'keep'  # exactly the journaled prefix and tail
                 else:
                     raise RuntimeError(
                         f'connector log journal destination content changed: {destination}')
