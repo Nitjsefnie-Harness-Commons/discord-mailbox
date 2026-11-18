@@ -6,8 +6,7 @@ from .core import *
 # reading the source applies the plain no-underscore rule and reports
 # every use as undefined. Spelling them out also says which module
 # each one comes from.
-from .core import (_DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV,
-                   _linklike)
+from .core import _DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV, _linklike
 from . import _log_chunks
 from ._log_rotation import _RotationJournal
 from ._log_rotation_recovery import _RotationRecovery
@@ -479,8 +478,7 @@ class _ConnectorOwnership:
                     handle = self._lock_sidecar(lock_path)
                     self._path_handles.append(handle)
                     self._path_lock_paths.append(lock_path)
-                    held_sidecars.update(
-                        self._sidecar_keys(lock_path, handle))
+                    held_sidecars.update(self._sidecar_keys(lock_path, handle))
                 # Re-resolve after path interlocks.  A symlink replacement or
                 # a pathname replacement during setup is never silently used.
                 resolved = Path(os.path.realpath(str(self.requested)))
@@ -571,8 +569,7 @@ class _ConnectorOwnership:
         normalized.sort(key=lambda item: self._path_sort_key(item[0]))
         return normalized
 
-    def reacquire_stable_paths(self, records, *,
-                               revalidate_identities=True):
+    def reacquire_stable_paths(self, records, *, revalidate_identities=True):
         """Reacquire current and journal namespaces in one sorted pass.
 
         Recovery can be restarted through a hard-link filename different from
@@ -903,8 +900,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             view = view[written:]
 
     @classmethod
-    def _publish_anonymous_bytes(cls, path, payload, mode=0o600,
-                                 auth_key=None):
+    def _publish_anonymous_bytes(cls, path, payload, mode=0o600, auth_key=None):
         """Publish complete bytes without exposing a partial destination."""
         # A prior portable-fallback crash may have left a fixed claim.  Only a
         # claim authenticated by a durable key may be reconciled.  Bootstrap
@@ -1062,8 +1058,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                                   'named create proof changed after reading',
                                   os.fspath(proof))
         marker = '.create-proof'
-        if (not proof.name.startswith('.') or
-                not proof.name.endswith(marker)):
+        if not proof.name.startswith('.') or not proof.name.endswith(marker):
             raise FileExistsError(errno.EEXIST,
                                   'named create proof has an invalid name',
                                   os.fspath(proof))
@@ -1386,8 +1381,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             cls._unlink_if_identity(
                 payload_path, payload_identity, payload_entry_identity)
         if proof_identity is not None:
-            cls._unlink_if_identity(
-                proof, proof_identity, proof_entry_identity)
+            cls._unlink_if_identity(proof, proof_identity, proof_entry_identity)
         cls._fsync_directory(Path(claim).parent)
 
     @classmethod
@@ -1402,8 +1396,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             info = stage.lstat()
         except FileNotFoundError:
             return None
-        if (not stat.S_ISREG(info.st_mode) or
-                getattr(info, 'st_nlink', 1) < 1):
+        if not stat.S_ISREG(info.st_mode) or getattr(info, 'st_nlink', 1) < 1:
             raise FileExistsError(errno.EEXIST,
                                   'named create claim stage has unsafe shape',
                                   os.fspath(stage))
@@ -1463,8 +1456,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             info = proof.lstat()
         except OSError:
             return False
-        if (not stat.S_ISREG(info.st_mode) or
-                getattr(info, 'st_nlink', 1) != 1):
+        if not stat.S_ISREG(info.st_mode) or getattr(info, 'st_nlink', 1) != 1:
             return False
         identity = _ConnectorOwnership._identity_for(proof)
         entry_identity = _ConnectorOwnership._entry_identity(proof)
@@ -1886,8 +1878,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             # torn self-described record cannot be recovered safely.
             proof_before_claim = cls._read_named_claim_proof(
                 proof, auth_key=auth_key)
-            if (proof_before_claim is None or
-                    proof_before_claim['nlink'] != 2):
+            if proof_before_claim is None or proof_before_claim['nlink'] != 2:
                 raise FileExistsError(
                     errno.EEXIST,
                     'named create proof changed before publication',
@@ -1913,8 +1904,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                     os.fspath(claim))
             proof_after_claim = cls._read_named_claim_proof(
                 proof, auth_key=auth_key)
-            if (proof_after_claim is None or
-                    proof_after_claim['nlink'] != 3):
+            if proof_after_claim is None or proof_after_claim['nlink'] != 3:
                 raise FileExistsError(
                     errno.EEXIST,
                     'named create proof changed after claim publication',
@@ -2345,8 +2335,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                     context['expected_destination'])) and
                 int(size) == expected_size and len(payload) < int(size)
             )
-        except (UnicodeError, ValueError, TypeError, IndexError,
-                binascii.Error):
+        except (UnicodeError, ValueError, TypeError, IndexError, binascii.Error):
             return False
 
     def _prepare_staged_for_replace(self, temporary, expected_size,
@@ -2989,8 +2978,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             finally:
                 removed = self._unlink_if_identity(
                     name, expected_identity, expected_entry_identity)
-                if (not removed and
-                        os.path.lexists(str(name))):
+                if not removed and os.path.lexists(str(name)):
                     self._staging_cleanup_failed = True
             raise
         else:
@@ -3668,8 +3656,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             # before deciding whether there is a journal to recover; otherwise
             # a bounded orphan survives every normal open that needs no new
             # rotation or migration.
-            self._recover_named_claim(
-                journal, auth_key=self._staging_key_bytes)
+            self._recover_named_claim(journal, auth_key=self._staging_key_bytes)
             records = self._lock_journal_stable_paths(journal, kind)
             if records is not None:
                 journal_present = True
@@ -3695,8 +3682,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                 state = obsolete_backup_states[old]
                 removed = self._unlink_if_identity(
                     old, state['identity'], state['entry_identity'])
-                if (not removed and
-                        os.path.lexists(str(old))):
+                if not removed and os.path.lexists(str(old)):
                     raise RuntimeError(
                         f'connector log obsolete backup was rebound: {old}')
             return
@@ -3898,8 +3884,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
                             entry.get('temporary_identity')),
                         self._manifest_identity(
                             entry.get('temporary_entry_identity')))
-                    if (not removed and
-                            os.path.lexists(str(source))):
+                    if not removed and os.path.lexists(str(source)):
                         cleanup_ok = False
                 if cleanup_ok:
                     try:
@@ -3921,8 +3906,7 @@ class _ConnectorLogWriter(_RotationWorker, _RotationJournal, _RotationRecovery):
             state = path_state_map[old]
             removed = self._unlink_if_identity(
                 old, state['identity'], state['entry_identity'])
-            if (not removed and
-                    os.path.lexists(str(old))):
+            if not removed and os.path.lexists(str(old)):
                 raise RuntimeError(
                     f'connector log migration source was rebound: {old}')
         for index, leftover in enumerate(staged_paths):
