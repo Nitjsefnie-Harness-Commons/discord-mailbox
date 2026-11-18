@@ -6,7 +6,8 @@ can merge on a green run that never saw a later main commit changing a gate's
 own inputs. The set is derived from the workflows: each required job's
 workflow file, every local reusable workflow or action reached through the job
 or its `needs:` ancestors, every tracked file their `run:` blocks name by
-exact path, and IMPLICIT, minus the EXCLUDED records the ratchets commit.
+exact path, and IMPLICIT, minus the EXCLUDED records the ratchets commit. A
+`run:` naming FOLDER also reaches every job of the workflows its COVERED names.
 
 Limits, each narrowing the set: a directory, glob or `.` names no file (the
 conflict-marker step reads every tracked file); what a named script reaches
@@ -15,10 +16,12 @@ tool's own config file outside IMPLICIT; records, read at the base revision;
 a local composite action's own steps (its action.yml is in the set).
 
 A push run passes a head main already holds. The reader models the block YAML
-these workflows use and refuses any other shape rather than shrink the set.
+these workflows use and a literal COVERED, and refuses any other shape rather
+than shrink the set.
 
     scripts/ci/gate_base_freshness.py [--root DIR] [--print-paths]
 """
+import ast
 import os
 import re
 import subprocess
@@ -26,7 +29,8 @@ import sys
 from pathlib import Path
 
 REQUIRED_CHECKS = ('gate', 'comment-share', 'size-baseline', 'pycodestyle', 'pylint', 'pyright',
-                   'coverage', 'wheel', 'portable', 'pip-audit', 'analyze (python)')
+                   'coverage', 'wheel', 'portable', 'pip-audit', 'analyze (python)', 'ci-gate')
+FOLDER = 'scripts/ci/ci_gate.py'
 IMPLICIT = ('setup.cfg', 'pyrightconfig.json', 'pyproject.toml')
 EXCLUDED = ('.github/ci-thresholds.json', '.github/perf-budget.json',
             '.github/comment-share.json', '.github/size-baseline.json')
@@ -236,6 +240,21 @@ def local_target(uses, files, workflow):
     raise GateError(f'{workflow} uses {uses!r}, which names no tracked workflow or action file')
 
 
+def covered_workflows(text, workflows):
+    """COVERED, bound once to a non-empty literal tuple of `workflows`; any other shape refuses."""
+    try:
+        tree = ast.parse(text)
+        stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == 'COVERED'
+                  and isinstance(node.ctx, ast.Store)]
+        values = [node.value for node in tree.body if isinstance(node, ast.Assign) and node.targets == stores]
+        covered = ast.literal_eval(values[0]) if len(values) == 1 else None
+    except (SyntaxError, ValueError, TypeError):
+        covered = None
+    if not (isinstance(covered, tuple) and covered and all(isinstance(path, str) and path in workflows for path in covered)):
+        raise GateError(f'{FOLDER}: COVERED is not one non-empty literal tuple of tracked workflows')
+    return covered
+
+
 def tracked_files(root):
     return frozenset(f for f in git(root, 'ls-tree', '-r', '--name-only', '--full-tree', 'HEAD',
                                     what='list the tracked tree').split('\n') if f)
@@ -279,7 +298,11 @@ def gate_paths(root):
         for step in fields['steps']:
             if (step['uses'] or '').startswith('./'):
                 derived.add(local_target(step['uses'], files, workflow))
-            derived |= named_files(step['run'] or '', files)
+            named = named_files(step['run'] or '', files)
+            derived |= named
+            if FOLDER in named:
+                text = git(root, 'cat-file', 'blob', f'HEAD:{FOLDER}', what=f'read {FOLDER}')
+                pending += [(path, name) for path in covered_workflows(text, parsed) for name in parsed[path]]
     return sorted(derived - set(EXCLUDED))
 
 
