@@ -12,29 +12,21 @@ __version__ = "0.41.0"
 # a use before assignment. Nothing else here can trip the check: every other
 # module global is a plain def or a module-level assignment.
 
-import argparse
 import asyncio
 import base64
-import binascii
-import codecs
-from collections import deque
-import errno
 import hashlib
-import hmac
 import io
 import json
 import os
-import random
 import re
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from . import _control_files, _guild, _prog, _retention, _usage_windows
 from ._chunking import chunk_body
@@ -2632,14 +2624,19 @@ def status_plugin_cli(args):
             print(f"error:   {resp.get('error')}")
 
 
-# Spelled out rather than comprehended from globals(): a computed __all__ is
-# opaque to every static analyser, so the three modules that do
-# `from .core import *` would be left with no resolvable names at all.
-# test_core_exports_match_the_module_namespace pins this list against the
-# namespace it describes, so a new public name cannot drift out of it quietly.
+# discord_mb has always exposed these; it takes each from the modules
+# importing it.
+__STDLIB_NAMES = (
+    'argparse', 'asyncio', 'base64', 'binascii', 'codecs', 'errno', 'hashlib',
+    'hmac', 'io', 'json', 'os', 'random', 're', 'socket', 'stat', 'subprocess',
+    'sys', 'tempfile', 'time', 'uuid', 'Path', 'Any', 'deque', 'TYPE_CHECKING')
+
+# Names core and its private modules define, none imported from outside the
+# package. Spelled out: a computed __all__ is opaque to static analysers, so
+# the three `from .core import *` modules would resolve nothing.
+# test_core_exports_match_the_module_namespace pins it.
 __all__ = [
     'ATTACHMENTS_CHANNEL_NAME',
-    'Any',
     'BRIDGE_CHANNEL_NAME',
     'BROADCAST_ROLE_NAME',
     'CODEX_STATUS_PLUGIN',
@@ -2663,7 +2660,6 @@ __all__ = [
     'META_CATEGORY_NAME',
     'MetaRequestPending',
     'PACKAGE_CHECK_SECONDS',
-    'Path',
     'RECEIPT_EMOJI',
     'STATE_ROOT',
     'STATUS_KINDS',
@@ -2674,7 +2670,6 @@ __all__ = [
     'SendRetry',
     'StatusPluginGatewayTransportError',
     'TOKEN_DIR',
-    'TYPE_CHECKING',
     'USAGE_CLAIM_REFRESH',
     'USAGE_CLAIM_TTL',
     'USAGE_PACE_BAND',
@@ -2708,12 +2703,8 @@ __all__ = [
     '_usage_segment',
     '_usage_windows',
     '_withdraw',
-    'argparse',
-    'asyncio',
     'attach_extras',
     'attachments_cli',
-    'base64',
-    'binascii',
     'build_activity',
     'cancel_tracked_tasks',
     'cap_event_subject',
@@ -2721,18 +2712,15 @@ __all__ = [
     'chunk_body',
     'claim_usage_slot',
     'coarse_duration',
-    'codecs',
     'context_cli',
     'continuation_chunk_for',
     'conversation_cli',
     'creds_cli',
     'default_status_plugin',
-    'deque',
     'duration_secs',
     'embed_record',
     'emoji_cli',
     'ensure_owned_temp_dir',
-    'errno',
     'extension_cli',
     'extension_dir',
     'extension_registry_path',
@@ -2741,14 +2729,10 @@ __all__ = [
     'find_parent_pid_from',
     'flatten_components',
     'forum_cli',
-    'hashlib',
     'heartbeat_due',
-    'hmac',
     'inbox_dir',
     'install_status_plugin',
-    'io',
     'is_connector_process',
-    'json',
     'list_agents_cli',
     'load_extension',
     'load_status_plugin',
@@ -2760,7 +2744,6 @@ __all__ = [
     'moved_body',
     'moved_frames',
     'msg_cache_dir',
-    'os',
     'outbox_dir',
     'pace_dot',
     'package_change_event',
@@ -2773,8 +2756,6 @@ __all__ = [
     'pins_cli',
     'pins_dir',
     'poll_record',
-    'random',
-    're',
     'reaction_records',
     'read_extension_registry',
     'read_status_manifest',
@@ -2792,8 +2773,6 @@ __all__ = [
     'servers_cli',
     'setting',
     'setup_main',
-    'socket',
-    'stat',
     'state_dir',
     'status_plugin_cli',
     'status_plugin_down_event',
@@ -2801,17 +2780,12 @@ __all__ = [
     'status_plugin_gateway_call',
     'status_plugin_slot',
     'status_presence_record',
-    'subprocess',
     'sweep_status_plugin',
-    'sys',
-    'tempfile',
     'thread_cli',
-    'time',
     'topic_cli',
     'usage_board_plan',
     'usage_gate_paths',
     'usage_period',
-    'uuid',
     'write_extension_registry',
     'write_status_manifest',
 ]

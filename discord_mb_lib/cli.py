@@ -1,5 +1,8 @@
 """Argument parser and command dispatch for the Discord mailbox."""
 
+import argparse
+import sys
+
 from . import core as _core
 from .core import *
 from .core import __version__
