@@ -846,7 +846,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
     script = (
         "import importlib, os, sys\n"
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
-        "os.environ['DISCORD_MB_BRIDGE_CHANNEL'] = 'first'\n"
+        "os.environ['DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'] = 'first'\n"
         "import discord_mb\n"
         "from discord_mb_lib import core, storage, connector, cli\n"
         "modules = (core, storage, connector, cli)\n"
@@ -854,7 +854,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
         "assert all(module.BRIDGE_CHANNEL_NAME == 'first' "
         "for module in modules)\n"
         "connector_type = discord_mb.ConnectorApp\n"
-        "os.environ['DISCORD_MB_BRIDGE_CHANNEL'] = 'second'\n"
+        "os.environ['DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'] = 'second'\n"
         "importlib.reload(discord_mb)\n"
         "assert discord_mb.BRIDGE_CHANNEL_NAME == 'second'\n"
         "assert all(module.BRIDGE_CHANNEL_NAME == 'second' "
@@ -1833,55 +1833,41 @@ def test_package_fetch_usage_resolves_the_helper_from_the_environment(tmp):
 
     site-packages is not the caller's scripts directory, so a sibling probe
     finds nothing in a wheel install. The installer points
-    DISCORD_MB_USAGE_QUERY at the real helper; without it the board is simply
-    not published.
+    DISCORD_MAILBOX_DISCORD_MB_USAGE_QUERY at the real helper; without it the
+    board is simply not published.
     """
     core = importlib.import_module("discord_mb_lib.core")
-    helper = Path(tmp) / "usage_query.py"
-    helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    seen = {}
-
-    class _Result:
-        stdout = '{"usage": {"probe": {"pct": 1}}}'
-
-    class _Sub:
-        SubprocessError = Exception
-
-        @staticmethod
-        def run(args, **kwargs):
-            seen["args"] = args
-            return _Result()
-
-    original_subprocess = core.subprocess
-    original_env = os.environ.get("DISCORD_MB_USAGE_QUERY")
-    core.subprocess = _Sub
-    os.environ["DISCORD_MB_USAGE_QUERY"] = str(helper)
-    try:
-        assert core.fetch_usage() == {"probe": {"pct": 1}}
-        assert Path(seen["args"][1]) == helper
-    finally:
-        core.subprocess = original_subprocess
-        if original_env is None:
-            os.environ.pop("DISCORD_MB_USAGE_QUERY", None)
-        else:
-            os.environ["DISCORD_MB_USAGE_QUERY"] = original_env
+    new, old = (Path(tmp) / name for name in ("new_usage_query.py", "old_usage_query.py"))
+    for helper in (new, old):
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    seen, name = [], "DISCORD_MB_USAGE_QUERY"
+    result = types.SimpleNamespace(stdout='{"usage": {"probe": {"pct": 1}}}')
+    sub = types.SimpleNamespace(SubprocessError=Exception, run=lambda args, **kwargs: seen.append(args[1]) or result)
+    for env, want in (({"DISCORD_MAILBOX_" + name: str(new)}, new), ({name: str(old)}, old),
+                      ({"DISCORD_MAILBOX_" + name: str(new), name: str(old)}, new), ({"DISCORD_MAILBOX_" + name: "", name: str(old)}, old)):
+        with mock.patch.object(core, "subprocess", sub), mock.patch.dict(os.environ, env):
+            assert core.fetch_usage() == {"probe": {"pct": 1}}
+        assert Path(seen.pop()) == want, sorted(env)
 
 
 def test_package_fetch_usage_is_quiet_without_any_helper(tmp):
     """No helper anywhere means no board, not an exception."""
     core = importlib.import_module("discord_mb_lib.core")
-    original_env = os.environ.get("DISCORD_MB_USAGE_QUERY")
-    os.environ["DISCORD_MB_USAGE_QUERY"] = str(Path(tmp) / "absent.py")
-    original_file = core.__file__
-    core.__file__ = str(Path(tmp) / "pkg" / "core.py")
-    try:
+    with mock.patch.dict(os.environ, {"DISCORD_MB_USAGE_QUERY": str(Path(tmp) / "absent.py")}), \
+            mock.patch.object(core, "__file__", str(Path(tmp) / "pkg" / "core.py")):
         assert core.fetch_usage() == {}
-    finally:
-        core.__file__ = original_file
-        if original_env is None:
-            os.environ.pop("DISCORD_MB_USAGE_QUERY", None)
-        else:
-            os.environ["DISCORD_MB_USAGE_QUERY"] = original_env
+
+
+def test_a_setting_reads_the_prefixed_name_from_any_source_before_the_old_name(tmp):
+    del tmp
+    sys.path.insert(0, _util.SCRIPTS)
+    from discord_mb_lib import _settings, core
+    for public, name, default in getattr(core, "__SETTING_SPECS"):
+        new, old, prefixed = f"new {public}", f"old {public}", "DISCORD_MAILBOX_" + name
+        for env, file, want in (({prefixed: new}, {}, new), ({name: old}, {}, old), ({}, {prefixed: new}, new),
+                                ({name: old}, {prefixed: new}, new), ({}, {name: old}, old), ({}, {}, default)):
+            with mock.patch.dict(os.environ, {name: "", prefixed: "", **env}), mock.patch.object(_settings, "_cache", file):
+                assert getattr(core, "__refresh_reload_state")()[public] == want, (public, sorted(env), sorted(file))
 
 
 def test_star_import_does_not_leak_facade_build_temporaries(tmp):

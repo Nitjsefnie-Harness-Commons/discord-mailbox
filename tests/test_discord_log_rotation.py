@@ -2416,25 +2416,13 @@ else:
 
 def test_portable_publication_env_forces_the_named_path(tmp):
     """The CI seam that runs the macOS/Windows protocol on a Linux runner."""
-    m = _mod()
-    available = m._anonymous_publication_available
-
-    def unforced():
-        return getattr(os, "O_TMPFILE", None) is not None and os.name != "nt"
-
-    old = os.environ.get("DISCORD_MB_PORTABLE_PUBLICATION")
-    try:
-        os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "1"
-        assert available() is False
-        os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = "0"
-        assert available() is unforced()
-        os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION")
-        assert available() is unforced()
-    finally:
-        if old is None:
-            os.environ.pop("DISCORD_MB_PORTABLE_PUBLICATION", None)
-        else:
-            os.environ["DISCORD_MB_PORTABLE_PUBLICATION"] = old
+    available = _mod()._anonymous_publication_available
+    name, prefixed = "DISCORD_MB_PORTABLE_PUBLICATION", "DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION"
+    for env, forced in (({name: "1"}, True), ({name: "0"}, False), ({}, False), ({prefixed: "1"}, True),
+                        ({prefixed: "0", name: "1"}, False), ({prefixed: "", name: "1"}, True)):
+        # A platform that publishes anonymously, so only the variable decides.
+        with mock.patch.dict(os.environ, env), mock.patch.object(os, "O_TMPFILE", 1, create=True), mock.patch.object(os, "name", "posix"):
+            assert available() is not forced, env
 
 
 def test_connector_named_fallback_partial_first_claim_is_bounded_and_reclaimed(tmp):

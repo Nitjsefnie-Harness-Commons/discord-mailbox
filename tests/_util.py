@@ -15,6 +15,10 @@ from unittest import mock
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # This project IS the mailbox, so its "scripts" root resolves to its root.
 SCRIPTS = str(_PROJECT_ROOT)
+RENAMED = ("DISCORD_TOKEN", "DISCORD_MB_USAGE_QUERY", "DISCORD_MB_PORTABLE_PUBLICATION", "DISCORD_MB_BRIDGE_CHANNEL", "DISCORD_MB_DIRECTORY_CHANNEL",
+           "DISCORD_MB_ATTACHMENTS_CHANNEL", "DISCORD_MB_CREDENTIALS_CHANNEL", "DISCORD_MB_BROADCAST_ROLE", "DISCORD_MB_META_CATEGORY")
+for _name in (*RENAMED, *("DISCORD_MAILBOX_" + name for name in RENAMED)):    # a test sets one name, never meets the other
+    os.environ.pop(_name, None)
 
 
 def script(name):

@@ -183,17 +183,13 @@ def test_usage_fetch_keeps_partial_results_on_provider_failure(tmp):
     # one; without it fetch_usage returns early and never reaches the mock.
     helper = Path(tmp) / "usage_query.py"
     helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    os.environ["DISCORD_MB_USAGE_QUERY"] = str(helper)
     response = SimpleNamespace(
         returncode=1,
         stdout=json.dumps({"usage": {"claude": {"weekly": {"pct": 12}}},
                            "errors": {"codex": "not logged in"}}),
         stderr="")
-    try:
-        with mock.patch.object(mb.subprocess, "run", return_value=response):
-            got = mb.fetch_usage()
-    finally:
-        os.environ.pop("DISCORD_MB_USAGE_QUERY", None)
+    with mock.patch.dict(os.environ, {"DISCORD_MB_USAGE_QUERY": str(helper)}), mock.patch.object(mb.subprocess, "run", return_value=response):
+        got = mb.fetch_usage()
     assert got == {"claude": {"weekly": {"pct": 12}}}
 
 
