@@ -43,7 +43,7 @@ def _posix_mode_exposed(mode):
     return bool(stat.S_IMODE(mode) & 0o077)
 
 
-PORTABLE_PUBLICATION_ENV = 'DISCORD_MB_PORTABLE_PUBLICATION'
+PORTABLE_PUBLICATION_ENV = 'DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION'
 
 
 def _anonymous_publication_available():
@@ -55,12 +55,12 @@ def _anonymous_publication_available():
     named path, where every intermediate state is a real directory entry that
     a crash leaves behind for the next start to reason about.
 
-    Setting DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION=1 takes the portable
-    path on a platform that does not need it. That is how CI exercises the macOS and
-    Windows publication protocol on a Linux runner; nothing in normal
-    operation sets it.
+    Setting DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION=1 (CI sets the
+    older name) takes the portable path on a platform that does not need it,
+    so a Linux runner exercises the macOS and Windows protocol; nothing in
+    normal operation sets it.
     """
-    if _renamed(os.environ.get, PORTABLE_PUBLICATION_ENV) == '1':
+    if _renamed(os.environ.get, 'DISCORD_MB_PORTABLE_PUBLICATION', new=PORTABLE_PUBLICATION_ENV) == '1':
         return False
     return getattr(os, 'O_TMPFILE', None) is not None and os.name != 'nt'
 
