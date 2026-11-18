@@ -130,7 +130,7 @@ def test_setup_hints_name_the_invoked_command(tmp):
 
 
 def _run_setup(guilds, ready=True):
-    """Run `setup` as a bot that is in `guilds` -> (stdout, stderr, exit status); `ready` False: run() returns before on_ready."""
+    """Run `setup` as a bot in `guilds` -> (stdout, stderr, exit status); `ready` False: no on_ready."""
     import discord
     from discord_mb_lib import core
 
@@ -151,7 +151,7 @@ def _run_setup(guilds, ready=True):
 
 
 def _guild(name, *channels, refuse=None):
-    """A guild with these text channels; `made` lists what `setup` creates in it, `refuse` is what creating raises."""
+    """A guild with these text channels; `made` lists what `setup` creates in it; creating raises `refuse`."""
     async def create_text_channel(channel, **kwargs):
         if refuse:
             raise refuse
@@ -189,7 +189,7 @@ def test_setup_exits_nonzero_unless_it_finds_or_creates_the_channel(tmp):
     from discord_mb_lib import core
     att = core.ATTACHMENTS_CHANNEL_NAME
     denied = discord.Forbidden(types.SimpleNamespace(status=403, reason="Forbidden"), "denied")
-    rows = [  # guilds, whether on_ready runs, stderr text, exit status
+    rows = [  # guilds, on_ready runs, stderr text, exit status
         ([], True, "not in any guild", 1), ([_guild("g")], True, "", 0), ([_guild("g", att)], True, "", 0),
         ([_guild("g", refuse=denied)], True, "missing perms (need Manage Channels): 403", 1),
         ([_guild("g", refuse=OSError("boom"))], True, "setup error: boom", 1), ([_guild("g", att)], False, "", 1)]
@@ -1683,14 +1683,13 @@ def test_failed_path_import_preserves_canonical_package_transactionally(tmp):
 
 
 def _fresh(module, reload=True):
-    """Import `module` from the script directory, reloaded by default so a patch does not leak."""
+    """Import `module` from the script directory, reloaded by default."""
     with mock.patch.object(sys, "path", [_util.SCRIPTS, *sys.path]):
         loaded = importlib.import_module(module)
         return importlib.reload(loaded) if reload else loaded
 
 
 class _FakeConnectorApp:
-    """Records how it is constructed and run; `run` returns 23."""
     seen: dict = {}
 
     def __init__(self, *args, **kwargs):

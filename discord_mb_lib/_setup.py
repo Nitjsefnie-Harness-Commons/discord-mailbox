@@ -6,7 +6,8 @@ from . import _guild, _prog
 
 
 def run(token, bridge_name, attachments_name, meta_name):
-    import discord
+    """Find or create the attachments channel in the bridge's guild; exit 1 if neither happened."""
+    import discord  # imported on use, as core's other discord users do
 
     token = token or os.environ.get('DISCORD_TOKEN')
     if not token:
@@ -16,7 +17,9 @@ def run(token, bridge_name, attachments_name, meta_name):
     intents = discord.Intents.default()
     intents.guilds = True
     client = discord.Client(intents=intents)
-    settled = False  # set only where the channel was found or created; every other exit leaves it False
+    # True only where the channel was found or created: a refusal, an error or
+    # a run() that returns before on_ready all leave it False and exit 1.
+    settled = False
 
     @client.event
     async def on_ready():
@@ -24,7 +27,7 @@ def run(token, bridge_name, attachments_name, meta_name):
         try:
             if not client.guilds:
                 print(f'bot is not in any guild — invite it first ({_prog.program_name()} does not handle OAuth flow)', file=sys.stderr)
-                return
+                return  # the finally clause closes the client
             guild = _guild.setup_guild(client.guilds, bridge_name)
             # Locate or create Meta category
             meta = discord.utils.find(lambda c: c.name.lower() == meta_name.lower(), guild.categories)
