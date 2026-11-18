@@ -786,7 +786,7 @@ for n in range(240, 440):
         elif extra.startswith(("torn-", "foreign-")):  # power loss tears the active, or a file is put at a slot, after the crash
             foreign, kept, victim, aside = extra.startswith("foreign"), step == "after-swapped" and extra in ("torn-active", "torn-short"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"
             saved, _ = (victim.read_bytes(), foreign and os.replace(victim, aside)) if victim.exists() else (b"", None)
-            victim.write_bytes(crafted := b"FOREIGN\n" if foreign else saved[:len(saved) // 2] if extra == "torn-short" else b"x" * 16 + saved[16:])
+            victim.write_bytes(crafted := b"FOREIGN\n" if foreign else saved[:16] if extra == "torn-short" else b"x" * 16 + saved[16:])
             # Only a swapped generation whose prefix .1 holds keeps a torn active; a foreign active is another inode, its journal its own.
             with contextlib.nullcontext() if kept or extra == "foreign-c.log" else _refuses(f"recovery accepted a {extra} slot after {step}"):
                 _restart(slots[-1], 4096, backups)
