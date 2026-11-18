@@ -8,23 +8,15 @@ from .storage import *
 # every use as undefined. Spelling them out also says which module
 # each one comes from.
 from .core import _ExtensionContext
-from .storage import (_ConnectorLogWriter, _ConnectorOwnership,
-                      _ConnectorOwnershipError, _EventStreamReader,
-                      _EventStreamWriter, _LeechLogWriter,
-                      _OwnershipAccessError, _OwnershipContendedError)
-from . import _attachments
+from .storage import (_ConnectorLogWriter, _ConnectorOwnership, _ConnectorOwnershipError, _EventStreamReader,
+                      _EventStreamWriter, _LeechLogWriter, _OwnershipAccessError, _OwnershipContendedError)
 from ._creds import _CredsTrust
 from ._delivery import _DeliveryGates
 from ._directory import _Directory
 from ._dm import _open_dm_channel, _resolve_dm_user_id
 from ._send_errors import _send_failure, _send_nonce
-from . import _guild, _linked, _pins, _prog
-from . import _meta_claim
-from . import _control_files
-from . import _ext_trust
-from . import _gateway_state
-from . import _retention
-from . import _secrets
+from . import (_attachments, _control_files, _ext_trust, _gateway_state, _guild,
+               _linked, _meta_claim, _pins, _prog, _retention, _secrets)
 
 
 def _recorded_owner(pidfile, identity):
@@ -1535,8 +1527,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
 
         async def clear(self):
             'Clear presence (back to online, no activity).'
-            await status_plugin_gateway_call(
-                client.change_presence(activity=None))
+            await status_plugin_gateway_call(client.change_presence(activity=None))
             state['status_last'] = None
 
         async def sleep(self, seconds):
@@ -1697,8 +1688,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         log(f'[status-plugin] recovery abandoned after {budget} retries: {last}')
         # Reporting, never reacting -- the owning session reinstalls. Without
         # this the abandonment is invisible from outside the log file.
-        emit_event(status_plugin_down_event(identity, last, budget + 1,
-                                            manifest))
+        emit_event(status_plugin_down_event(identity, last, budget + 1, manifest))
 
     async def _recover_status_after_gateway():
         async def _replay():
@@ -1806,8 +1796,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             # ext is the extension state dict, checked for 'command' just
             # above.
             # pylint: disable-next=unsubscriptable-object
-            result = await ext['command'](state['extension_ctx'],
-                                          list(argv or []))
+            result = await ext['command'](state['extension_ctx'], list(argv or []))
         except Exception as e:
             return {'error': f'{type(e).__name__}: {e}'}
         return {'ok': True, 'result': result}
