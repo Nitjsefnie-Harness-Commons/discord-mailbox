@@ -890,7 +890,7 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
     m, log, case, locked, release, staged, held, opens = _mod(), [], {}, threading.Event(), threading.Event(), threading.Event(), set(), []
     W, own = m._ConnectorLogWriter, m._ConnectorOwnershipError
     real = {name: getattr(W, name) for name in ("_stage_rotation_copy", "_publish_rotation_slot", "_adopt_rotated_identities", "_prepare_rotation_sidecar",
-                                                "_write_rotation_record", "_drop_rotation_journal", "_start_rotation_worker", "_rotate", "_recover_and_open")}
+                                                "_write_rotation_record", "_drop_rotation_journal", "_hold_oldest_backup", "_start_rotation_worker", "_rotate", "_recover_and_open")}
 
     def seam(name):  # the row's fault fires once: on the worker, or on the caller swapping at the ceiling
         def wrapped(self, *args, **kwargs):
@@ -917,14 +917,15 @@ def test_a_background_rotation_failure_is_reported_on_the_next_write(tmp):
         log.append("rotate")
         if case.pop("sync fault", False):
             raise OSError("injected fault after a synchronous rotation")
-    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:6]},
+    with _patched(W, _BACKGROUND_ROTATION_MIN_BYTES=0, _BACKGROUND_ROTATION_HEADROOM=16, _rotate=rotate, **{name: seam(name) for name in list(real)[:7]},
                   _recover_and_open=lambda self: real["_recover_and_open"](self) or log.append("recover"),
-                  _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or wait(self),
+                  _await_rotation_worker=lambda self, wait=W._await_rotation_worker: case["ceiling"].set() or self._rotation_staged.wait(60) and wait(self),  # unsignalled: no swap
                   _start_rotation_worker=lambda self, cut: real["_start_rotation_worker"](self, cut) or log.append(self._rotation_worker)), \
             _patched(os, close=lambda fd, real=os.close: held.discard(fd) or real(fd),  # an fd on the oldest backup stays in `held` until closed; the worker's open is the eviction
                      open=lambda path, *args, real=os.open, **kw: (fd := real(path, *args, **kw), os.fspath(path).endswith("connector.log.2") and (held.add(fd), opens.append(threading.current_thread().name)))[0]):
         for row, (name, error, refused) in enumerate((("_stage_rotation_copy", OSError("injected stage fault"), "refused".ljust(15, "+")), ("_stage_rotation_copy", SystemExit("injected stage exit"), "refused"),
                                                       *(("_prepare_rotation_sidecar", plant, "refused") for plant in ("plant-symlink", "plant-hardlink")),
+                                                      ("_hold_oldest_backup", ValueError("injected hold fault"), "refused".ljust(15, "+")),
                                                       ("_write_rotation_record", OSError("injected record fault"), "refused"), ("_drop_rotation_journal", OSError("injected fault after the swap"), "refused"),
                                                       ("_publish_rotation_slot", OSError("injected fault after the in-lock record"), "refused"), ("_adopt_rotated_identities", "connector.log.1", "refused"),
                                                       ("_start_rotation_worker", "start", ""), ("_adopt_rotated_identities", "connector.log", "refused".ljust(15, "+")), ("_stage_rotation_copy", "fork", ""))):
