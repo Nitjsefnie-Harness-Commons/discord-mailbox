@@ -65,10 +65,11 @@ def inbox(tmp, msg_id=None):
     return json.loads((root / f"{msg_id}.json").read_text(encoding="utf-8"))
 
 
-def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False, keep=()):
+def run(tmp, script, entries=None, env=None, identity="gate-test", extension=False, outbox=False, keep=(), others=()):
     """Let `script(client)` drive the connector; `entries` is the directory history, newest first;
     `outbox` also runs its outbox watcher (ticks once a second, files in `tmp/state/outbox`), `keep`
-    names more watchers to run. -> the client (`events`, `reactions`, `log`); skipped without discord.py.
+    names more watchers to run, `others` are guilds the bot is in before the main one.
+    -> the client (`events`, `reactions`, `log`); skipped without discord.py.
     The settings-file cache is pinned empty, so only `env` (a blank counts as unset) feeds `setting()`."""
     if not have_discord():
         _util.skip("discord.py is not installed")
@@ -122,7 +123,7 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
         def __init__(self, *args, **kwargs):
             self.tasks, self.handlers, self.closed, self.clock = [], {}, False, [T0]
             self.user = types.SimpleNamespace(id=BOT)
-            self.guilds = [guild]
+            self.guilds = [*others, guild]
             self.loop = types.SimpleNamespace(create_task=self.tasks.append)
             self.bridge, self.directory, self.attachments, self.credentials = guild.text_channels
             self.guild, self.dm, self.dms, self.responses = guild, DM, {}, {}

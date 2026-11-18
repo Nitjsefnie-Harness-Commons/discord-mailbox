@@ -70,11 +70,14 @@ mentionable or the bot has `mention_everyone`.
 | Broadcast role, mentioned by a `send` to `all` | `Claude Agents` | `DISCORD_MB_BROADCAST_ROLE` | no |
 | Category `setup` puts the attachments channel in | `Meta` | `DISCORD_MB_META_CATEGORY` | no |
 
-`discord-mb setup --token-file <path>` connects, works on the first server
-discord.py lists for the bot, creates the attachments channel there unless a
-text channel of that name exists, and exits. It puts the channel in the
-category of that name (matched in any case), or at the top level when there
-is none. Create the other channels and the role in Discord.
+`discord-mb setup --token-file <path>` connects, works in the server the
+connector uses (the one with a text channel named like the bridge channel; the
+bot's only server when none has one), creates the attachments channel there
+unless a text channel of that name exists, and exits. When the bot is in
+several servers and none has the bridge channel, it creates nothing and says so:
+create the bridge channel in the intended server and run it again. It puts the
+channel in the category of that name (matched in any case), or at the top level
+when there is none. Create the other channels and the role in Discord.
 
 ### Token
 
