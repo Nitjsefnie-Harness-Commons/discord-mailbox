@@ -1,5 +1,16 @@
 """Discord gateway connector and read-only leech lifecycles."""
 
+import asyncio
+import base64
+import io
+import json
+import os
+import random
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
 from .core import *
 from .storage import *
 # Named explicitly as well as through the wildcard above: `import *`

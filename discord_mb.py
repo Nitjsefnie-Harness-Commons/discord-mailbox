@@ -459,10 +459,10 @@ _build_compatibility_wrappers = {}
 _facade_exports = {}
 
 for _module in _implementation_modules:
-    for _name in _module.__all__:
-        _build_implementation_values[(_module, _name)] = _compat_builtins.getattr(
-            _module, _name)
+    for _name in [*_module.__all__, *(_n for _n in _core_module.__STDLIB_NAMES
+                                      if _n in _module.__dict__)]:
         _facade_exports[_name] = _compat_builtins.getattr(_module, _name)
+        _build_implementation_values[(_module, _name)] = _facade_exports[_name]
 _release_reload_lock()
 
 
