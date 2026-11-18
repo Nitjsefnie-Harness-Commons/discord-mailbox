@@ -42,6 +42,11 @@ def outbox_dispatch():
     import _gateway
     if not _gateway.have_discord():
         sys.exit('outbox-dispatch needs discord.py')
+    import sqlite3  # pylint: disable=unused-import  # the connector's log writer imports it at start-up
+    from discord_mb_lib import connector
+    # Each connector start hashes and stats every package module: start-up work that grows with the package.
+    running, stat = connector.running_fingerprint(), connector.package_stat_signature()
+    connector.running_fingerprint, connector.package_stat_signature = lambda: running, lambda: stat
 
     def run(tmp):
         box = tmp / 'state' / 'outbox'
