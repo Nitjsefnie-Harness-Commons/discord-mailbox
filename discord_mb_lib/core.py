@@ -2624,8 +2624,7 @@ def status_plugin_cli(args):
             print(f"error:   {resp.get('error')}")
 
 
-# discord_mb has always exposed these; it takes each from the modules
-# importing it.
+# discord_mb exposes these; it takes each from the modules importing it.
 __STDLIB_NAMES = (
     'argparse', 'asyncio', 'base64', 'binascii', 'codecs', 'errno', 'hashlib',
     'hmac', 'io', 'json', 'os', 'random', 're', 'socket', 'stat', 'subprocess',
