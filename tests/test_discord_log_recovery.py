@@ -6,12 +6,13 @@ import io
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gateway  # noqa: E402
 import _util  # noqa: E402
-from test_discord_log_rotation import LIMIT, _filled, _fixture_lock_root, _hidden, _mod, _patched, _refuses, _restart, _window  # noqa: E402
+from test_discord_log_rotation import LIMIT, _filled, _fixture_lock_root, _hidden, _mod, _patched, _rebind, _refuses, _restart, _window  # noqa: E402
 
 
 def test_a_deleted_backup_is_absent_and_later_writes_succeed(tmp):
@@ -136,6 +137,30 @@ def test_a_slot_swapped_during_a_rotation_is_refused_and_never_written(tmp):
             setattr(cls, seam, real)
             writer.close()
         assert path.with_name(victim).read_bytes() == b"FOREIGN\n", seam  # swapped, and never written
+    # A rotation, synchronous or on its worker, reads the active only through a handle on the owned inode: a file put at its
+    # name for that open, then swapped back, refuses the rotation and moves no slot. Windows refuses to rename the open active.
+    for background in (False, True)[:2 * (os.name != "nt")]:
+        path, swapped = Path(tmp) / f"read-{background}" / "connector.log", threading.Event()
+        path.parent.mkdir()
+        writer = _filled(m, path)
+
+        def swap_open(name, flags, *args, path=path, swapped=swapped, real=os.open):  # once, for the active's read-only open
+            if swapped.is_set() or os.fspath(name) != str(path) or flags & (os.O_WRONLY | os.O_RDWR):
+                return real(name, flags, *args)
+            _ = swapped.set(), os.replace(path, path.with_name("aside"))
+            path.write_bytes(b"FOREIGN\n" * 4)
+            try:
+                return real(name, flags, *args)
+            finally:
+                os.replace(path.with_name("aside"), path)
+        with contextlib.closing(writer), _patched(cls, _BACKGROUND_ROTATION_MIN_BYTES=0 if background else 1 << 62, _BACKGROUND_ROTATION_HEADROOM=16):
+            _ = background and writer.write("y" * 15)  # synchronous: it leaves 16 bytes, so the next record starts the worker
+            backups = [p.read_bytes() for p in _window(path)[1:]]
+            with _patched(os, open=swap_open), _refuses(f"background={background}: a rotation read a file swapped in for its open") as caught:
+                _ = background and (writer.write("b" * 7), [t.join(60) for t in threading.enumerate() if t.name == "connector-log-rotation"])
+                writer.write("refused")
+        assert swapped.is_set() and str(caught[0]) == f"connector log identity was replaced while owned: {path}", caught
+        assert [p.read_bytes() for p in _window(path)[1:]] == backups and b"refused" not in path.read_bytes(), background
     linked = Path(tmp) / "linked"  # a healthy writer reached through a symlinked directory rotates
     (Path(tmp) / "real").mkdir()
     try:
@@ -281,29 +306,32 @@ def test_a_finished_rotation_whose_journal_unlink_failed_is_discarded(tmp):
 def test_a_slot_swapped_while_a_rotation_journal_recovers_is_refused(tmp):
     """Recovery holds each slot to the identity it expects there, so a swap during it refuses every write."""
     m = _mod()
-    cls, path = m._ConnectorLogWriter, Path(tmp) / "connector.log"
-    writer, real, backup = _filled(m, path), cls.__dict__["_publish_in_place"], path.with_name("connector.log.2")
+    # The rotation faults before its active publish and a foreign file takes .2 once recovery's active publish lands; or it
+    # faults before its first shift and the swap lands between recovery's classification and its apply.
+    for fault_at, swap_at, refusal, error in (("_publish_in_place", "_publish_in_place", "namespace path was replaced while owned", m._ConnectorOwnershipError),
+                                              ("_publish_rotation_slot", "_apply_rotation", "journal destination was rebound", RuntimeError)):
+        path = Path(tmp) / fault_at / "connector.log"
+        path.parent.mkdir()
+        writer, backup = _filled(m, path), path.with_name("connector.log.2")
 
-    def fault(*args):  # the rotation's active publish faults, leaving its journal pending
-        cls._publish_in_place = staticmethod(swap)
-        raise OSError("injected fault before the active publish")
-
-    def swap(*args):  # the recovery's active publish lands, then a foreign file takes .2
-        cls._publish_in_place = real
-        real.__func__(*args)
-        backup.with_name("foreign").write_bytes(b"FOREIGN\n")
-        os.replace(backup.with_name("foreign"), backup)
-    cls._publish_in_place = staticmethod(fault)
-    try:
-        for attempt in range(3):
-            with _refuses(f"write {attempt} accepted a slot swapped during recovery", (OSError, m._ConnectorOwnershipError)) as caught:
-                writer.write("y" * 25)
-            assert str(caught[0]) == ("injected fault before the active publish" if attempt == 0 else
-                                      f"connector log namespace path was replaced while owned: {backup}"), caught
-    finally:
-        cls._publish_in_place = real
-        writer.close()
-    assert backup.read_bytes() == b"FOREIGN\n"
+        def fault(*args, writer=writer, fault_at=fault_at, swap_at=swap_at, real=getattr(writer, swap_at), backup=backup):
+            def swap(*args):  # once; the instance attributes shadow the writer's methods
+                delattr(writer, swap_at)
+                result = real(*args) if swap_at == fault_at else None
+                _rebind(backup, b"FOREIGN\n")
+                return result if swap_at == fault_at else real(*args)
+            _ = fault_at != swap_at and delattr(writer, fault_at)
+            setattr(writer, swap_at, swap)
+            raise OSError("injected rotation fault")
+        setattr(writer, fault_at, fault)
+        try:
+            for attempt in range(3):
+                with _refuses(f"{fault_at}: write {attempt} accepted a slot swapped during recovery", (OSError, error)) as caught:
+                    writer.write("y" * 25)
+                assert str(caught[0]) == ("injected rotation fault" if attempt == 0 else f"connector log {refusal}: {backup}"), caught
+        finally:
+            writer.close()
+        assert backup.read_bytes() == b"FOREIGN\n", fault_at
 
 
 def test_a_slot_swapped_after_the_rotation_journal_is_prepared_is_never_moved(tmp):
