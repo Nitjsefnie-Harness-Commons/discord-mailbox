@@ -9,7 +9,7 @@
   },
   "workloads": {
     "log-rotation": 1008743440,
-    "outbox-dispatch": 184336463,
+    "outbox-dispatch": 108302800,
     "usage-parse": 113059967
   }
 }
