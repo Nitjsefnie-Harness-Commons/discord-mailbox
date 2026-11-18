@@ -13,8 +13,10 @@ import subprocess
 import sys
 import time
 
-COVERED = tuple(f'.github/workflows/{name}.yml' for name in
-                ('tests', 'lint', 'types', 'audit', 'codeql', 'actionlint', 'secrets', 'perf'))
+# A literal: gate_base_freshness.py reads it from the tree.
+COVERED = ('.github/workflows/tests.yml', '.github/workflows/lint.yml', '.github/workflows/types.yml',
+           '.github/workflows/audit.yml', '.github/workflows/codeql.yml', '.github/workflows/actionlint.yml',
+           '.github/workflows/secrets.yml', '.github/workflows/perf.yml')
 GUARD_PREFIX = 'guard / '
 POLL_SECONDS = 45
 DEADLINE_MINUTES = 55
