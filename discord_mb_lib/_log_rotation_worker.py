@@ -50,7 +50,11 @@ class _RotationWorker:
         self._rotation_staged, self._rotation_context = threading.Event(), None
         worker = threading.Thread(target=self._run_rotation_worker, args=(cut,),
                                   name='connector-log-rotation', daemon=True)
-        worker.start()
+        try:
+            worker.start()
+        except RuntimeError:  # rotate synchronously at the ceiling
+            self._rotation_failed = True
+            return
         self._rotation_worker = worker
 
     def _check_rotation_owner(self: Any) -> None:
