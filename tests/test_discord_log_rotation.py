@@ -739,17 +739,17 @@ for n in range(240, 440):
 '''
     lock_root = _mod()._ConnectorOwnership._IDENTITY_LOCK_ROOT
     lines = [f"{n:05d}".ljust(49, ".").encode() + b"\n" for n in range(450)]
-    # A forged tail refuses before recovery goes on; a torn or stale sidecar is absent, so the journal rolls back; "worker" rows
+    # A forged tail refuses before recovery goes on; a torn or stale sidecar is absent, so the journal rolls back, unless swapped; "worker" rows
     # swap on the worker thread, which goes on to finish after lines are appended; "repeat" seeds an active beginning with its tail.
     in_lock = ("after-prepared", "after-rename-1", "after-rename-2", "after-stage-publish", "after-truncate", "after-rewrite")
-    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prealloc", ""), ("after-prepared", "torn"), ("after-rename-2", "unmarked"),
+    for step, extra in (("after-create", ""), ("after-stage", ""), ("after-prealloc", ""), ("after-prepared", "torn"), ("after-swapped", "torn"), ("after-rename-2", "unmarked"),
                         *(("after-prepared", f"stale-{key}") for key in ("generation", "transaction_nonce", "token", "kind", "list")), *((step, "") for step in in_lock),
                         ("after-journal-unlink", ""), ("after-prepared", "digest"), ("after-prepared", "length"), ("after-prepared", "version"),
                         *((step, "worker") for step in in_lock), ("after-prepared", "repeat"), ("after-release", "worker"),
                         ("after-swapped", ""), ("after-swapped", "torn-alone"), ("after-swapped", "torn-short"), ("after-swapped", "reused"),
                         ("after-stage-publish", "reused-absent"),
                         *((step, extra) for step in (*in_lock, "after-release", "after-swapped") for extra in ("torn-active", "foreign-c.log", "foreign-c.log.1"))):
-        case, rolled_back, backups = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" or extra.startswith("stale"), 3 - 3 * (extra == "torn-alone")
+        case, rolled_back, backups = Path(tmp) / f"{step}-{extra}", step == "after-prealloc" or extra == "torn" and step != "after-swapped" or extra.startswith("stale"), 3 - 3 * (extra == "torn-alone")
         case.mkdir()
         slots = [case / name for name in ("c.log.3", "c.log.2", "c.log.1", "c.log")]
         for index, slot in [*enumerate(slots)][3 - backups:]:
@@ -782,7 +782,7 @@ for n in range(240, 440):
             if not rolled_back:
                 with _refuses(f"recovery accepted a rotation journal failing its {extra} check") as caught:
                     _restart(slots[-1], 4096, 3)
-                assert extra != "unmarked" or "has no staged replacement" in str(caught[0]), caught
+                assert str(caught[0]).endswith({"unmarked": "has no staged replacement", "torn": "its swapped marker has no usable sidecar record"}.get(extra, "")), caught
                 _ = sidecar.write_bytes(saved), journal.write_bytes(kept)
         elif extra.startswith(("torn-", "foreign-", "reused")):  # power loss tears the active, or a file is put at a slot, after the crash
             foreign, victim, aside = extra.startswith("foreign"), case / (extra[8:] if extra.startswith("foreign") else "c.log"), case / "aside"

@@ -48,24 +48,25 @@ class _RotationRecovery:
             self._adopt_rotated_identities(
                 {entry['destination']: expected for entry, _, expected in plan})
         journal.unlink()
-        sidecar.unlink(missing_ok=True)
         self._cleanup_journal_temp(journal, 'rotate')
         self._fsync_directory(root)
         self._fsync_directory(journal.parent)
+        sidecar.unlink(missing_ok=True)  # a marker never outlives its record
 
     @staticmethod
     def _rotation_record(manifest: dict, sidecar: Path) -> dict:
         """This generation's whole sidecar record, else the journal's; ``swapped`` marks it."""
-        if manifest.get('sidecar') != sidecar.name or not sidecar.exists():
-            return manifest
-        raw = sidecar.read_bytes()
-        payload = raw[40:40 + int.from_bytes(raw[:8], 'big')]
-        if hashlib.sha256(payload).digest() != raw[8:40]:
-            return manifest
-        record = json.loads(payload)
+        record = None
+        if manifest.get('sidecar') == sidecar.name and sidecar.exists():
+            raw = sidecar.read_bytes()
+            payload = raw[40:40 + int.from_bytes(raw[:8], 'big')]
+            if hashlib.sha256(payload).digest() == raw[8:40]:
+                record = json.loads(payload)
         if not isinstance(record, dict) or any(
                 record.get(key) != manifest.get(key)
                 for key in ('version', 'kind', 'generation', 'transaction_nonce', 'token')):
+            if manifest.get('state') == 'swapped':
+                raise ValueError('its swapped marker has no usable sidecar record')
             return manifest
         return {**record, 'state': 'swapped'} if manifest['state'] == 'swapped' else record
 
