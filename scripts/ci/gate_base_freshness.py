@@ -11,9 +11,9 @@ exact path, and IMPLICIT, minus the EXCLUDED records the ratchets commit. A
 
 Limits, each narrowing the set: a directory, glob or `.` names no file (the
 conflict-marker step reads every tracked file); what a named script reaches
-at run time (run_tests.py discovers tests/); a path built in `${{ }}`; a
-tool's own config file outside IMPLICIT; records, read at the base revision;
-a local composite action's own steps (its action.yml is in the set).
+at run time outside IMPLICIT (run_tests.py discovers tests/); a path built in
+`${{ }}`; a tool's own config file outside IMPLICIT; records, read at the base
+revision; a local composite action's own steps (its action.yml is in the set).
 
 A push run passes a head main already holds. The reader models the block YAML
 these workflows use and a literal COVERED, and refuses any other shape rather
@@ -31,7 +31,8 @@ from pathlib import Path
 REQUIRED_CHECKS = ('gate', 'comment-share', 'size-baseline', 'pycodestyle', 'pylint', 'pyright',
                    'coverage', 'wheel', 'portable', 'pip-audit', 'analyze (python)', 'ci-gate')
 FOLDER = 'scripts/ci/ci_gate.py'
-IMPLICIT = ('setup.cfg', 'pyrightconfig.json', 'pyproject.toml')
+IMPLICIT = ('setup.cfg', 'pyrightconfig.json', 'pyproject.toml', '.github/zizmor.yml',
+            'scripts/ci/perf_workloads.py')
 EXCLUDED = ('.github/ci-thresholds.json', '.github/perf-budget.json',
             '.github/comment-share.json', '.github/size-baseline.json')
 BASE_BRANCH = 'main'
