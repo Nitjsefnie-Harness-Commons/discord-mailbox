@@ -160,11 +160,18 @@ def test_a_refused_pin_names_the_pin_messages_permission_and_any_other_failure_d
             await client.ask({f"{name}-{op}": {"op": op, "msg_id": "7", "to": "nobody", "subject": "s", "body": "b", "pin": True} for op in calls})
             shown[name] = ["".join(_util.run_cli(call, client.responses[f"{name}-{op}"])[1:3]) for op, call in calls.items()]
 
+        async def lost(message_id):    # `pins pin` and `unpin` fetch the message first: a failed fetch is no permission problem
+            raise RuntimeError("Unknown Message")
+        client.bridge.fetch_message = lost
+        await client.ask({f"lost-{op}": {"op": op, "msg_id": "7"} for op in ("pin", "unpin")})
+        shown["lost"] = ["".join(_util.run_cli(calls[op], client.responses[f"lost-{op}"])[1:3]) for op in ("pin", "unpin")]
+
     client = _gateway.run(tmp, script)
     assert (done, [client.responses[f"ok-{op}"]["pinned"] for op in calls]) == (["pin", "pin", "unpin"] * 3, [True, True, False]), done    # each of the three reaches its own call
     assert all("Pin Messages" in out for out in shown["refused"]), shown["refused"]
     assert shown["full"][0].endswith(", PIN FAILED)\n") and not any("Pin Messages" in out for out in shown["full"]), shown["full"]
     assert all("Maximum number of pins reached" in out for out in shown["full"][1:]), shown["full"]
+    assert all("fetch_message(7) failed: Unknown Message" in out and "Pin Messages" not in out for out in shown["lost"]), shown["lost"]
 
 
 def main():
