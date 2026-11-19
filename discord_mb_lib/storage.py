@@ -210,8 +210,8 @@ class _ConnectorOwnership:
         would be an unsafe adoption primitive: a symlink/reparse point,
         foreign-owned directory, or permissive directory would redirect every
         lock and journal operation.  Validate the identity after creation and
-        on every use.  The default parent is the user's home directory; the
-        test seam supplies an already-created private parent.
+        on every use.  The default parent is the user's home directory; a
+        configured root's parent must already exist.
         """
         root = Path(root)
         try:
