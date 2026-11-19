@@ -20,7 +20,7 @@ DIRECTORY = {"bridge-bot": BOT, "alice": ALICE}
 CHUNK1 = f"<@{BOT}> **[probe→alpha]** report\nfirst part"
 CHUNK2 = "**[probe→alpha]** report (2/3)\nsecond part"
 ENV = ("DISCORD_MAILBOX_ALLOWED_USER_IDS", "DISCORD_MAILBOX_ALLOWED_GUILD_IDS",
-       "DISCORD_MAILBOX_SENDER_RATE_LIMIT")
+       "DISCORD_MAILBOX_SENDER_RATE_LIMIT", "DISCORD_MAILBOX_GATED_GUILDS")
 
 
 def _msg(author, content="hi", guild=GUILD, channel=CHAN, msg_id=1):
