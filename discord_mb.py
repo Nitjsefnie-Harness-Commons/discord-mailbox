@@ -427,8 +427,7 @@ if _compat_builtins.isinstance(
             if _new_qualname == '_ConnectorOwnership':
                 _new_namespace['_IDENTITY_LOCK_ROOT'] = (
                     _refreshed_dependencies['Path'](
-                        os.environ.get(
-                            _core_module._TEST_LOCK_ROOT_ENV,
+                        _core_module._connector_lock_root(
                             _refreshed_state[
                                 '_DEFAULT_CONNECTOR_LOCK_ROOT'])))
             _new_class = _compat_builtins.type(

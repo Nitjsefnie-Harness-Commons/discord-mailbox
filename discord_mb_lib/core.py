@@ -222,11 +222,19 @@ LEECH_LOG_MAX_BYTES = 2 * 1024 * 1024
 LEECH_LOG_BACKUP_COUNT = 1
 FORUM_POST_HISTORY_LIMIT = 100  # messages downloaded per pinned forum post
 RECEIPT_EMOJI = '\u2705'  # ✅
+
+
 # The connector's ownership/journal namespace must not change when a launcher
-# supplies a different TMPDIR.  A test may inject a private root through the
-# explicit DISCORD_MB_TEST_LOCK_ROOT seam; production always uses this stable
-# per-user location.
-_TEST_LOCK_ROOT_ENV = 'DISCORD_MB_TEST_LOCK_ROOT'
+# supplies a different TMPDIR.  It lives in this stable per-user location unless
+# DISCORD_MAILBOX_LOCK_ROOT (environment only) places it elsewhere, which a
+# deployment with a read-only home sets; DISCORD_MB_TEST_LOCK_ROOT is its
+# older name.
+def _connector_lock_root(default):
+    """The lock root a process starts with: the setting, else `default`."""
+    return _renamed(os.environ.get, 'DISCORD_MB_TEST_LOCK_ROOT', default,
+                    new='DISCORD_MAILBOX_LOCK_ROOT')
+
+
 # Every harness reads the same identity token and durable extension registry
 # from the neutral runtime. Flavor is selected by --flavor and controls only
 # the status adapter and parent-process watchdog. The three public directory
@@ -2647,7 +2655,7 @@ __all__ = [
     '_ExtensionContext',
     '_FLAVOR_STATUS_PLUGINS',
     '_PARENT_CMD_PATTERNS',
-    '_TEST_LOCK_ROOT_ENV',
+    '_connector_lock_root',
     '_control_files',
     '_ensure_state_root',
     '_flat_component',

@@ -22,7 +22,7 @@ from .core import *
 # reading the source applies the plain no-underscore rule and reports
 # every use as undefined. Spelling them out also says which module
 # each one comes from.
-from .core import _DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV, _linklike, _renamed
+from .core import _DEFAULT_CONNECTOR_LOCK_ROOT, _connector_lock_root, _linklike, _renamed
 from . import _log_chunks
 from ._log_rotation import _RotationJournal
 from ._log_rotation_recovery import _RotationRecovery
@@ -113,7 +113,7 @@ class _ConnectorOwnership:
     """
 
     _IDENTITY_LOCK_ROOT = Path(
-        os.environ.get(_TEST_LOCK_ROOT_ENV, _DEFAULT_CONNECTOR_LOCK_ROOT))
+        _connector_lock_root(_DEFAULT_CONNECTOR_LOCK_ROOT))
 
     def __init__(self, target, lock_inode=False, stable_paths=None,
                  lock_root=None):

@@ -110,8 +110,16 @@ and takes over one that is 15 minutes old; while another connector's lease is
 younger, it leaves the board alone. When the variable is unset or names no
 file, the connector looks for that script in and beside the `discord_mb_lib`
 package directory; without one it has no usage figures to show.
-`DISCORD_MB_TEST_LOCK_ROOT` and `DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION` exist for the
-test suite and CI; leave them unset.
+
+`DISCORD_MAILBOX_LOCK_ROOT`, read from the environment only, is the directory
+that holds the connector's [lock root](#stores-and-retention) (default
+`~/.discord-mailbox-log-locks/`). Set it where the home directory is read-only,
+for example under a systemd unit with `ProtectHome=tmpfs`, to a directory the
+connector can write; where the default cannot be created, the connector exits
+at startup.
+
+`DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION` exists for the test suite and
+CI; leave it unset.
 
 ### Starting and stopping
 
@@ -252,7 +260,7 @@ cleans that directory on a host also removes what the product keeps there.
 | Leech log | `<temp>/discord-mailbox/<identity>/leech.log` and `leech.log.1` | each leech's status lines | none | 2 MiB per file, the active file and one backup |
 | Process files | in `<temp>/discord-mailbox/<identity>/`: `connector.pid`, `connector.state`, `leeches/`, `status-plugin/` (a copy of the installed status plugin), and the `.lock` files beside `connector.pid` and each log | process ids, gateway state, the status plugin | none | `connector.pid` and `connector.state` are rewritten at each start, a leech's file is removed once it has exited, `status-plugin/` at each start and shutdown and when the plugin is removed or fails; the `.lock` files stay, except that a start removes a `.connector.pid.lock` it cannot open once its connector is gone |
 | Root files | `<temp>/discord-mailbox/.agent-bundle-owner` and `.usage-status-gate-<server id>.json` | the directory's ownership marker; the last usage-board period claimed on this host | none | never pruned |
-| Lock root | `~/.discord-mailbox-log-locks/` | lock files, the connector log's random staging key and its SQLite authority file, and, while a log migration or rotation runs, its journal (log paths, sizes and hashes); from a background rotation's swap until its cleanup, or until the next start after a crash, also up to about 1 MiB of the connector log's newest lines | as the connector log while it holds those lines (personal data: user ids), otherwise no personal data | never pruned |
+| Lock root | `~/.discord-mailbox-log-locks/`, or the directory `DISCORD_MAILBOX_LOCK_ROOT` names ([Settings](#settings)) | lock files, the connector log's random staging key and its SQLite authority file, and, while a log migration or rotation runs, its journal (log paths, sizes and hashes); from a background rotation's swap until its cleanup, or until the next start after a crash, also up to about 1 MiB of the connector log's newest lines | as the connector log while it holds those lines (personal data: user ids), otherwise no personal data | never pruned |
 | Extension registry ([Extensions](#extensions)) | `~/.agent-bundle/discord/extensions/<identity>.json` | the registered extension's path, the date of the last daily heartbeat, and whatever the extension saves with `ctx.save()` | whatever the extension saves | never pruned |
 | Token files ([Token](#token)) | `~/.agent-bundle/discord/<identity>.token` | the bot token | secret | the operator writes and deletes them; the product only reads them |
 | Settings files ([Settings](#settings)) | the `env` blocks of the settings files [Delivery](#delivery) lists | channel and role names, allowed user and server ids, trusted user ids | Discord ids | the operator writes and deletes them; the product only reads them |
@@ -348,7 +356,8 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
    leech exits when its connector stops.
 3. On every host, for each user that ran a connector and each `<temp>` its
    connectors used, delete `<temp>/discord-mailbox/`, each `--log` file with
-   its backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`,
+   its backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`
+   (or the directory `DISCORD_MAILBOX_LOCK_ROOT` names),
    each `~/.agent-bundle/discord/<identity>.token`,
    `~/.agent-bundle/discord/extensions/<identity>.json`, the product's keys in
    the settings files, and the files `attachments download` saved.
