@@ -117,11 +117,13 @@ connector's [lock root](#stores-and-retention) itself (default
 for example under a systemd unit with `ProtectHome=tmpfs`, to an absolute path
 that does not exist yet inside an existing directory the connector's user can
 write, such as `/var/lib/discord-mailbox/locks`. The connector creates it with
-mode `0700`; it does not create missing parent directories. A path that
-already exists must be a real directory (not a symlink) owned by the connector's
-user with no group or other permissions, so a shared directory such as `/tmp`
-is refused. A relative path is taken from the working directory. When the
-connector cannot create or accept the path, it exits at startup and names it.
+mode `0700` (Windows ignores the mode and has no POSIX permission bits); it
+does not create missing parent directories. A path that already exists must be
+a real directory (not a symlink or reparse point). On POSIX it must also be
+owned by the connector's user with no group or other permissions, so a shared
+directory such as `/tmp` is refused; Windows makes no owner or mode check. A
+relative path is taken from the working directory. When the connector cannot
+create or accept the path, it exits at startup and names it.
 
 `DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION` exists for the test suite and
 CI; leave it unset.

@@ -238,7 +238,7 @@ def test_lock_root_names_resolve_at_both_read_sites(tmp):
 
 
 def test_connector_lock_needs_no_writable_home(tmp):
-    """The setting places the lock root where the default cannot be made (a file as home); drives the read site and the log writer."""
+    """The setting places the lock root where the default cannot be made (a file as home); drives storage's read (`_ConnectorOwnership._IDENTITY_LOCK_ROOT`) and the log writer."""
     (home := Path(tmp) / "home").write_text("", encoding="utf-8")
     code = "import discord_mb\ndiscord_mb._ConnectorLogWriter(sys.argv[2], max_bytes=64, backup_count=1).close()"
     log = Path(tmp) / "connector.log"

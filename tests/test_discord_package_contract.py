@@ -1704,13 +1704,13 @@ def _fresh(module, reload=True):
 
 
 class _FakeConnectorApp:
-    seen: dict = {}
+    seen: dict  # set on the per-test subclass, never on this base
 
     def __init__(self, *args, **kwargs):
-        _FakeConnectorApp.seen = {"init": (args, kwargs)}
+        type(self).seen = {"init": (args, kwargs)}
 
     def run(self):
-        _FakeConnectorApp.seen["run"] = True
+        type(self).seen["run"] = True
         return 23
 
 
@@ -1726,20 +1726,20 @@ def test_connector_app_owns_lifecycle_configuration(tmp):
 def test_connector_main_constructs_the_lifecycle_object(tmp):
     """The procedural compatibility API delegates to ``ConnectorApp``."""
     connector = _fresh("discord_mb_lib.connector")
-    with mock.patch.object(connector, "ConnectorApp", _FakeConnectorApp):
+    with mock.patch.object(connector, "ConnectorApp", fake := type("_Fake", (_FakeConnectorApp,), {})):
         result = connector.connector_main("agent", claude_pid=456, token="token", log_path="custom.log", flavor="kimi")
     assert result == 23
-    assert _FakeConnectorApp.seen == {
+    assert fake.seen == {
         "init": (("agent",), {"claude_pid": 456, "token": "token", "log_path": "custom.log", "flavor": "kimi"}), "run": True}
 
 
 def test_cli_connector_dispatches_through_connector_app(tmp):
     """The production CLI enters the object-oriented lifecycle boundary."""
     cli = _fresh("discord_mb_lib.cli", reload=False)
-    with mock.patch.object(cli, "ConnectorApp", _FakeConnectorApp), \
+    with mock.patch.object(cli, "ConnectorApp", fake := type("_Fake", (_FakeConnectorApp,), {})), \
             mock.patch.object(sys, "argv", ["discord_mb.py", "connector", "agent", "--flavor", "codex"]):
         cli._cli()
-    assert _FakeConnectorApp.seen == {
+    assert fake.seen == {
         "init": (("agent",), {"claude_pid": None, "token": None, "log_path": None, "flavor": "codex"}), "run": True}
 
 
