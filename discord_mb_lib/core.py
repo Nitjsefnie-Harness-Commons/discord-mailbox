@@ -224,13 +224,10 @@ FORUM_POST_HISTORY_LIMIT = 100  # messages downloaded per pinned forum post
 RECEIPT_EMOJI = '\u2705'  # ✅
 
 
-# The connector's ownership/journal namespace must not change when a launcher
-# supplies a different TMPDIR.  It lives in this stable per-user location unless
-# DISCORD_MAILBOX_LOCK_ROOT (environment only) places it elsewhere, which a
-# deployment with a read-only home sets; DISCORD_MB_TEST_LOCK_ROOT is its
-# older name.
+# The lock root stays in one per-user place whatever TMPDIR a launcher supplies,
+# unless DISCORD_MAILBOX_LOCK_ROOT (environment only) places it, as a read-only
+# home needs; DISCORD_MB_TEST_LOCK_ROOT is its older name.
 def _connector_lock_root(default):
-    """The lock root a process starts with: the setting, else `default`."""
     return _renamed(os.environ.get, 'DISCORD_MB_TEST_LOCK_ROOT', default,
                     new='DISCORD_MAILBOX_LOCK_ROOT')
 
