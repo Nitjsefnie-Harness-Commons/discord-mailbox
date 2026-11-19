@@ -17,7 +17,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = str(_PROJECT_ROOT)
 RENAMED = ("DISCORD_TOKEN", "DISCORD_MB_USAGE_QUERY", "DISCORD_MB_BRIDGE_CHANNEL", "DISCORD_MB_DIRECTORY_CHANNEL",
            "DISCORD_MB_ATTACHMENTS_CHANNEL", "DISCORD_MB_CREDENTIALS_CHANNEL", "DISCORD_MB_BROADCAST_ROLE", "DISCORD_MB_META_CATEGORY")
-for _name in (*RENAMED, *("DISCORD_MAILBOX_" + name for name in RENAMED)):    # a test sets one name, never meets the other (the portable lane switch is left)
+for _name in (*RENAMED, *("DISCORD_MAILBOX_" + name for name in RENAMED), "DISCORD_MAILBOX_LOCK_ROOT"):    # a test sets one name, never meets the other (the portable lane switch is left)
     os.environ.pop(_name, None)
 
 
