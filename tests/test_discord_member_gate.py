@@ -26,12 +26,13 @@ def _discord():
     return discord
 
 
-def _guild(guild_id, members, lookups):
-    """A guild whose member fetch answers like Discord's: the member, 404 for anyone else, 500 for FLAKY."""
+def _guild(guild_id, members, lookups, delay=0.0):
+    """A guild whose member fetch answers like Discord's, after `delay` s: the member, 404 for anyone else, 500 for FLAKY."""
     discord = _discord()
 
     async def fetch_member(user_id):
         lookups.append((guild_id, user_id))
+        await asyncio.sleep(delay)
         if user_id == FLAKY:
             raise discord.HTTPException(types.SimpleNamespace(status=500, reason="Server Error"), "down")
         if user_id not in members:
@@ -134,6 +135,27 @@ def test_a_lookup_answer_is_cached_for_the_ttl_and_a_failure_is_not(tmp):
     assert set(gates._members) == {(GUILD, OUTSIDER), (GUILD, MALLORY)}, gates._members
     _judge(gates, _msg(ALICE, DM, reactions=[]), client, now=T0 + 3 * D.MEMBER_TTL)
     assert set(gates._members) == {(GUILD, ALICE)}, "expired answers were kept"
+    # RAW's answer, stored between sweeps, survives the next sweep but is a miss once MEMBER_TTL old.
+    lookups.clear()
+    base = T0 + 4 * D.MEMBER_TTL
+    for author, now in ((ALICE, base), (RAW, base + 250), (ALICE, base + D.MEMBER_TTL + 1), (RAW, base + 550)):
+        _judge(gates, _msg(author, DM, reactions=[]), client, now=now)
+    assert lookups == [(GUILD, a) for a in (ALICE, RAW, ALICE, RAW)], lookups
+    _judge(gates, _msg(MALLORY, DM, reactions=[]), client, now=base + 2 * D.MEMBER_TTL + 1)
+    assert set(gates._members) == {(GUILD, RAW), (GUILD, MALLORY)}, "an answer exactly MEMBER_TTL old was kept"
+
+
+def test_a_slow_lookup_is_bounded_and_delivers_and_each_author_is_judged_in_turn(tmp):
+    lookups, saved = [], D.LOOKUP_TIMEOUT
+    gates, logs = _gates({GUILD: frozenset()})
+    guild = _guild(GUILD, (MALLORY,), lookups, delay=1.0)
+    try:
+        D.LOOKUP_TIMEOUT = 0.05
+        assert not _judge(gates, _msg(MALLORY, DM, reactions=[]), types.SimpleNamespace(get_guild={GUILD: guild}.get))
+    finally:
+        D.LOOKUP_TIMEOUT = saved
+    assert lookups == [(GUILD, MALLORY)] and gates._members == {} and gates._turns == {}, (lookups, gates._turns)
+    assert len(logs) == 1 and f"lookup of user {MALLORY} in guild {GUILD} failed (TimeoutError" in logs[0], logs
 
 
 def test_the_other_gates_judge_first_and_a_member_refusal_spends_no_cap(tmp):
@@ -210,6 +232,25 @@ def test_the_connector_delivers_only_what_every_gate_passes(tmp):
     assert reactions == [(401, REFUSED), (403, RECEIPT)], reactions
     assert lookups == [(GUILD, MALLORY), (GUILD, OUTSIDER)], lookups
     assert "not delivered: 402 " in client.log and "allow-list" in client.log
+
+
+def test_a_continuation_is_not_judged_before_its_chunk_one_lookup_answers(tmp):
+    chunk1, chunk2 = f"<@{BOT}> **[probe→gate-test]** report\nfirst", "**[probe→gate-test]** report (2/2)\nsecond"
+
+    async def script(client, other):
+        client.guild.fetch_member = _guild(GUILD, (), lookups, delay=0.05).fetch_member
+        on_message, k = client.handlers["on_message"], client
+
+        async def second():
+            await asyncio.sleep(0.01)    # discord.py runs each event as its own task
+            await on_message(k.message(602, OUTSIDER, chunk2, k.bridge, guild=other))
+        await asyncio.gather(on_message(k.message(601, OUTSIDER, chunk1, k.bridge, guild=other, mentions=(BOT,))),
+                             second())
+
+    lookups = []
+    inbox, events, reactions, _, client = _run(tmp, {GATED: f"{GUILD}:{ALICE}"}, script)
+    assert inbox == {601, 602} and events == [601, 602], (inbox, events, client.log)
+    assert reactions == [(601, RECEIPT), (602, RECEIPT)] and lookups == [(GUILD, OUTSIDER)], (reactions, lookups)
 
 
 def test_an_unconfigured_connector_delivers_a_members_messages_as_before(tmp):

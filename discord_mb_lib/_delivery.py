@@ -1,4 +1,5 @@
 """Who may put a message in the inbox, and how often: the connector's delivery gates."""
+import asyncio
 import collections
 import math
 import re
@@ -14,6 +15,7 @@ RATE = 'DISCORD_MAILBOX_SENDER_RATE_LIMIT'
 GATED = 'DISCORD_MAILBOX_GATED_GUILDS'
 TRAIN_MEMORY = 256
 MEMBER_TTL = 300
+LOOKUP_TIMEOUT = 10
 EXCERPT = 60
 REFUSED_EMOJI = '\u274e'  # ❎
 
@@ -80,6 +82,7 @@ class _DeliveryGates:
         self._warned: dict[int, float] = {}
         self._swept = self._members_swept = -math.inf
         self._members: dict[tuple[int, int], tuple[bool, float]] = {}
+        self._turns: dict[int, list[Any]] = {}
 
     @classmethod
     def from_settings(cls, log: Callable[[str], None]) -> '_DeliveryGates':
@@ -93,6 +96,19 @@ class _DeliveryGates:
     async def judge(self, msg: Any, continuation: bool, identity_map: dict[str, int], client: Any,
                     now: float | None = None) -> bool:
         """`refuses` plus the member gate, judged before the cap; only its refusals get ❎."""
+        # One author's messages are judged in arrival order, so chunk 2 sees chunk 1's train.
+        turn = self._turns.setdefault(msg.author.id, [asyncio.Lock(), 0])
+        turn[1] += 1
+        try:
+            async with turn[0]:
+                return await self._judged(msg, continuation, identity_map, client, now)
+        finally:
+            turn[1] -= 1
+            if not turn[1]:
+                del self._turns[msg.author.id]
+
+    async def _judged(self, msg: Any, continuation: bool, identity_map: dict[str, int], client: Any,
+                      now: float | None) -> bool:
         now = time.monotonic() if now is None else now
         if self._admission_refuses(msg, continuation, identity_map):
             return True
@@ -148,15 +164,16 @@ class _DeliveryGates:
 
     async def _is_member(self, client: Any, guild_id: int, user_id: int, now: float) -> bool:
         if now - self._members_swept >= MEMBER_TTL:
-            # Every answer left after the sweep is younger than MEMBER_TTL.
+            # Bounds memory only; the read below checks each answer's age.
             self._members = {k: v for k, v in self._members.items() if now - v[1] < MEMBER_TTL}
             self._members_swept = now
-        if (guild_id, user_id) not in self._members:
+        cached = self._members.get((guild_id, user_id))
+        if cached is None or now - cached[1] >= MEMBER_TTL:
             try:
                 guild = client.get_guild(guild_id)
                 if guild is None:
                     raise LookupError('the bot is not in that guild')
-                await guild.fetch_member(user_id)
+                await asyncio.wait_for(guild.fetch_member(user_id), LOOKUP_TIMEOUT)
                 member = True
             except Exception as e:  # pylint: disable=broad-exception-caught
                 if getattr(e, 'status', None) != 404:  # discord.NotFound: not a member
