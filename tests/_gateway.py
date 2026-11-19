@@ -141,6 +141,9 @@ def run(tmp, script, entries=None, env=None, identity="gate-test", extension=Fal
         def get_user(self, user_id):
             return types.SimpleNamespace(id=user_id, dm_channel=self.dms.setdefault(user_id, DM(user_id)))
 
+        def get_guild(self, guild_id):
+            return next((g for g in self.guilds if g.id == guild_id), None)
+
         def get_channel(self, channel_id):
             return next((ch for ch in (*guild.text_channels, *self.dms.values()) if ch.id == channel_id), None)
 

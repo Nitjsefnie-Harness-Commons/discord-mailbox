@@ -2409,7 +2409,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         body = msg.content
         inbox = inbox_dir(identity)
         path = inbox / f'{msg.id}.json'
-        if path.exists() or gates.refuses(msg, continuation, state['identity_map']):
+        if path.exists() or await gates.judge(msg, continuation, state['identity_map'], client):
             # dedup: already seen (an extension relaying a message that also mentions
             # us), checked first so no gate judges it twice; or a delivery gate refused it.
             return path if path.exists() else None

@@ -150,7 +150,7 @@ broadcast role, and a continuation frame (`**[sender→recipients]** subject
 (k/n)`, k ≥ 2) addressed to its identity or to `all`. Delivering means an inbox
 file, a `message` event and a ✅ reaction. A message a gate below refuses gets
 none of the three and is logged in the connector log (a capped sender at most
-once per window). When more than one gate refuses it, the log line names the
+once per window); one the member gate refuses gets a ❎ reaction instead. When more than one gate refuses it, the log line names the
 first.
 
 A continuation frame is delivered only when its author is registered (it
@@ -161,7 +161,7 @@ chunk 1 authors of the last 256 trains. When chunk 1 was not seen, or two
 different authors posted a chunk 1 for the train, only the registered test
 applies.
 
-Three optional settings, read from the environment, then the `env` block of
+Four optional settings, read from the environment, then the `env` block of
 `~/.agent-bundle/settings.local.json`, `~/.agent-bundle/settings.json`, and
 the legacy `~/.claude` settings files (an empty value counts as unset). With
 none set, delivery is unchanged. An invalid value stops the connector at
@@ -172,10 +172,15 @@ startup with a log line naming the setting.
 | `DISCORD_MAILBOX_ALLOWED_USER_IDS` | comma-separated Discord user ids | With either allow-list set, a message is delivered only when its author is in this list **or** its guild is in the guild list. A DM has no guild, so it passes only by this list. |
 | `DISCORD_MAILBOX_ALLOWED_GUILD_IDS` | comma-separated Discord guild ids | See above. |
 | `DISCORD_MAILBOX_SENDER_RATE_LIMIT` | `<count>/<seconds>`, both positive integers | At most `count` deliveries per author in any trailing `seconds` window; every chunk of a long send is one delivery. A message over the cap is refused and logged at most once per sender per window. |
+| `DISCORD_MAILBOX_GATED_GUILDS` | `<guild id>:<user id>,<user id>` entries separated by `;`; a guild with nothing after its `:` allows none of its members | A message whose author is a member of a listed guild and is not in that guild's user ids is refused wherever it was written: in that guild, in a DM or in another guild. It gets a ❎ reaction instead of ✅, and the connector logs its author's id and the first 60 characters of its body, each run of whitespace read as one space. The guild a message was written in is judged first, with no lookup: its author is taken to be a member; every other listed guild whose ids lack the author is asked with a member fetch, whose answer is kept for 5 minutes. A lookup that fails with anything other than "not a member", or a guild the bot is not in, judges nothing: it is logged, and that guild does not refuse the message. |
 
-The allow-lists and the cap also apply to an extension's `ctx.deliver`,
-which returns `None` for a refused message. The continuation rule does not:
-an extension relay is not routed by its frame.
+The allow-lists, the member gate and the cap also apply to an extension's
+`ctx.deliver`, which returns `None` for a refused message. The continuation
+rule does not: an extension relay is not routed by its frame. A message is
+delivered only when every gate passes it. The allow-lists and the
+continuation rule judge first, then the member gate, then the cap, so a
+message an earlier gate refuses gets no reaction and no lookup, and a
+refused message does not count against the cap.
 
 The connector fetches at most 5 distinct Discord message links per delivered
 message. The inbox record's `linked_messages` still lists every distinct link; each one
@@ -248,7 +253,7 @@ cleans that directory on a host also removes what the product keeps there.
 | Outbox | `<temp>/discord-mailbox/<identity>/outbox/` | each queued `send`: recipient, subject, body | personal data | the connector sends it or gives up on it; while no connector runs, it waits |
 | Control requests and answers ([Local records](#local-records)) | `inbox-metadata/` and `outbox-metadata/` beside the inbox | each request's arguments (a `creds add` password) and the connector's answer (`creds get` and `creds list` passwords, `conversation` messages) | secrets, personal data | a request until a connector takes it or its CLI withdraws it at its timeout; a CLI that is interrupted leaves it for the next connector to take; an answer until its CLI reads it or, while a connector runs, 15 minutes |
 | Event stream | `<temp>/discord-mailbox/<identity>/events.<generation>.jsonl` | the connector's stdout events, which `leech` follows: each delivered message's sender label, user id, subject and record path | personal data | the active 2 MiB segment and the two before it; each connector start deletes its predecessor's |
-| Connector log | `<temp>/discord-mailbox/<identity>/connector.log`, or the `--log` path, and its backups `.1` to `.3` | the connector's log lines and discord.py's, including the user and message ids of refused deliveries and the user ids and names of directory entries it ignores | personal data (user ids) | 10 MiB per file, the active file and three backups |
+| Connector log | `<temp>/discord-mailbox/<identity>/connector.log`, or the `--log` path, and its backups `.1` to `.3` | the connector's log lines and discord.py's, including the user and message ids of refused deliveries, the first 60 characters of each message the member gate refuses, and the user ids and names of directory entries it ignores | personal data (user ids, message text) | 10 MiB per file, the active file and three backups |
 | Leech log | `<temp>/discord-mailbox/<identity>/leech.log` and `leech.log.1` | each leech's status lines | none | 2 MiB per file, the active file and one backup |
 | Process files | in `<temp>/discord-mailbox/<identity>/`: `connector.pid`, `connector.state`, `leeches/`, `status-plugin/` (a copy of the installed status plugin), and the `.lock` files beside `connector.pid` and each log | process ids, gateway state, the status plugin | none | `connector.pid` and `connector.state` are rewritten at each start, a leech's file is removed once it has exited, `status-plugin/` at each start and shutdown and when the plugin is removed or fails; the `.lock` files stay, except that a start removes a `.connector.pid.lock` it cannot open once its connector is gone |
 | Root files | `<temp>/discord-mailbox/.agent-bundle-owner` and `.usage-status-gate-<server id>.json` | the directory's ownership marker; the last usage-board period claimed on this host | none | never pruned |
@@ -320,13 +325,14 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
    `outbox-metadata/` files for their user id, username, directory names and
    the text in question, and delete the files you need to, together with any
    of their attachments `attachments download` saved.
-4. Their user id stays in the event stream and the connector log until the
-   limits above drop it. To remove it now, stop the connector, delete its
+4. Their user id stays in the event stream and the connector log, and the
+   start of each message of theirs the member gate refused stays in the
+   connector log, until the limits above drop them. To remove them now, stop the connector, delete its
    `events.*.jsonl` files and its `connector.log*` files (or its `--log` file
    and that file's `.1` to `.3` backups), and start it again: a start creates
    both afresh.
 5. Remove their id from `DISCORD_MAILBOX_ALLOWED_USER_IDS`,
-   `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS` and what an extension saved in its
+   `DISCORD_MAILBOX_GATED_GUILDS`, `DISCORD_MAILBOX_CREDS_TRUSTED_USER_IDS` and what an extension saved in its
    registry file, then restart the connector so it reads the change.
 
 ### Removing an installation

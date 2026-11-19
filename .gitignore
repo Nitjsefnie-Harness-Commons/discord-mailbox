@@ -144,6 +144,7 @@
 !/tests/test_discord_linked_messages.py
 !/tests/test_discord_log_recovery.py
 !/tests/test_discord_log_rotation.py
+!/tests/test_discord_member_gate.py
 !/tests/test_discord_meta_claim.py
 !/tests/test_discord_move.py
 !/tests/test_discord_package_contract.py

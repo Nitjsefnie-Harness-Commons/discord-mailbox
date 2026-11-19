@@ -11,7 +11,11 @@ from ._settings import setting
 USERS = 'DISCORD_MAILBOX_ALLOWED_USER_IDS'
 GUILDS = 'DISCORD_MAILBOX_ALLOWED_GUILD_IDS'
 RATE = 'DISCORD_MAILBOX_SENDER_RATE_LIMIT'
+GATED = 'DISCORD_MAILBOX_GATED_GUILDS'
 TRAIN_MEMORY = 256
+MEMBER_TTL = 300
+EXCERPT = 60
+REFUSED_EMOJI = '\u274e'  # ❎
 
 # perform_send frames chunk 1 as `<mentions> **[sender→to]** subject` and chunk k
 # as `**[sender→to]** subject (k/n)`: n is not on chunk 1, so a train is keyed by
@@ -48,28 +52,66 @@ def parse_rate(name: str, raw: str | None) -> tuple[int, int] | None:
     return int(m.group(1)), int(m.group(2))
 
 
+def parse_gated(name: str, raw: str | None) -> dict[int, frozenset[int]]:
+    """`<guild id>:<user id>,...` entries separated by `;`; an empty user list allows no member."""
+    if raw is None:
+        return {}
+    error = ValueError(f'{name}={raw!r}: expected <guild id>:<user id>,... entries separated by ;')
+    gated: dict[int, frozenset[int]] = {}
+    for entry in (e for e in raw.split(';') if e.strip()):
+        guild, sep, users = (part.strip() for part in entry.partition(':'))
+        if not sep or not re.fullmatch('[0-9]+', guild) or int(guild) in gated:
+            raise error
+        try:
+            gated[int(guild)] = parse_ids(name, users) if users else frozenset()
+        except ValueError:
+            raise error from None
+    if not gated:
+        raise error
+    return gated
+
+
 class _DeliveryGates:
-    def __init__(self, users: frozenset[int], guilds: frozenset[int],
-                 rate: tuple[int, int] | None, log: Callable[[str], None]):
-        self.users, self.guilds, self.rate, self._log = users, guilds, rate, log
+    def __init__(self, users: frozenset[int], guilds: frozenset[int], rate: tuple[int, int] | None,
+                 log: Callable[[str], None], gated: dict[int, frozenset[int]] | None = None):
+        self.users, self.guilds, self.rate, self._log, self.gated = users, guilds, rate, log, gated or {}
         self._train_authors: collections.OrderedDict[TrainKey, int | None] = collections.OrderedDict()
         self._delivered: dict[int, collections.deque[float]] = {}
         self._warned: dict[int, float] = {}
-        self._swept = -math.inf
+        self._swept = self._members_swept = -math.inf
+        self._members: dict[tuple[int, int], tuple[bool, float]] = {}
 
     @classmethod
     def from_settings(cls, log: Callable[[str], None]) -> '_DeliveryGates':
         try:
             return cls(parse_ids(USERS, setting(USERS)), parse_ids(GUILDS, setting(GUILDS)),
-                       parse_rate(RATE, setting(RATE)), log)
+                       parse_rate(RATE, setting(RATE)), log, parse_gated(GATED, setting(GATED)))
         except ValueError as e:
             log(str(e))
             raise SystemExit(1) from e
 
+    async def judge(self, msg: Any, continuation: bool, identity_map: dict[str, int], client: Any,
+                    now: float | None = None) -> bool:
+        """`refuses` plus the member gate, judged before the cap; only its refusals get ❎."""
+        now = time.monotonic() if now is None else now
+        if self._admission_refuses(msg, continuation, identity_map):
+            return True
+        if await self._gated_member(msg, client, now):
+            try:
+                await msg.add_reaction(REFUSED_EMOJI)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self._log(f'react failed on {msg.id}: {e}')
+            return True
+        return self._spends(msg, now)
+
     def refuses(self, msg: Any, continuation: bool, identity_map: dict[str, int],
                 now: float | None = None) -> bool:
-        """True when `msg` must not be delivered, logged (a capped sender once per
-        window). `continuation`: it was routed only by its chunk 2+ frame."""
+        """True when `msg` must not be delivered by every gate but the member gate, logged
+        (a capped sender once per window). `continuation`: it was routed only by its chunk 2+ frame."""
+        return (self._admission_refuses(msg, continuation, identity_map)
+                or self._spends(msg, time.monotonic() if now is None else now))
+
+    def _admission_refuses(self, msg: Any, continuation: bool, identity_map: dict[str, int]) -> bool:
         author = msg.author.id
         guild = getattr(getattr(msg, 'guild', None), 'id', None)
         train = train_of(msg.channel.id, msg.content)
@@ -78,7 +120,12 @@ class _DeliveryGates:
         if (continuation and not _Directory.names_held(identity_map, author)
                 and (train is None or self._train_authors.get(train[0]) != author)):
             return self._refuse(msg, 'continuation: an unregistered sender that did not send chunk 1')
-        if self.rate is not None and self._over_rate(msg, time.monotonic() if now is None else now, *self.rate):
+        return False
+
+    def _spends(self, msg: Any, now: float) -> bool:
+        """The cap's verdict; a delivered chunk 1 is remembered for its train."""
+        author, train = msg.author.id, train_of(msg.channel.id, msg.content)
+        if self.rate is not None and self._over_rate(msg, now, *self.rate):
             return True
         if train is not None and train[1] == 1:
             # A second author's chunk 1 for the key makes it ambiguous (None): nobody vouches for it.
@@ -88,6 +135,37 @@ class _DeliveryGates:
             if len(self._train_authors) > TRAIN_MEMORY:
                 self._train_authors.popitem(last=False)
         return False
+
+    async def _gated_member(self, msg: Any, client: Any, now: float) -> bool:
+        author = msg.author.id
+        written_in = getattr(getattr(msg, 'guild', None), 'id', None)
+        # The guild a message was written in goes first: its author is a member, so no lookup.
+        for guild in sorted(self.gated, key=lambda g: g != written_in):
+            if author not in self.gated[guild] and (guild == written_in or await self._is_member(client, guild, author, now)):
+                excerpt = ' '.join((msg.content or '').split())[:EXCERPT]
+                return self._refuse(msg, f'member gate: a member of guild {guild} not on its {GATED} list; body {excerpt!r}')
+        return False
+
+    async def _is_member(self, client: Any, guild_id: int, user_id: int, now: float) -> bool:
+        if now - self._members_swept >= MEMBER_TTL:
+            # Every answer left after the sweep is younger than MEMBER_TTL.
+            self._members = {k: v for k, v in self._members.items() if now - v[1] < MEMBER_TTL}
+            self._members_swept = now
+        if (guild_id, user_id) not in self._members:
+            try:
+                guild = client.get_guild(guild_id)
+                if guild is None:
+                    raise LookupError('the bot is not in that guild')
+                await guild.fetch_member(user_id)
+                member = True
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                if getattr(e, 'status', None) != 404:  # discord.NotFound: not a member
+                    self._log(f'member gate: lookup of user {user_id} in guild {guild_id} failed '
+                              f'({type(e).__name__}: {e}); not judged by that guild')
+                    return False
+                member = False
+            self._members[(guild_id, user_id)] = (member, now)
+        return self._members[(guild_id, user_id)][0]
 
     def _refuse(self, msg: Any, reason: str) -> bool:
         self._log(f'not delivered: {msg.id} from user {msg.author.id}: {reason}')
