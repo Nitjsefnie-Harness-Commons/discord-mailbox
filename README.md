@@ -111,12 +111,17 @@ younger, it leaves the board alone. When the variable is unset or names no
 file, the connector looks for that script in and beside the `discord_mb_lib`
 package directory; without one it has no usage figures to show.
 
-`DISCORD_MAILBOX_LOCK_ROOT`, read from the environment only, is the directory
-that holds the connector's [lock root](#stores-and-retention) (default
+`DISCORD_MAILBOX_LOCK_ROOT`, read from the environment only, is the
+connector's [lock root](#stores-and-retention) itself (default
 `~/.discord-mailbox-log-locks/`). Set it where the home directory is read-only,
-for example under a systemd unit with `ProtectHome=tmpfs`, to a directory the
-connector can write; where the default cannot be created, the connector exits
-at startup.
+for example under a systemd unit with `ProtectHome=tmpfs`, to an absolute path
+that does not exist yet inside an existing directory the connector's user can
+write, such as `/var/lib/discord-mailbox/locks`. The connector creates it with
+mode `0700`; it does not create missing parent directories. A path that
+already exists must be a real directory (not a symlink) owned by the connector's
+user with no group or other permissions, so a shared directory such as `/tmp`
+is refused. A relative path is taken from the working directory. When the
+connector cannot create or accept the path, it exits at startup and names it.
 
 `DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION` exists for the test suite and
 CI; leave it unset.
