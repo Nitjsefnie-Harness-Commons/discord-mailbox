@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import _control_files, _guild, _prog, _retention, _usage_windows
+from . import _control_files, _prog, _retention, _setup, _usage_windows
 from ._chunking import chunk_body
 
 # Declared for readers and static analysis only; never executed, because
@@ -84,6 +84,7 @@ if hasattr(sys.stdout, 'buffer') and not getattr(sys, '_discord_mb_utf8', False)
 
 SCRIPT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_ROOT))
+from ._settings import renamed as _renamed  # noqa: E402
 from ._settings import setting  # noqa: E402  (env -> ~/.agent-bundle/settings.json)
 from ._temp_provenance import _linklike, ensure_owned_temp_dir  # noqa: E402
 from ._meta_claim import MetaRequestPending, _submitted, _take_response, _withdraw  # noqa: E402
@@ -155,7 +156,7 @@ def __refresh_reload_state(dependencies=None):
         home / '.codex' / 'skills' / 'discord' /
         'discord_status_codex.py')
     values = {
-        public_name: current_setting(environment_name, default)
+        public_name: _renamed(current_setting, environment_name, default)
         for public_name, environment_name, default in __SETTING_SPECS
     }
     values.update({
@@ -221,11 +222,16 @@ LEECH_LOG_MAX_BYTES = 2 * 1024 * 1024
 LEECH_LOG_BACKUP_COUNT = 1
 FORUM_POST_HISTORY_LIMIT = 100  # messages downloaded per pinned forum post
 RECEIPT_EMOJI = '\u2705'  # ✅
-# The connector's ownership/journal namespace must not change when a launcher
-# supplies a different TMPDIR.  A test may inject a private root through the
-# explicit DISCORD_MB_TEST_LOCK_ROOT seam; production always uses this stable
-# per-user location.
-_TEST_LOCK_ROOT_ENV = 'DISCORD_MB_TEST_LOCK_ROOT'
+
+
+# The lock root stays in one per-user place whatever TMPDIR a launcher supplies,
+# unless DISCORD_MAILBOX_LOCK_ROOT (environment only) places it, as a read-only
+# home needs; DISCORD_MB_TEST_LOCK_ROOT is its older name.
+def _connector_lock_root(default):
+    return _renamed(os.environ.get, 'DISCORD_MB_TEST_LOCK_ROOT', default,
+                    new='DISCORD_MAILBOX_LOCK_ROOT')
+
+
 # Every harness reads the same identity token and durable extension registry
 # from the neutral runtime. Flavor is selected by --flavor and controls only
 # the status adapter and parent-process watchdog. The three public directory
@@ -1111,7 +1117,7 @@ def fetch_usage(timeout=60):
     # (including ConnectorApp) retain core.py's globals one level lower. Keep
     # facade relocation/``__file__`` monkeypatches working, then fall back to
     # the package's parent scripts directory.
-    override = os.environ.get('DISCORD_MB_USAGE_QUERY')
+    override = _renamed(os.environ.get, 'DISCORD_MB_USAGE_QUERY')
     here = Path(__file__).resolve().parent
     candidates = [Path(override)] if override else []
     # Installed as a wheel there is no sibling helper at all: site-packages is
@@ -1269,49 +1275,7 @@ def send(identity, to, subject, body, reply_to=None, pin=False, channel=None,
 
 def setup_main(token=None):
     'Create missing infrastructure channels (currently: #attachments).'
-    import discord
-
-    token = token or os.environ.get('DISCORD_TOKEN')
-    if not token:
-        print('No token. Pass --token-file or set DISCORD_TOKEN.', file=sys.stderr)
-        sys.exit(1)
-
-    intents = discord.Intents.default()
-    intents.guilds = True
-    client = discord.Client(intents=intents)
-
-    @client.event
-    async def on_ready():
-        try:
-            if not client.guilds:
-                print(f'bot is not in any guild — invite it first ({_prog.program_name()} does not handle OAuth flow)', file=sys.stderr)
-                await client.close()
-                return
-            guild = _guild.setup_guild(client.guilds, BRIDGE_CHANNEL_NAME)
-            # Locate or create Meta category
-            meta = discord.utils.find(lambda c: c.name.lower() == META_CATEGORY_NAME.lower(),
-                                      guild.categories)
-            if meta is None:
-                print(f'Meta category {META_CATEGORY_NAME!r} not found; placing channel at guild root')
-            existing = discord.utils.find(lambda c: c.name == ATTACHMENTS_CHANNEL_NAME, guild.text_channels)
-            if existing:
-                print(f'#{ATTACHMENTS_CHANNEL_NAME} already exists (id={existing.id})')
-            else:
-                ch = await guild.create_text_channel(
-                    ATTACHMENTS_CHANNEL_NAME,
-                    category=meta,
-                    topic='Binary side-channel for oversized mailbox payloads. See discord_mb.py.',
-                    reason='discord_mb.py setup',
-                )
-                print(f'created #{ATTACHMENTS_CHANNEL_NAME} (id={ch.id})')
-        except discord.Forbidden as e:
-            print(f'missing perms (need Manage Channels): {e}', file=sys.stderr)
-        except Exception as e:
-            print(f'setup error: {e}', file=sys.stderr)
-        finally:
-            await client.close()
-
-    client.run(token, log_handler=None)
+    _setup.run(token, BRIDGE_CHANNEL_NAME, ATTACHMENTS_CHANNEL_NAME, META_CATEGORY_NAME)
 
 
 # --- Control-plane CLI (round-trip via connector through filesystem) ---
@@ -2688,15 +2652,16 @@ __all__ = [
     '_ExtensionContext',
     '_FLAVOR_STATUS_PLUGINS',
     '_PARENT_CMD_PATTERNS',
-    '_TEST_LOCK_ROOT_ENV',
+    '_connector_lock_root',
     '_control_files',
-    '_guild',
     '_ensure_state_root',
     '_flat_component',
     '_linklike',
     '_meta_request',
     '_prog',
+    '_renamed',
     '_retention',
+    '_setup',
     '_submitted',
     '_take_response',
     '_usage_segment',

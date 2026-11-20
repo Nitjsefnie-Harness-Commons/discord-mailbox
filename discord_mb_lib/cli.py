@@ -331,19 +331,19 @@ def _cli():
     u = sub.add_parser('setup', help='One-time server setup: create missing channels')
     u.add_argument('--token', default=None,
                    help='Bot token (needs Manage Channels perm); other local users can read it, so this prints '
-                        'a warning on stderr: prefer --token-file or DISCORD_TOKEN')
+                        'a warning on stderr: prefer --token-file or DISCORD_MAILBOX_DISCORD_TOKEN')
     u.add_argument('--token-file', default=None, metavar='PATH',
-                   help='Read the bot token from this file (used when --token is absent, before DISCORD_TOKEN)')
+                   help='Read the bot token from this file (used when --token is absent, before DISCORD_MAILBOX_DISCORD_TOKEN)')
 
     c = sub.add_parser('connector', help='Long-lived gateway connector (one per identity)')
     c.add_argument('identity')
     c.add_argument('--claude-pid', dest='claude_pid', type=int, default=None,
                    help='Parent harness CLI PID. When dead, connector exits.')
     c.add_argument('--token', default=None,
-                   help='Bot token (else --token-file, DISCORD_TOKEN env or the shared Discord directory); other '
+                   help='Bot token (else --token-file, DISCORD_MAILBOX_DISCORD_TOKEN env or the shared Discord directory); other '
                         'local users can read it, so this prints a warning on stderr')
     c.add_argument('--token-file', default=None, metavar='PATH',
-                   help='Read the bot token from this file (used when --token is absent, before DISCORD_TOKEN)')
+                   help='Read the bot token from this file (used when --token is absent, before DISCORD_MAILBOX_DISCORD_TOKEN)')
     c.add_argument('--log', dest='log_path', default=None,
                    help='Human log path (default: <temp>/discord-mailbox/<identity>/connector.log)')
     c.add_argument('--flavor', choices=('claude', 'kimi', 'codex'), default=None,

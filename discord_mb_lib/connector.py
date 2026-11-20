@@ -346,7 +346,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         # drives both the parent-CLI PID walkup and the default status plugin.
         token, flavor = _secrets.connector_token(token, identity, flavor, resolve_token_and_flavor)
         if not token:
-            log(f'No token. Pass --token-file, set DISCORD_TOKEN env or populate '
+            log(f'No token. Pass --token-file, set DISCORD_MAILBOX_DISCORD_TOKEN env or populate '
                 f'{TOKEN_DIR}/{identity}.token')
             raise SystemExit(1)
         log(f'identity flavor: {flavor}')

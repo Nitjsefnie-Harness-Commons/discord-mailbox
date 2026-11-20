@@ -116,6 +116,7 @@
 !/discord_mb_lib/_secrets.py
 !/discord_mb_lib/_send_errors.py
 !/discord_mb_lib/_settings.py
+!/discord_mb_lib/_setup.py
 !/discord_mb_lib/_temp_provenance.py
 !/discord_mb_lib/_usage_windows.py
 !/discord_mb_lib/cli.py

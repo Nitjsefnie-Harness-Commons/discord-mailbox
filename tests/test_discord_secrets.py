@@ -37,7 +37,7 @@ def _environ(**values):
                 os.environ[name] = value
 
 
-def _cli(argv, stdin=None, env=""):
+def _cli(argv, stdin=None, env=None):
     """The real parser. -> (what reached the command, stdout, stderr, prompts); `seen["exit"]` holds a SystemExit
     code. The connector entry records only the token the CLI hands it; the connector's own steps are tested below."""
     seen, out, err, prompts = {}, io.StringIO(), io.StringIO(), []
@@ -56,7 +56,7 @@ def _cli(argv, stdin=None, env=""):
     core._meta_request = lambda _i, payload, _t: seen.update(creds=payload) or {"ok": True, "action": "added", "msg_id": "5"}
     sys.argv, sys.stdin = ["discord_mb.py", *argv], stdin or io.StringIO()
     try:
-        with _environ(DISCORD_TOKEN=env), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with _environ(**{"DISCORD_TOKEN": "", **(env or {})}), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             cli._cli()
     except SystemExit as e:
         seen["exit"] = e.code
@@ -100,7 +100,8 @@ def test_the_cli_takes_the_flag_then_the_file_and_only_the_flag_warns(tmp):
                             (["setup", *both], "setup", flag),
                             (["setup", "--token-file", good], "setup", held),
                             (["setup"], "setup", env)):
-        seen, out, err, _ = _cli(argv, env=env)
+        seen, out, err, _ = _cli(argv, env={"DISCORD_TOKEN": env})
+        err = err.removesuffix("setup finished without finding or creating the attachments channel\n")    # the stand-in bot never settles
         got = seen.get(key)
         if key == "exit":
             assert want in got and held not in got and env not in got, _hide((argv, got), names)
@@ -114,17 +115,33 @@ def test_the_cli_takes_the_flag_then_the_file_and_only_the_flag_warns(tmp):
 
 
 def test_a_given_token_beats_discord_token_which_beats_the_directory(tmp):
-    given, env, stored = (_value() for _ in range(3))
+    given, new, env, stored = (_value() for _ in range(4))
     (Path(tmp) / "agent.token").write_text(stored, encoding="utf-8")
-    names, saved, core.TOKEN_DIR = {given: "given", env: "env", stored: "directory"}, core.TOKEN_DIR, Path(tmp)
+    names, saved, core.TOKEN_DIR = {given: "given", new: "prefixed", env: "env", stored: "directory"}, core.TOKEN_DIR, Path(tmp)
+    prefixed = "DISCORD_MAILBOX_DISCORD_TOKEN"
     try:
-        for token, env_value, flavor, want in ((given, env, None, (given, "claude")),
-                                               (None, env, "codex", (env, "codex"))):
-            with _environ(DISCORD_TOKEN=env_value):
+        for token, values, flavor, want in ((given, {"DISCORD_TOKEN": env}, None, (given, "claude")),
+                                            (None, {"DISCORD_TOKEN": env}, "codex", (env, "codex")),
+                                            (None, {prefixed: new}, "codex", (new, "codex")),
+                                            (None, {prefixed: new, "DISCORD_TOKEN": env}, "codex", (new, "codex")),
+                                            (None, {prefixed: "", "DISCORD_TOKEN": env}, "codex", (env, "codex"))):
+            with _environ(**values):
                 got = _secrets.connector_token(token, "agent", flavor, core.resolve_token_and_flavor)
-            assert got == want, _hide((token, env_value, flavor, got), names)
+            assert got == want, _hide((token, values, flavor, got), names)
     finally:
         core.TOKEN_DIR = saved
+
+
+def test_setup_reads_the_prefixed_token_first_and_refuses_without_one(tmp):
+    del tmp
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    new, old = _value(), _value()
+    for env, want in (({"DISCORD_MAILBOX_DISCORD_TOKEN": new}, new), ({"DISCORD_TOKEN": old}, old),
+                      ({"DISCORD_MAILBOX_DISCORD_TOKEN": new, "DISCORD_TOKEN": old}, new), ({"DISCORD_MAILBOX_DISCORD_TOKEN": "", "DISCORD_TOKEN": old}, old)):
+        assert (seen := _cli(["setup"], env=env)[0]).get("setup") == want, _hide((env, seen), {new: "prefixed", old: "env"})
+    seen, _, err, _ = _cli(["setup"])
+    assert seen == {"exit": 1} and "set DISCORD_MAILBOX_DISCORD_TOKEN" in err, (seen, err)
 
 
 def test_the_real_connector_reads_a_patched_token_directory_with_its_flavor(tmp):

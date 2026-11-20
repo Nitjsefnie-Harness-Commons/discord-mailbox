@@ -63,12 +63,12 @@ mentionable or the bot has `mention_everyone`.
 
 | What | Default name | Setting | `setup` creates it |
 | --- | --- | --- | --- |
-| Bridge text channel, the default for `send`, `conversation`, `topic` and `pins` | `agents` | `DISCORD_MB_BRIDGE_CHANNEL` | no |
-| Directory text channel ([Directory](#directory)) | `agent-directory` | `DISCORD_MB_DIRECTORY_CHANNEL` | no |
-| Attachments text channel | `attachments` | `DISCORD_MB_ATTACHMENTS_CHANNEL` | yes |
-| Credentials text channel ([Credentials](#credentials)) | `credentials` | `DISCORD_MB_CREDENTIALS_CHANNEL` | no |
-| Broadcast role, mentioned by a `send` to `all` | `Claude Agents` | `DISCORD_MB_BROADCAST_ROLE` | no |
-| Category `setup` puts the attachments channel in | `Meta` | `DISCORD_MB_META_CATEGORY` | no |
+| Bridge text channel, the default for `send`, `conversation`, `topic` and `pins` | `agents` | `DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL` | no |
+| Directory text channel ([Directory](#directory)) | `agent-directory` | `DISCORD_MAILBOX_DISCORD_MB_DIRECTORY_CHANNEL` | no |
+| Attachments text channel | `attachments` | `DISCORD_MAILBOX_DISCORD_MB_ATTACHMENTS_CHANNEL` | yes |
+| Credentials text channel ([Credentials](#credentials)) | `credentials` | `DISCORD_MAILBOX_DISCORD_MB_CREDENTIALS_CHANNEL` | no |
+| Broadcast role, mentioned by a `send` to `all` | `Claude Agents` | `DISCORD_MAILBOX_DISCORD_MB_BROADCAST_ROLE` | no |
+| Category `setup` puts the attachments channel in | `Meta` | `DISCORD_MAILBOX_DISCORD_MB_META_CATEGORY` | no |
 
 `discord-mb setup --token-file <path>` connects, works in the server the
 connector uses (the one with a text channel named like the bridge channel; the
@@ -83,7 +83,7 @@ when there is none. Create the other channels and the role in Discord.
 
 [Secrets off the command line](#secrets-off-the-command-line) lists where the
 connector looks for its token, the token file
-`~/.agent-bundle/discord/<identity>.token` last. `DISCORD_TOKEN` is read from
+`~/.agent-bundle/discord/<identity>.token` last. `DISCORD_MAILBOX_DISCORD_TOKEN` is read from
 the environment only, never from the settings files. Keep a token file
 readable only by the user that runs the connector (mode 0600 on POSIX). The
 token directory also decides whose credentials entries are trusted
@@ -97,7 +97,7 @@ read from the environment, then from the settings files the Delivery section
 lists. A connector reads them once, at startup, so a change takes effect at
 its next start.
 
-`DISCORD_MB_USAGE_QUERY`, read from the environment only, is the path of the
+`DISCORD_MAILBOX_DISCORD_MB_USAGE_QUERY`, read from the environment only, is the path of the
 `usage_query.py` script whose figures the connector writes into the names of a
 server's usage-board voice channels, those whose names contain `claude`,
 `kimi` or `codex`. In a server with at least one of them, the connector that
@@ -110,8 +110,23 @@ and takes over one that is 15 minutes old; while another connector's lease is
 younger, it leaves the board alone. When the variable is unset or names no
 file, the connector looks for that script in and beside the `discord_mb_lib`
 package directory; without one it has no usage figures to show.
-`DISCORD_MB_TEST_LOCK_ROOT` and `DISCORD_MB_PORTABLE_PUBLICATION` exist for the
-test suite and CI; leave them unset.
+
+`DISCORD_MAILBOX_LOCK_ROOT`, read from the environment only, is the
+connector's [lock root](#stores-and-retention) itself (default
+`~/.discord-mailbox-log-locks/`). Set it where the home directory is read-only,
+for example under a systemd unit with `ProtectHome=tmpfs`, to an absolute path
+that does not exist yet inside an existing directory the connector's user can
+write, such as `/var/lib/discord-mailbox/locks`. The connector creates it with
+mode `0700` (Windows ignores the mode and has no POSIX permission bits); it
+does not create missing parent directories. A path that already exists must be
+a real directory (not a symlink or reparse point). On POSIX it must also be
+owned by the connector's user with no group or other permissions, so a shared
+directory such as `/tmp` is refused; Windows makes no owner or mode check. A
+relative path is taken from the working directory. When the connector cannot
+create or accept the path, it exits at startup and names it.
+
+`DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION` exists for the test suite and
+CI; leave it unset.
 
 ### Starting and stopping
 
@@ -138,7 +153,7 @@ connector left.
 
 1. On the application's **Bot** page, **Reset Token** shows a new token.
 2. Replace the old token in every `--token` value, token file, `--token-file`
-   file and `DISCORD_TOKEN` that holds it: each identity has its own token file.
+   file and `DISCORD_MAILBOX_DISCORD_TOKEN` that holds it: each identity has its own token file.
 3. Restart every connector that runs as this bot. A connector reads its token
    once, at startup, and keeps the one it started with. `setup` reads the
    token each time it runs, and no other command uses it.
@@ -257,7 +272,7 @@ cleans that directory on a host also removes what the product keeps there.
 | Leech log | `<temp>/discord-mailbox/<identity>/leech.log` and `leech.log.1` | each leech's status lines | none | 2 MiB per file, the active file and one backup |
 | Process files | in `<temp>/discord-mailbox/<identity>/`: `connector.pid`, `connector.state`, `leeches/`, `status-plugin/` (a copy of the installed status plugin), and the `.lock` files beside `connector.pid` and each log | process ids, gateway state, the status plugin | none | `connector.pid` and `connector.state` are rewritten at each start, a leech's file is removed once it has exited, `status-plugin/` at each start and shutdown and when the plugin is removed or fails; the `.lock` files stay, except that a start removes a `.connector.pid.lock` it cannot open once its connector is gone |
 | Root files | `<temp>/discord-mailbox/.agent-bundle-owner` and `.usage-status-gate-<server id>.json` | the directory's ownership marker; the last usage-board period claimed on this host | none | never pruned |
-| Lock root | `~/.discord-mailbox-log-locks/` | lock files, the connector log's random staging key and its SQLite authority file, and, while a log migration or rotation runs, its journal (log paths, sizes and hashes); from a background rotation's swap until its cleanup, or until the next start after a crash, also up to about 1 MiB of the connector log's newest lines | as the connector log while it holds those lines (personal data: user ids), otherwise no personal data | never pruned |
+| Lock root | `~/.discord-mailbox-log-locks/`, or the directory `DISCORD_MAILBOX_LOCK_ROOT` names ([Settings](#settings)) | lock files, the connector log's random staging key and its SQLite authority file, and, while a log migration or rotation runs, its journal (log paths, sizes and hashes); from a background rotation's swap until its cleanup, or until the next start after a crash, also up to about 1 MiB of the connector log's newest lines | as the connector log while it holds those lines (personal data: user ids), otherwise no personal data | never pruned |
 | Extension registry ([Extensions](#extensions)) | `~/.agent-bundle/discord/extensions/<identity>.json` | the registered extension's path, the date of the last daily heartbeat, and whatever the extension saves with `ctx.save()` | whatever the extension saves | never pruned |
 | Token files ([Token](#token)) | `~/.agent-bundle/discord/<identity>.token` | the bot token | secret | the operator writes and deletes them; the product only reads them |
 | Settings files ([Settings](#settings)) | the `env` blocks of the settings files [Delivery](#delivery) lists | channel and role names, allowed user and server ids, trusted user ids | Discord ids | the operator writes and deletes them; the product only reads them |
@@ -354,7 +369,8 @@ that user wrote, under the `<temp>` of the process that runs it. For the rest:
    leech exits when its connector stops.
 3. On every host, for each user that ran a connector and each `<temp>` its
    connectors used, delete `<temp>/discord-mailbox/`, each `--log` file with
-   its backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`,
+   its backups and the `.lock` files beside them, `~/.discord-mailbox-log-locks/`
+   (or the directory `DISCORD_MAILBOX_LOCK_ROOT` names),
    each `~/.agent-bundle/discord/<identity>.token`,
    `~/.agent-bundle/discord/extensions/<identity>.json`, the product's keys in
    the settings files, and the files `attachments download` saved.
@@ -488,8 +504,8 @@ secret has a source that keeps it off the command line:
   mark. A file that cannot be read or holds only whitespace exits 1 with an
   error naming the path, never its content.
 - `connector` takes the first token it finds in `--token`, `--token-file`,
-  `DISCORD_TOKEN`, then `~/.agent-bundle/discord/<identity>.token`; `setup`
-  takes the first of `--token`, `--token-file`, `DISCORD_TOKEN`.
+  `DISCORD_MAILBOX_DISCORD_TOKEN`, then `~/.agent-bundle/discord/<identity>.token`; `setup`
+  takes the first of `--token`, `--token-file`, `DISCORD_MAILBOX_DISCORD_TOKEN`.
 
 `--token` and the password argument still work, and each prints a one-line
 `warning:` on stderr. The warning never goes to stdout, which carries the

@@ -15,6 +15,7 @@ connector on one identity, which is worse than the stale lock.
 Stdlib only, OS-agnostic (SETUP.md edit discipline).
 """
 import os
+import subprocess
 import sys
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -212,6 +213,39 @@ def test_parent_walk_parses_ppid_after_final_comm_paren(tmp):
             del m.open
         else:
             m.open = old_open
+
+
+def _child(code, home, *args, **env):
+    """Run `code` in a child whose home is `home` and whose lock-root names are only those in `env`."""
+    names = ("DISCORD_MB_TEST_LOCK_ROOT", "DISCORD_MAILBOX_LOCK_ROOT")
+    child_env = {k: v for k, v in os.environ.items() if k not in names}
+    child_env.update(HOME=str(home), USERPROFILE=str(home), **env)
+    argv = [sys.executable, "-c", "import sys\nsys.path.insert(0, sys.argv[1])\n" + code, _util.SCRIPTS, *map(str, args)]
+    return subprocess.run(argv, env=child_env, capture_output=True, text=True, check=False)
+
+
+def test_lock_root_names_resolve_at_both_read_sites(tmp):
+    """The prefixed name wins over the old one, blank counts as unset, and the default is under the home."""
+    new, old = "DISCORD_MAILBOX_LOCK_ROOT", "DISCORD_MB_TEST_LOCK_ROOT"
+    home, a, b = (str(Path(tmp) / name) for name in ("home", "a", "b"))
+    probe = ("import importlib, discord_mb, discord_mb_lib.storage as s\nprint(s._ConnectorOwnership._IDENTITY_LOCK_ROOT)\n"
+             "importlib.reload(discord_mb)\nprint(discord_mb._ConnectorOwnership._IDENTITY_LOCK_ROOT)")
+    default = str(Path(home) / ".discord-mailbox-log-locks")
+    for env, want in (({new: a}, a), ({old: b}, b), ({new: a, old: b}, a), ({new: "", old: b}, b),
+                      ({new: a, old: ""}, a), ({new: "", old: ""}, default), ({}, default)):
+        run = _child(probe, home, **env)
+        assert run.stdout.splitlines() == [want, want], (env, run.stdout, run.stderr)
+
+
+def test_connector_lock_needs_no_writable_home(tmp):
+    """The setting places the lock root where the default cannot be made (a file as home); drives storage's read (`_ConnectorOwnership._IDENTITY_LOCK_ROOT`) and the log writer."""
+    (home := Path(tmp) / "home").write_text("", encoding="utf-8")
+    code = "import discord_mb\ndiscord_mb._ConnectorLogWriter(sys.argv[2], max_bytes=64, backup_count=1).close()"
+    log = Path(tmp) / "connector.log"
+    refused = _child(code, home, log)
+    assert refused.returncode != 0 and "cannot establish connector lock root" in refused.stderr, refused.stderr
+    placed = _child(code, home, log, DISCORD_MAILBOX_LOCK_ROOT=str(Path(tmp) / "locks"))
+    assert placed.returncode == 0, placed.stderr
 
 
 def main():

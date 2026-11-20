@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 
+PREFIX = 'DISCORD_MAILBOX_'
 SETTINGS_DIR = Path.home() / '.agent-bundle'
 LEGACY_SETTINGS_DIR = Path.home() / '.claude'
 # settings.local.json wins over settings.json — same order Claude Code uses.
@@ -75,6 +76,15 @@ def setting(name, default=None):
         return value
     value = _file_env().get(name)
     return value if value else default
+
+
+def renamed(read, old, default=None, new=None):
+    """Value of a renamed variable: `new` (default: `old` under PREFIX) wins over `old`.
+
+    `read` is `os.environ.get` or `setting`; `new` is resolved through all of
+    its sources before `old`, and a blank value counts as unset.
+    """
+    return read(new or PREFIX + old) or read(old) or default
 
 
 def required(name, hint=''):

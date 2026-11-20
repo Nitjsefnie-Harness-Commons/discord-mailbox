@@ -22,7 +22,7 @@ from .core import *
 # reading the source applies the plain no-underscore rule and reports
 # every use as undefined. Spelling them out also says which module
 # each one comes from.
-from .core import _DEFAULT_CONNECTOR_LOCK_ROOT, _TEST_LOCK_ROOT_ENV, _linklike
+from .core import _DEFAULT_CONNECTOR_LOCK_ROOT, _connector_lock_root, _linklike, _renamed
 from . import _log_chunks
 from ._log_rotation import _RotationJournal
 from ._log_rotation_recovery import _RotationRecovery
@@ -43,7 +43,7 @@ def _posix_mode_exposed(mode):
     return bool(stat.S_IMODE(mode) & 0o077)
 
 
-PORTABLE_PUBLICATION_ENV = 'DISCORD_MB_PORTABLE_PUBLICATION'
+PORTABLE_PUBLICATION_ENV = 'DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION'
 
 
 def _anonymous_publication_available():
@@ -55,12 +55,12 @@ def _anonymous_publication_available():
     named path, where every intermediate state is a real directory entry that
     a crash leaves behind for the next start to reason about.
 
-    Setting DISCORD_MB_PORTABLE_PUBLICATION=1 takes the portable path on a
-    platform that does not need it. That is how CI exercises the macOS and
-    Windows publication protocol on a Linux runner; nothing in normal
-    operation sets it.
+    Setting DISCORD_MAILBOX_DISCORD_MB_PORTABLE_PUBLICATION=1 (CI sets the
+    older name) takes the portable path on a platform that does not need it,
+    so a Linux runner exercises the macOS and Windows protocol; nothing in
+    normal operation sets it.
     """
-    if os.environ.get(PORTABLE_PUBLICATION_ENV) == '1':
+    if _renamed(os.environ.get, 'DISCORD_MB_PORTABLE_PUBLICATION', new=PORTABLE_PUBLICATION_ENV) == '1':
         return False
     return getattr(os, 'O_TMPFILE', None) is not None and os.name != 'nt'
 
@@ -113,7 +113,7 @@ class _ConnectorOwnership:
     """
 
     _IDENTITY_LOCK_ROOT = Path(
-        os.environ.get(_TEST_LOCK_ROOT_ENV, _DEFAULT_CONNECTOR_LOCK_ROOT))
+        _connector_lock_root(_DEFAULT_CONNECTOR_LOCK_ROOT))
 
     def __init__(self, target, lock_inode=False, stable_paths=None,
                  lock_root=None):
@@ -210,8 +210,8 @@ class _ConnectorOwnership:
         would be an unsafe adoption primitive: a symlink/reparse point,
         foreign-owned directory, or permissive directory would redirect every
         lock and journal operation.  Validate the identity after creation and
-        on every use.  The default parent is the user's home directory; the
-        test seam supplies an already-created private parent.
+        on every use.  The default parent is the user's home directory; a
+        configured root's parent must already exist.
         """
         root = Path(root)
         try:

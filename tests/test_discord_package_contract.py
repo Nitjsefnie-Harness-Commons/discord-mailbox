@@ -123,32 +123,38 @@ def test_setup_hints_name_the_invoked_command(tmp):
         with mock.patch.object(sys, "argv", [argv0]), mock.patch.object(discord.utils, "get", without):
             client = _gateway.run(tmp, script)
         with mock.patch.object(sys, "argv", [argv0]):
-            _, err = _run_setup([])    # a bot that is in no guild
+            _, err, _ = _run_setup([])    # a bot that is in no guild
         assert f"run `{name} setup` or create" in client.log, client.log
         assert f"run `{name} setup` first" in client.responses["up"]["error"], client.responses
         assert f"({name} does not handle OAuth" in err, err
 
 
-def _run_setup(guilds):
-    """Run `setup` as a bot that is in `guilds` -> (stdout, stderr)."""
+def _run_setup(guilds, ready=True, stdout=None):
+    """Run `setup` as a bot in `guilds` -> (stdout, stderr, exit status); `ready` False: no on_ready."""
     import discord
     from discord_mb_lib import core
 
     def bot(*args, **kwargs):
         client = types.SimpleNamespace(guilds=guilds, close=lambda: asyncio.sleep(0))
         client.event = lambda function: setattr(client, "ready", function) or function
-        client.run = lambda *args, **kwargs: asyncio.run(client.ready())
+        client.run = lambda *args, **kwargs: ready and asyncio.run(client.ready())
         return client
 
-    with mock.patch.object(discord, "Client", bot), contextlib.redirect_stdout(io.StringIO()) as out, \
+    status = 0
+    with mock.patch.object(discord, "Client", bot), contextlib.redirect_stdout(stdout or io.StringIO()) as out, \
             contextlib.redirect_stderr(io.StringIO()) as err:
-        core.setup_main(token="unused")
-    return out.getvalue(), err.getvalue()
+        try:
+            core.setup_main(token="unused")
+        except SystemExit as stop:
+            status = stop.code
+    return out.getvalue(), err.getvalue(), status
 
 
-def _guild(name, *channels):
-    """A guild with these text channels; `made` lists what `setup` creates in it."""
+def _guild(name, *channels, refuse=None):
+    """A guild with these text channels; `made` lists what `setup` creates in it; creating raises `refuse`."""
     async def create_text_channel(channel, **kwargs):
+        if refuse:
+            raise refuse
         guild.made.append(channel)
         return types.SimpleNamespace(id=7)
     guild = types.SimpleNamespace(id=len(name), name=name, categories=[], made=[], create_text_channel=create_text_channel,
@@ -169,10 +175,41 @@ def test_setup_works_in_the_guild_the_connector_does(tmp):
         (((), ()), None)]
     for specs, made in rows:
         guilds = [_guild(f"g{i}", *channels) for i, channels in enumerate(specs)]
-        out, err = _run_setup(guilds)
+        out, err, status = _run_setup(guilds)
         assert [g.made for g in guilds] == (made or [[]] * len(guilds)), (specs, out, err)
         assert (made is None) == (f"none has a #{bridge} channel; create #{bridge} in the intended server first" in err), (specs, err)
         assert (made is None) == (out == "" and err != ""), (specs, out, err)
+        assert status == (1 if made is None else 0), (specs, status)
+
+
+def test_setup_exits_nonzero_unless_it_finds_or_creates_the_channel(tmp):
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    import discord
+    from discord_mb_lib import core
+    att = core.ATTACHMENTS_CHANNEL_NAME
+    denied = discord.Forbidden(types.SimpleNamespace(status=403, reason="Forbidden"), "denied")
+    rows = [  # guilds, on_ready runs, stderr text, exit status
+        ([], True, "not in any guild", 1), ([_guild("g")], True, "", 0), ([_guild("g", att)], True, "", 0),
+        ([_guild("g", refuse=denied)], True, "missing perms (need Manage Channels): 403", 1),
+        ([_guild("g", refuse=OSError("boom"))], True, "setup error: boom", 1), ([_guild("g", att)], False, "setup finished without finding or creating", 1)]
+    for guilds, ready, text, status in rows:
+        out, err, code = _run_setup(guilds, ready)
+        assert (code, text in err, (text == "") == (err == "")) == (status, True, True), (guilds, out, err, code)
+
+
+def test_setup_succeeds_once_the_channel_exists_even_if_reporting_it_fails(tmp):
+    if not _gateway.have_discord():
+        _util.skip("discord.py is not installed")
+    from discord_mb_lib import core
+
+    class Closed(io.StringIO):
+        def write(self, text):
+            raise OSError("closed")
+    guild = _guild("g")
+    guild.categories = [types.SimpleNamespace(name=core.META_CATEGORY_NAME)]
+    _, err, status = _run_setup([guild], stdout=Closed())
+    assert (guild.made, status, "setup error: closed" in err) == ([core.ATTACHMENTS_CHANNEL_NAME], 0, True), (err, status)
 
 
 def test_the_connector_resolves_the_guild_setup_works_in(tmp):
@@ -180,7 +217,7 @@ def test_the_connector_resolves_the_guild_setup_works_in(tmp):
     client = _gateway.run(tmp, lambda client: asyncio.sleep(0), others=[other])
     assert "main guild: 'guild'; also in 1 other server(s): ['other']" in client.log, client.log
     client.guild.categories = []
-    out, err = _run_setup([other, client.guild])
+    out, err, _ = _run_setup([other, client.guild])
     assert other.made == [] and f"already exists (id={_gateway.ATTACHMENTS})" in out, (out, err)
 
 
@@ -809,7 +846,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
     script = (
         "import importlib, os, sys\n"
         f"sys.path.insert(0, {str(_util.SCRIPTS)!r})\n"
-        "os.environ['DISCORD_MB_BRIDGE_CHANNEL'] = 'first'\n"
+        "os.environ['DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'] = 'first'\n"
         "import discord_mb\n"
         "from discord_mb_lib import core, storage, connector, cli\n"
         "modules = (core, storage, connector, cli)\n"
@@ -817,7 +854,7 @@ def test_reload_refreshes_environment_backed_configuration(tmp):
         "assert all(module.BRIDGE_CHANNEL_NAME == 'first' "
         "for module in modules)\n"
         "connector_type = discord_mb.ConnectorApp\n"
-        "os.environ['DISCORD_MB_BRIDGE_CHANNEL'] = 'second'\n"
+        "os.environ['DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'] = 'second'\n"
         "importlib.reload(discord_mb)\n"
         "assert discord_mb.BRIDGE_CHANNEL_NAME == 'second'\n"
         "assert all(module.BRIDGE_CHANNEL_NAME == 'second' "
@@ -922,7 +959,7 @@ def test_reload_rebinds_from_import_dependencies(tmp):
         "    assert all(getattr(module, name, marker) is marker "
         "for module in modules), name\n"
         "assert discord_mb.BRIDGE_CHANNEL_NAME == "
-        "'PATCHED-DISCORD_MB_BRIDGE_CHANNEL'\n"
+        "'PATCHED-DISCORD_MAILBOX_DISCORD_MB_BRIDGE_CHANNEL'\n"
     )
     _child_ok(script)
 
@@ -1659,113 +1696,51 @@ def test_failed_path_import_preserves_canonical_package_transactionally(tmp):
     assert private_after == private_before
 
 
+def _fresh(module, reload=True):
+    """Import `module` from the script directory, reloaded by default."""
+    with mock.patch.object(sys, "path", [_util.SCRIPTS, *sys.path]):
+        loaded = importlib.import_module(module)
+        return importlib.reload(loaded) if reload else loaded
+
+
+class _FakeConnectorApp:
+    seen: dict  # set on the per-test subclass, never on this base
+
+    def __init__(self, *args, **kwargs):
+        type(self).seen = {"init": (args, kwargs)}
+
+    def run(self):
+        type(self).seen["run"] = True
+        return 23
+
+
 def test_connector_app_owns_lifecycle_configuration(tmp):
     """The connector package exposes an object boundary for one lifecycle."""
-    sys.path.insert(0, _util.SCRIPTS)
-    try:
-        connector = importlib.import_module("discord_mb_lib.connector")
-        connector = importlib.reload(connector)
-    finally:
-        sys.path.pop(0)
-
+    connector = _fresh("discord_mb_lib.connector")
     seen = {}
-    original = connector._run_connector
-    connector._run_connector = lambda *args, **kwargs: seen.update(
-        args=args, kwargs=kwargs) or 17
-    try:
-        app = connector.ConnectorApp(
-            "agent", claude_pid=123, token="secret", log_path="agent.log",
-            flavor="codex")
-        assert app.run() == 17
-    finally:
-        connector._run_connector = original
-
-    assert seen == {
-        "args": ("agent",),
-        "kwargs": {
-            "claude_pid": 123,
-            "token": "secret",
-            "log_path": "agent.log",
-            "flavor": "codex",
-        },
-    }
+    with mock.patch.object(connector, "_run_connector", lambda *args, **kwargs: seen.update(args=args, kwargs=kwargs) or 17):
+        assert connector.ConnectorApp("agent", claude_pid=123, token="secret", log_path="agent.log", flavor="codex").run() == 17
+    assert seen == {"args": ("agent",), "kwargs": {"claude_pid": 123, "token": "secret", "log_path": "agent.log", "flavor": "codex"}}
 
 
 def test_connector_main_constructs_the_lifecycle_object(tmp):
     """The procedural compatibility API delegates to ``ConnectorApp``."""
-    sys.path.insert(0, _util.SCRIPTS)
-    try:
-        connector = importlib.import_module("discord_mb_lib.connector")
-        connector = importlib.reload(connector)
-    finally:
-        sys.path.pop(0)
-
-    seen = {}
-
-    class FakeConnectorApp:
-        def __init__(self, *args, **kwargs):
-            seen["init"] = (args, kwargs)
-
-        def run(self):
-            seen["run"] = True
-            return 23
-
-    original = connector.ConnectorApp
-    connector.ConnectorApp = FakeConnectorApp
-    try:
-        result = connector.connector_main(
-            "agent", claude_pid=456, token="token", log_path="custom.log",
-            flavor="kimi")
-    finally:
-        connector.ConnectorApp = original
-
+    connector = _fresh("discord_mb_lib.connector")
+    with mock.patch.object(connector, "ConnectorApp", fake := type("_Fake", (_FakeConnectorApp,), {})):
+        result = connector.connector_main("agent", claude_pid=456, token="token", log_path="custom.log", flavor="kimi")
     assert result == 23
-    assert seen == {
-        "init": (("agent",), {
-            "claude_pid": 456,
-            "token": "token",
-            "log_path": "custom.log",
-            "flavor": "kimi",
-        }),
-        "run": True,
-    }
+    assert fake.seen == {
+        "init": (("agent",), {"claude_pid": 456, "token": "token", "log_path": "custom.log", "flavor": "kimi"}), "run": True}
 
 
 def test_cli_connector_dispatches_through_connector_app(tmp):
     """The production CLI enters the object-oriented lifecycle boundary."""
-    sys.path.insert(0, _util.SCRIPTS)
-    try:
-        cli = importlib.import_module("discord_mb_lib.cli")
-    finally:
-        sys.path.pop(0)
-    seen = {}
-
-    class FakeConnectorApp:
-        def __init__(self, *args, **kwargs):
-            seen["init"] = (args, kwargs)
-
-        def run(self):
-            seen["run"] = True
-
-    original = cli.ConnectorApp
-    original_argv = sys.argv
-    cli.ConnectorApp = FakeConnectorApp
-    sys.argv = ["discord_mb.py", "connector", "agent", "--flavor", "codex"]
-    try:
+    cli = _fresh("discord_mb_lib.cli", reload=False)
+    with mock.patch.object(cli, "ConnectorApp", fake := type("_Fake", (_FakeConnectorApp,), {})), \
+            mock.patch.object(sys, "argv", ["discord_mb.py", "connector", "agent", "--flavor", "codex"]):
         cli._cli()
-    finally:
-        cli.ConnectorApp = original
-        sys.argv = original_argv
-
-    assert seen == {
-        "init": (("agent",), {
-            "claude_pid": None,
-            "token": None,
-            "log_path": None,
-            "flavor": "codex",
-        }),
-        "run": True,
-    }
+    assert fake.seen == {
+        "init": (("agent",), {"claude_pid": None, "token": None, "log_path": None, "flavor": "codex"}), "run": True}
 
 
 def test_connector_app_uses_its_real_package_source(tmp):
@@ -1858,55 +1833,41 @@ def test_package_fetch_usage_resolves_the_helper_from_the_environment(tmp):
 
     site-packages is not the caller's scripts directory, so a sibling probe
     finds nothing in a wheel install. The installer points
-    DISCORD_MB_USAGE_QUERY at the real helper; without it the board is simply
-    not published.
+    DISCORD_MAILBOX_DISCORD_MB_USAGE_QUERY at the real helper; without it the
+    board is simply not published.
     """
     core = importlib.import_module("discord_mb_lib.core")
-    helper = Path(tmp) / "usage_query.py"
-    helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    seen = {}
-
-    class _Result:
-        stdout = '{"usage": {"probe": {"pct": 1}}}'
-
-    class _Sub:
-        SubprocessError = Exception
-
-        @staticmethod
-        def run(args, **kwargs):
-            seen["args"] = args
-            return _Result()
-
-    original_subprocess = core.subprocess
-    original_env = os.environ.get("DISCORD_MB_USAGE_QUERY")
-    core.subprocess = _Sub
-    os.environ["DISCORD_MB_USAGE_QUERY"] = str(helper)
-    try:
-        assert core.fetch_usage() == {"probe": {"pct": 1}}
-        assert Path(seen["args"][1]) == helper
-    finally:
-        core.subprocess = original_subprocess
-        if original_env is None:
-            os.environ.pop("DISCORD_MB_USAGE_QUERY", None)
-        else:
-            os.environ["DISCORD_MB_USAGE_QUERY"] = original_env
+    new, old = (Path(tmp) / name for name in ("new_usage_query.py", "old_usage_query.py"))
+    for helper in (new, old):
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    seen, name = [], "DISCORD_MB_USAGE_QUERY"
+    result = types.SimpleNamespace(stdout='{"usage": {"probe": {"pct": 1}}}')
+    sub = types.SimpleNamespace(SubprocessError=Exception, run=lambda args, **kwargs: seen.append(args[1]) or result)
+    for env, want in (({"DISCORD_MAILBOX_" + name: str(new)}, new), ({name: str(old)}, old),
+                      ({"DISCORD_MAILBOX_" + name: str(new), name: str(old)}, new), ({"DISCORD_MAILBOX_" + name: "", name: str(old)}, old)):
+        with mock.patch.object(core, "subprocess", sub), mock.patch.dict(os.environ, env):
+            assert core.fetch_usage() == {"probe": {"pct": 1}}
+        assert Path(seen.pop()) == want, sorted(env)
 
 
 def test_package_fetch_usage_is_quiet_without_any_helper(tmp):
     """No helper anywhere means no board, not an exception."""
     core = importlib.import_module("discord_mb_lib.core")
-    original_env = os.environ.get("DISCORD_MB_USAGE_QUERY")
-    os.environ["DISCORD_MB_USAGE_QUERY"] = str(Path(tmp) / "absent.py")
-    original_file = core.__file__
-    core.__file__ = str(Path(tmp) / "pkg" / "core.py")
-    try:
+    with mock.patch.dict(os.environ, {"DISCORD_MB_USAGE_QUERY": str(Path(tmp) / "absent.py")}), \
+            mock.patch.object(core, "__file__", str(Path(tmp) / "pkg" / "core.py")):
         assert core.fetch_usage() == {}
-    finally:
-        core.__file__ = original_file
-        if original_env is None:
-            os.environ.pop("DISCORD_MB_USAGE_QUERY", None)
-        else:
-            os.environ["DISCORD_MB_USAGE_QUERY"] = original_env
+
+
+def test_a_setting_reads_the_prefixed_name_from_any_source_before_the_old_name(tmp):
+    del tmp
+    sys.path.insert(0, _util.SCRIPTS)
+    from discord_mb_lib import _settings, core
+    for public, name, default in getattr(core, "__SETTING_SPECS"):
+        new, old, prefixed = f"new {public}", f"old {public}", "DISCORD_MAILBOX_" + name
+        for env, file, want in (({prefixed: new}, {}, new), ({name: old}, {}, old), ({}, {prefixed: new}, new),
+                                ({name: old}, {prefixed: new}, new), ({}, {name: old}, old), ({}, {}, default)):
+            with mock.patch.dict(os.environ, {name: "", prefixed: "", **env}), mock.patch.object(_settings, "_cache", file):
+                assert getattr(core, "__refresh_reload_state")()[public] == want, (public, sorted(env), sorted(file))
 
 
 def test_star_import_does_not_leak_facade_build_temporaries(tmp):
