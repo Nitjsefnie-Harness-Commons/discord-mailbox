@@ -146,7 +146,8 @@ connector left.
 ## Delivery
 
 A connector delivers a DM to the bot, a message that mentions the bot or its
-broadcast role, and a continuation frame (`**[sender→recipients]** subject
+broadcast role, a reply to one of the bot's messages (with its reply ping on or
+off), and a continuation frame (`**[sender→recipients]** subject
 (k/n)`, k ≥ 2) addressed to its identity or to `all`. Delivering means an inbox
 file, a `message` event and a ✅ reaction. A message a gate below refuses gets
 none of the three and is logged in the connector log (a capped sender at most

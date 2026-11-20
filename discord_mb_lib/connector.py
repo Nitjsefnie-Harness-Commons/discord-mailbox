@@ -2146,9 +2146,7 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
             pass
 
     def routing_match(msg):
-        if client.user is None:
-            return False
-        if msg.author.id == client.user.id:
+        if client.user is None or msg.author.id == client.user.id:
             return False
         # DMs are 1:1 with the bot — any non-self message in a DMChannel is for us.
         if isinstance(msg.channel, discord.DMChannel):
@@ -2156,7 +2154,8 @@ def _run_connector(identity, claude_pid=None, token=None, log_path=None,
         rid = role_id('broadcast')
         if rid is not None and any(r.id == rid for r in msg.role_mentions):
             return True
-        if any(u.id == client.user.id for u in msg.mentions):
+        replied_to = getattr(getattr(getattr(msg, 'reference', None), 'resolved', None), 'author', None)
+        if any(u.id == client.user.id for u in msg.mentions) or getattr(replied_to, 'id', None) == client.user.id:
             return True
         # Continuation chunks of a train addressed to us carry no mention (it
         # rides chunk 1 for the one-ping property) — route on the frame instead.
