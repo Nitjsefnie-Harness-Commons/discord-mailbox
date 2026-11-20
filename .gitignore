@@ -148,6 +148,7 @@
 !/tests/test_discord_meta_claim.py
 !/tests/test_discord_move.py
 !/tests/test_discord_package_contract.py
+!/tests/test_discord_reply_routing.py
 !/tests/test_discord_retention.py
 !/tests/test_discord_secrets.py
 !/tests/test_discord_send_failures.py
