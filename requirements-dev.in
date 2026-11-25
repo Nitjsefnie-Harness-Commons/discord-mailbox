@@ -22,7 +22,7 @@
 pycodestyle==2.15.0
 pylint==4.1.4
 pyright==1.1.414
-coverage==7.17.3
+coverage==7.17.4
 diff-cover==11.0.3
 zizmor==1.32.0
 pip-audit==2.10.1
