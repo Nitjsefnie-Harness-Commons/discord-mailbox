@@ -24,8 +24,7 @@ disable=
 # in discord_mb.py. Cross-module access to those internals is the design.
     protected-access,
 # Lazy imports are deliberate: connectorless commands (send, leech, ...) must
-# not pay for discord.py or psutil at import. test_discord_extras.py pins the
-# module-level import set, so promoting one back to the top is caught there.
+# not pay for discord.py or psutil at import.
     import-outside-toplevel,
 # discord_mb.py is a compatibility facade that must extend sys.path before it
 # can import the package it re-exports. Same reason setup.cfg ignores E402.
